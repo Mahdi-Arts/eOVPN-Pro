@@ -17,3 +17,5 @@ gschemas.compiled
 repo
 *.flatpak
 *#
+.wraplock
+.cache
