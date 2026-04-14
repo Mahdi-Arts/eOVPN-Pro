@@ -1,6 +1,6 @@
 app-id: com.github.jkotra.eovpn
 runtime: org.gnome.Platform
-runtime-version: '48'
+runtime-version: '50'
 sdk: org.gnome.Sdk
 command: eovpn
 
@@ -27,17 +27,18 @@ modules:
         url: https://launchpad.net/intltool/trunk/0.51.0/+download/intltool-0.51.0.tar.gz
         sha256: 67c74d94196b153b774ab9f89b2fa6c6ba79352407037c8c14d5aeb334e959cd
 
-  - name: linux-pam
-    buildsystem: autotools
-    sources: 
-      - type: archive
-        url: https://github.com/linux-pam/linux-pam/releases/download/v1.5.3/Linux-PAM-1.5.3.tar.xz
-        sha256: 7ac4b50feee004a9fa88f1dfd2d2fa738a82896763050cd773b3c54b0a818283
+  #- name: linux-pam
+  #  buildsystem: autotools
+  #  sources: 
+  #    - type: archive
+  #      url: https://github.com/linux-pam/linux-pam/releases/download/v1.5.3/Linux-PAM-1.5.3.tar.xz
+  #      sha256: 7ac4b50feee004a9fa88f1dfd2d2fa738a82896763050cd773b3c54b0a818283
 
   - name: polkit
     buildsystem: meson
     config-opts:
       - -Dlibs-only=true
+      - -Dauthfw=shadow
     cleanup:
       - /bin/*
       - /etc/pam.d
@@ -158,34 +159,36 @@ modules:
         tag: '9.0.0'
 
   - name: python-dbus
-    buildsystem: simple
-    build-commands:
-      - pip3 install --prefix=/app --no-deps .
+    buildsystem: meson
+    config-opts:
+      - -Dtests=false
     sources:
       - type: archive
-        url: https://dbus.freedesktop.org/releases/dbus-python/dbus-python-1.2.18.tar.gz
-        sha256: 92bdd1e68b45596c833307a5ff4b217ee6929a1502f5341bae28fd120acf7260
+        url: https://dbus.freedesktop.org/releases/dbus-python/dbus-python-1.4.0.tar.xz
+        sha256: c36b28f10ffcc8f1f798aca973bcc132f91f33eb9b6b8904381b4077766043d5
 
   - name: gdus++
     buildsystem: meson
+    config-opts:
+      - -Dwerror=false
     sources:
       - type: git
-        url: https://codeberg.org/OpenVPN/gdbuspp/
+        url: https://codeberg.org/OpenVPN/gdbuspp.git
         tag: 'v3'
   
   - name: libnl
     buildsystem: autotools
     sources:
       - type: git
-        url: https://github.com/thom311/libnl/
-        tag: libnl3_10_0
+        url: https://github.com/thom311/libnl.git
+        tag: libnl3_12_0
   
   - name: protobuf
     buildsystem: cmake
     sources:
       - type: git
         url: https://github.com/protocolbuffers/protobuf
-        tag: v28.0
+        tag: v34.1
 
   - name: openvpn3
     buildsystem: meson
@@ -194,6 +197,7 @@ modules:
       - -Dtest_programs=disabled
       - -Ddbus_policy_dir=/tmp
       - -Ddbus_system_service_dir=/tmp
+      - -Dwerror=false
     sources:
       - type: git
         url: 'https://codeberg.org/OpenVPN/openvpn3-linux.git'
