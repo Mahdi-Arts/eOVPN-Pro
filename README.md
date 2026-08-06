@@ -14,6 +14,18 @@
 
 ## ✨ Pro Features (امکانات نسخه حرفه‌ای)
 
+- 🇮🇷 **Full Persian (Farsi) Localization & RTL Support (ترجمه کامل به زبان فارسی و پشتیبانی از راست‌به‌چپ)**:
+  - Supports full Persian localization with dynamic language switching (English/Persian) directly from the primary menu, along with automatic Right-to-Left (RTL) layout switching.
+  - پشتیبانی کامل از زبان فارسی به همراه چیدمان راست‌به‌چپ (RTL) استاندارد و قابلیت تغییر پویای زبان بین انگلیسی و فارسی از منوی اصلی برنامه بدون تداخل در رابط کاربری.
+
+- 📈 **Redesigned Connection Details Card (بازطراحی کادر جزئیات اتصال)**:
+  - Features a beautifully integrated, fixed-size card container using symbolic icons and monospace numbers, completely eliminating layout resizing and window jittering when connection speed fluctuates.
+  - دارای کادر ثابت، همگن و بسیار مدرن با ابعاد فیکس با استفاده از آیکون‌های سمبلیک بومی سیستم‌عامل گنوم و فونت‌های مونو‌اسپیس لرزش‌گیر، جهت ممانعت کامل از هرگونه جابجایی یا نوسان اندازه پنجره در هنگام نوسانات سرعت شبکه.
+
+- ⚙️ **Optimized Backend & OpenVPN 3 DCO (بهینه‌سازی تنظیمات بک‌اند و فعال‌سازی مستقیم DCO)**:
+  - Redesigned the Backend settings tab with a native Libadwaita ListBox look, adding a direct switch for OpenVPN 3 Data Channel Offload (DCO) to boost data speeds and reduce CPU usage.
+  - بازطراحی تب تنظیمات بک‌اند به صورت لیست بومی و افزودن دکمه کنترل شتاب‌دهنده فوق‌سریع OpenVPN 3 DCO (برون‌سپاری داده به هسته لینوکس) جهت بهینه‌سازی سرعت دانلود و ترافیک و کاهش چشمگیر بار پردازنده.
+
 - ⚡ **Concurrent TCP Speed Test (تست سرعت موازی و همزمان)**:
   - Parses all remote endpoints within `.ovpn` files and tests their socket-level latency concurrently using multi-threaded worker pools in less than 2 seconds, keeping the GUI perfectly fluid.
   - استخراج تمامی آدرس‌ها و پورت‌های مقصد از فایل‌های کانفیگ و انجام تست دست‌دهی پروتکل TCP به صورت چندنخی و کاملاً موازی در کمتر از ۲ ثانیه، بدون کوچکترین هنگ یا افت فریم در برنامه.
@@ -90,7 +102,7 @@ sudo ninja uninstall -C build
 
 - **Application Name (نام برنامه)**: eOVPN-Pro
 - **Application ID (شناسه برنامه)**: `com.github.mahdi-bagheban.eovpn-pro`
-- **Current Version (نسخه)**: 1.4
+- **Current Version (نسخه)**: 1.5
 - **Lead Developer & Publisher (توسعه‌دهنده اصلی)**: [Mahdi Bagheban](http://www.MahdiArts.ir)
 - **Official Website (وب‌سایت رسمی)**: [MahdiArts](http://www.MahdiArts.ir)
 - **Primary Support Mail (ایمیل پشتیبانی)**: info@MahdiArts.ir

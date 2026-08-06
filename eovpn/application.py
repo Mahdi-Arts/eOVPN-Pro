@@ -18,6 +18,13 @@ class eovpn(Base):
         self.app = app
 
     def start(self):
+        # Set text direction based on selected language
+        lang = self.get_setting(self.SETTING.LANGUAGE) or "en"
+        if lang == "fa":
+            Gtk.Widget.set_default_direction(Gtk.TextDirection.RTL)
+        else:
+            Gtk.Widget.set_default_direction(Gtk.TextDirection.LTR)
+
         css_provider = Gtk.CssProvider()
         css_provider.load_from_resource(self.EOVPN_GRESOURCE_PREFIX + "/css/main.css")
         display = Gdk.Display.get_default()

@@ -21,6 +21,15 @@ if os.getenv("EOVPN_DEBUG") is not None:
 
 if __name__ == "__main__":
 
+    try:
+        settings = Gio.Settings.new("com.github.mahdi-bagheban.eovpn-pro")
+        lang = settings.get_string("language")
+    except Exception:
+        lang = "en"
+
+    if lang:
+        os.environ["LANGUAGE"] = lang
+
     locale.bindtextdomain('eovpn', localedir)
     locale.textdomain('eovpn')
     gettext.bindtextdomain('eovpn', localedir)

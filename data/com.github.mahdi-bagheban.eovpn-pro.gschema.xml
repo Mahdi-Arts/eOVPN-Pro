@@ -67,5 +67,8 @@
       <key type="b" name="auto-reconnect">
          <default>false</default>
       </key>
+      <key type="s" name="language">
+         <default>"en"</default>
+      </key>
    </schema>
 </schemalist>

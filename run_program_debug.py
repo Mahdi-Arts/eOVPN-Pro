@@ -51,4 +51,13 @@ if __name__ == "__main__":
     sys.argv.append("DEBUG")
     Gio.Resource._register(resource)
 
+    try:
+        settings = Gio.Settings.new(APP_NAME)
+        lang = settings.get_string("language")
+    except Exception:
+        lang = "en"
+
+    if lang:
+        os.environ["LANGUAGE"] = lang
+
     launch_eovpn()

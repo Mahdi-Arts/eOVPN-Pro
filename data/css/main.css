@@ -113,3 +113,19 @@ toastoverlay > toast {
 toastoverlay > * > widget {
 margin: 6px;
 }
+
+
+/* Traffic Card & Details */
+.traffic-card {
+    background-color: @card_bg_color;
+    border: 1px solid @card_border_color;
+    border-radius: 12px;
+    padding: 10px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.traffic-value {
+    font-family: monospace, Courier, monospace;
+    font-size: 0.95rem;
+    font-weight: bold;
+}

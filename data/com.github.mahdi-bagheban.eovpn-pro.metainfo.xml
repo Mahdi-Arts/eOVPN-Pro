@@ -23,12 +23,12 @@
 
   <screenshots>
     <screenshot type="default">
-      <image>https://raw.githubusercontent.com/jkotra/eOVPN/master/static/window.png</image>
+      <image>https://raw.githubusercontent.com/Mahdi-Bagheban/eOVPN-Pro/master/static/window.png</image>
     </screenshot>
   </screenshots>
 
   <url type="homepage">https://www.MahdiArts.ir</url>
-  <url type="bugtracker">https://github.com/jkotra/eOVPN/issues</url>
+  <url type="bugtracker">https://github.com/Mahdi-Bagheban/eOVPN-Pro/issues</url>
   <url type="donation">https://www.MahdiArts.ir/donate</url>
 
   <provides>
@@ -36,6 +36,15 @@
   </provides>
 
   <releases>
+    <release version="1.5" date="2026-08-05">
+      <description>
+        <ul>
+          <li>Added full Persian (Farsi) localization with RTL/LTR directional support and dynamic language switching.</li>
+          <li>Redesigned network connection details panel using a beautiful fixed-size homogeneous layout.</li>
+          <li>Optimized Backend settings tab with a native list design and added support for OpenVPN 3 Data Channel Offload (DCO).</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.4" date="2025-10-15">
       <description>
         <ul>

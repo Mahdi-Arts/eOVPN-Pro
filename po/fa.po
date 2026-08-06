@@ -1,0 +1,165 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: \n"
+"POT-Creation-Date: 2026-08-05 10:00+0000\n"
+"PO-Revision-Date: 2026-08-05 10:00+0000\n"
+"Last-Translator: Jules <jules@mahdiarts.ir>\n"
+"Language-Team: Persian\n"
+"Language: fa\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"X-Generator: Python Script\n"
+"Plural-Forms: nplurals=2; plural=(n > 1);\n"
+
+msgid "Edit"
+msgstr "ویرایش"
+
+msgid "Authentication Required!"
+msgstr "احراز هویت مورد نیاز است!"
+
+msgid "No Configs Added!"
+msgstr "هیچ پیکربندی اضافه نشده است!"
+
+msgid "Open Settings"
+msgstr "باز کردن تنظیمات"
+
+msgid "IP: "
+msgstr "آی‌پی: "
+
+msgid "Connect"
+msgstr "اتصال"
+
+msgid "Disconnect"
+msgstr "قطع اتصال"
+
+msgid "Vertical"
+msgstr "عمودی"
+
+msgid "Horizontal"
+msgstr "افقی"
+
+msgid "Update"
+msgstr "بروزرسانی"
+
+msgid "Settings"
+msgstr "تنظیمات"
+
+msgid "Keyboard Shortcuts"
+msgstr "میانبرهای کیبورد"
+
+msgid "Layout"
+msgstr "چیدمان"
+
+msgid "Donate"
+msgstr "حمایت مالی"
+
+msgid "About"
+msgstr "درباره برنامه"
+
+msgid "IP Address copied to Clipboard!"
+msgstr "آدرس آی‌پی در حافظه کپی شد!"
+
+msgid "Reset"
+msgstr "تنظیم مجدد"
+
+msgid "Setup"
+msgstr "راه‌اندازی"
+
+msgid "General"
+msgstr "عمومی"
+
+msgid "Backend"
+msgstr "بک‌اند"
+
+msgid "Configuration Source"
+msgstr "منبع پیکربندی"
+
+msgid "Choose ZIP File"
+msgstr "انتخاب فایل ZIP"
+
+msgid "Validate & Load"
+msgstr "بررسی و بارگذاری"
+
+msgid "Authentication"
+msgstr "احراز هویت"
+
+msgid "Username / Email"
+msgstr "نام کاربری / ایمیل"
+
+msgid "Password"
+msgstr "رمز عبور"
+
+msgid "Notifications"
+msgstr "اعلان‌ها"
+
+msgid "Flag"
+msgstr "پرچم"
+
+msgid "Dark Theme"
+msgstr "پوسته تاریک"
+
+msgid "Delete All VPN Connections!"
+msgstr "حذف تمامی اتصالات VPN!"
+
+#, python-brace-format
+msgid "{} (OpenVPN 2)"
+msgstr "{} (OpenVPN 2)"
+
+#, python-brace-format
+msgid "OpenVPN 3 {}"
+msgstr "OpenVPN 3 {}"
+
+msgid "Configuration Source MUST be a ZIP file."
+msgstr "منبع پیکربندی باید یک فایل ZIP باشد."
+
+msgid "Sponsor & Donate (حمایت مالی)"
+msgstr "اسپانسر و حمایت مالی"
+
+msgid "Speed Test"
+msgstr "تست سرعت"
+
+msgid "Test latency of all VPN servers"
+msgstr "تست تاخیر همه سرورهای VPN"
+
+msgid "Sort"
+msgstr "مرتب‌سازی"
+
+msgid "Sort servers by lowest latency"
+msgstr "مرتب‌سازی سرورها بر اساس کمترین تاخیر"
+
+msgid "Select Fastest"
+msgstr "انتخاب سریع‌ترین"
+
+msgid "Auto-select server with the lowest latency"
+msgstr "انتخاب خودکار سرور با کمترین تاخیر"
+
+msgid "Testing..."
+msgstr "در حال تست..."
+
+msgid "No reachable servers found! Please run speed test."
+msgstr "هیچ سرور در دسترسی یافت نشد! لطفا تست سرعت را اجرا کنید."
+
+msgid "Selected fastest server: {} ({} ms)"
+msgstr "سریع‌ترین سرور انتخاب شد: {} ({} میلی‌ثانیه)"
+
+msgid "Auto Reconnect"
+msgstr "اتصال مجدد خودکار"
+
+msgid "Connection lost. Reconnecting in 3 seconds..."
+msgstr "اتصال قطع شد. تلاش مجدد برای اتصال تا ۳ ثانیه دیگر..."
+
+msgid "Choose Local Folder"
+msgstr "انتخاب پوشه محلی"
+
+msgid "Language"
+msgstr "زبان"
+
+msgid "Connection Backend"
+msgstr "بک‌اند اتصال"
+
+msgid "Data Channel Offload (DCO)"
+msgstr "برون‌سپاری کانال داده (DCO)"
+
+msgid "Offloads VPN data processing directly to the Linux kernel for maximum speed and lower CPU usage."
+msgstr "پردازش داده‌های VPN را مستقیماً به هسته لینوکس منتقل می‌کند تا به حداکثر سرعت و کمترین استفاده از CPU دست یابد."

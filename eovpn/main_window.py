@@ -225,26 +225,59 @@ class MainWindow(Base, Gtk.Builder):
 
         self.inner_right.append(h_box)
 
-        # Traffic & Speed panel
-        self.traffic_box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 12)
-        self.traffic_box.set_halign(Gtk.Align.CENTER)
-        self.traffic_box.set_margin_top(8)
-        self.traffic_box.set_margin_bottom(8)
+        # Traffic & Speed Card Panel
+        self.traffic_card = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
+        self.traffic_card.add_css_class("card")
+        self.traffic_card.add_css_class("traffic-card")
+        self.traffic_card.set_halign(Gtk.Align.CENTER)
+        self.traffic_card.set_size_request(280, 64)
+        self.traffic_card.set_margin_top(12)
+        self.traffic_card.set_margin_bottom(12)
 
-        self.dl_speed_label = Gtk.Label.new("")
-        self.dl_speed_label.set_markup("⬇️ <span weight='bold'>0.0 B/s</span>")
+        grid = Gtk.Grid.new()
+        grid.set_column_homogeneous(True)
+        grid.set_halign(Gtk.Align.FILL)
+        grid.set_hexpand(True)
 
-        self.ul_speed_label = Gtk.Label.new("")
-        self.ul_speed_label.set_markup("⬆️ <span weight='bold'>0.0 B/s</span>")
+        dl_box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 4)
+        dl_box.set_valign(Gtk.Align.CENTER)
+        dl_box.set_halign(Gtk.Align.CENTER)
+        dl_icon = Gtk.Image.new_from_icon_name("network-receive-symbolic")
+        dl_icon.set_pixel_size(16)
+        dl_icon.add_css_class("dim-label")
+        self.dl_speed_label = Gtk.Label.new("0.0 B/s")
+        self.dl_speed_label.add_css_class("traffic-value")
+        dl_box.append(dl_icon)
+        dl_box.append(self.dl_speed_label)
 
-        self.total_traffic_label = Gtk.Label.new("")
-        self.total_traffic_label.set_markup("📊 <span weight='bold'>0 B</span>")
+        ul_box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 4)
+        ul_box.set_valign(Gtk.Align.CENTER)
+        ul_box.set_halign(Gtk.Align.CENTER)
+        ul_icon = Gtk.Image.new_from_icon_name("network-transmit-symbolic")
+        ul_icon.set_pixel_size(16)
+        ul_icon.add_css_class("dim-label")
+        self.ul_speed_label = Gtk.Label.new("0.0 B/s")
+        self.ul_speed_label.add_css_class("traffic-value")
+        ul_box.append(ul_icon)
+        ul_box.append(self.ul_speed_label)
 
-        self.traffic_box.append(self.dl_speed_label)
-        self.traffic_box.append(self.ul_speed_label)
-        self.traffic_box.append(self.total_traffic_label)
+        total_box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 4)
+        total_box.set_valign(Gtk.Align.CENTER)
+        total_box.set_halign(Gtk.Align.CENTER)
+        total_icon = Gtk.Image.new_from_icon_name("utilities-system-monitor-symbolic")
+        total_icon.set_pixel_size(16)
+        total_icon.add_css_class("dim-label")
+        self.total_traffic_label = Gtk.Label.new("0 B")
+        self.total_traffic_label.add_css_class("traffic-value")
+        total_box.append(total_icon)
+        total_box.append(self.total_traffic_label)
 
-        self.inner_right.append(self.traffic_box)
+        grid.attach(dl_box, 0, 0, 1, 1)
+        grid.attach(ul_box, 1, 0, 1, 1)
+        grid.attach(total_box, 2, 0, 1, 1)
+
+        self.traffic_card.append(grid)
+        self.inner_right.append(self.traffic_card)
 
         #TODO: define it better!
         self.psh = None
@@ -328,6 +361,22 @@ class MainWindow(Base, Gtk.Builder):
         action.connect("activate", on_layout_update)
         self.app.add_action(action)
 
+        def on_language_update(action, value):
+            new_lang = str(value).replace("'", "")
+            logger.info(f"Changing language to: {new_lang}")
+            action.set_state(value)
+            self.set_setting(self.SETTING.LANGUAGE, new_lang)
+            import sys
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+
+        action_lang = Gio.SimpleAction().new_stateful(
+            "language",
+            GLib.VariantType.new("s"),
+            GLib.Variant("s", self.get_setting(self.SETTING.LANGUAGE) or "en")
+        )
+        action_lang.connect("activate", on_language_update)
+        self.app.add_action(action_lang)
+
         action = Gio.SimpleAction().new("update", None)
         action.connect("activate", lambda x, d: self.validate_and_load(self.spinner) )
         self.app.add_action(action)
@@ -370,11 +419,20 @@ class MainWindow(Base, Gtk.Builder):
         item.set_action_and_target_value("app.radiogroup", GLib.Variant.new_string("card-h"))
         layout_menu.append_item(item)
         
+        lang_menu = Gio.Menu()
+        item = Gio.MenuItem.new("English", "en")
+        item.set_action_and_target_value("app.language", GLib.Variant.new_string("en"))
+        lang_menu.append_item(item)
+
+        item = Gio.MenuItem.new("فارسی (Persian)", "fa")
+        item.set_action_and_target_value("app.language", GLib.Variant.new_string("fa"))
+        lang_menu.append_item(item)
 
         menu.append(gettext.gettext("Update"), "app.update")
         menu.append(gettext.gettext("Settings"), "app.settings")
         menu.append(gettext.gettext("Keyboard Shortcuts"), "app.keyboard_shortcuts")
         menu.append_submenu(gettext.gettext("Layout"), layout_menu)
+        menu.append_submenu(gettext.gettext("Language"), lang_menu)
         menu.append(gettext.gettext("Donate"), "app.donate")
         menu.append(gettext.gettext("About"), "app.about")
         popover = Gtk.PopoverMenu.new_from_model(menu)
@@ -535,7 +593,7 @@ class MainWindow(Base, Gtk.Builder):
             row_to_select = rows[idx]
             self.list_box.select_row(row_to_select)
 
-            toast = Adw.Toast.new(gettext.gettext(f"Selected fastest server: {fastest_file} ({valid_latencies[fastest_file]} ms)"))
+            toast = Adw.Toast.new(gettext.gettext("Selected fastest server: {} ({} ms)").format(fastest_file, valid_latencies[fastest_file]))
             self.toast_overlay.add_toast(toast)
         except Exception as e:
             logger.error(f"Error selecting fastest: {e}")
@@ -610,9 +668,9 @@ class MainWindow(Base, Gtk.Builder):
                     else:
                         return f"{bytes_total / (1024 * 1024 * 1024):.1f} GB"
 
-                self.dl_speed_label.set_markup(f"⬇️ <span weight='bold'>{format_speed(dl_speed)}</span>")
-                self.ul_speed_label.set_markup(f"⬆️ <span weight='bold'>{format_speed(ul_speed)}</span>")
-                self.total_traffic_label.set_markup(f"📊 <span weight='bold'>{format_size(rx + tx)}</span>")
+                self.dl_speed_label.set_text(format_speed(dl_speed))
+                self.ul_speed_label.set_text(format_speed(ul_speed))
+                self.total_traffic_label.set_text(format_size(rx + tx))
 
             self.last_rx = rx
             self.last_tx = tx
@@ -709,9 +767,9 @@ class MainWindow(Base, Gtk.Builder):
 
         else:
             self.stop_network_monitor()
-            self.dl_speed_label.set_markup("⬇️ <span weight='bold'>0.0 B/s</span>")
-            self.ul_speed_label.set_markup("⬆️ <span weight='bold'>0.0 B/s</span>")
-            self.total_traffic_label.set_markup("📊 <span weight='bold'>0 B</span>")
+            self.dl_speed_label.set_text("0.0 B/s")
+            self.ul_speed_label.set_text("0.0 B/s")
+            self.total_traffic_label.set_text("0 B")
 
             should_reconnect = getattr(self, "was_connected", False) and self.get_setting(self.SETTING.AUTO_RECONNECT) and not getattr(self, "manual_disconnect", False)
             self.was_connected = False

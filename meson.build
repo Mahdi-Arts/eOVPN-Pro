@@ -1,5 +1,5 @@
 project('eovpn',
-  version: '1.33',
+  version: '1.5',
   meson_version: '>= 0.60.0'
 )
 
@@ -25,7 +25,7 @@ locale_dir = join_paths(prefix, get_option('localedir'))
 icondir = join_paths(datadir, 'icons/hicolor')
 
 conf = configuration_data()
-conf.set('PACKAGE_URL', 'https://github.com/jkotra/eovpn')
+conf.set('PACKAGE_URL', 'https://github.com/Mahdi-Bagheban/eOVPN-Pro')
 conf.set('DATA_DIR', datadir)
 conf.set('PKG_DATADIR', pkg_datadir)
 conf.set('LOCALE_DIR', join_paths(get_option('prefix'), get_option('datadir'), 'locale'))
@@ -40,7 +40,8 @@ bin_exec = configure_file(
 install_data(
   bin_exec,
   install_dir: bindir,
-  rename: 'eovpn'
+  rename: 'eovpn',
+  install_mode: 'rwxr-xr-x'
 )
 
 subdir('eovpn')

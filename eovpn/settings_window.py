@@ -29,6 +29,7 @@ class SettingsWindow(Base, Gtk.Builder):
         self.window.set_transient_for(self.retrieve(StorageItem.MAIN_WINDOW))
         self.window.set_modal(True)
         self.store(StorageItem.SETTINGS_WINDOW, self.window)
+        self.store("settings_window_instance", self)
     
     def generate_option_row(self, name, icon_name, switch_state):
         list_box_row = Gtk.ListBoxRow.new()
@@ -287,35 +288,102 @@ class SettingsWindow(Base, Gtk.Builder):
 
 
         ###########################################################
-        # Manager (Tab - 3)
+        # Backend Settings (Tab - 3)
         ###########################################################
+        backend_frame = Gtk.Frame.new()
+        backend_list_box = Gtk.ListBox.new()
+        backend_frame.add_css_class("m-10")
+        backend_list_box.add_css_class("rich-list")
 
-        
-        box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 4)
-        box.add_css_class("m-10")
+        # Row 1: Connection Backend combobox row
+        row1 = Gtk.ListBoxRow.new()
+        row1.set_selectable(False)
+        h_box1 = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 12)
+        h_box1.set_margin_top(8)
+        h_box1.set_margin_bottom(8)
+        h_box1.set_margin_start(10)
+        h_box1.set_margin_end(10)
+
+        icon1 = Gtk.Image.new_from_icon_name("network-wired-symbolic")
+        v_box1 = Gtk.Box.new(Gtk.Orientation.VERTICAL, 2)
+        v_box1.set_hexpand(True)
+        v_box1.set_valign(Gtk.Align.CENTER)
+        label1 = Gtk.Label.new(gettext.gettext("Connection Backend"))
+        label1.set_halign(Gtk.Align.START)
+        label1.add_css_class("bold")
+        v_box1.append(label1)
 
         self.combobox = Gtk.ComboBoxText()
+        self.combobox.set_valign(Gtk.Align.CENTER)
         version = NetworkManager(None).version()
         if (version):
-            self.combobox.append("networkmanager", gettext.gettext("{} (OpenVPN 2)".format(version)))
+            self.combobox.append("networkmanager", gettext.gettext("{} (OpenVPN 2)").format(version))
         
         try:
             ovpn3_version = OpenVPN3(None).version()
             if (ovpn3_version):
-                self.combobox.append("openvpn3", gettext.gettext("OpenVPN 3 {}".format(ovpn3_version)))
+                self.combobox.append("openvpn3", gettext.gettext("OpenVPN 3 {}").format(ovpn3_version))
         except NameError:
             logger.error("unable to use openvpn3 module!")
 
         if (manager := self.get_setting(self.SETTING.MANAGER)) is not None:
             self.combobox.set_property("active-id", manager)
-        self.combobox.add_css_class("mlr-6")
-        box.append(self.combobox)
 
-        self.backend_box.append(box)
+        h_box1.append(icon1)
+        h_box1.append(v_box1)
+        h_box1.append(self.combobox)
+        row1.set_child(h_box1)
+        backend_list_box.append(row1)
 
-        ###########################################################
-        # END Manager
-        ###########################################################
+        # Row 2: OpenVPN 3 DCO (Data Channel Offload) row
+        self.dco_row = Gtk.ListBoxRow.new()
+        self.dco_row.set_selectable(False)
+        h_box2 = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 12)
+        h_box2.set_margin_top(8)
+        h_box2.set_margin_bottom(8)
+        h_box2.set_margin_start(10)
+        h_box2.set_margin_end(10)
+
+        icon2 = Gtk.Image.new_from_icon_name("speedometer-symbolic")
+        v_box2 = Gtk.Box.new(Gtk.Orientation.VERTICAL, 2)
+        v_box2.set_hexpand(True)
+        v_box2.set_valign(Gtk.Align.CENTER)
+        
+        label2 = Gtk.Label.new(gettext.gettext("Data Channel Offload (DCO)"))
+        label2.set_halign(Gtk.Align.START)
+        label2.add_css_class("bold")
+        
+        sub_label2 = Gtk.Label.new(gettext.gettext("Offloads VPN data processing directly to the Linux kernel for maximum speed and lower CPU usage."))
+        sub_label2.set_halign(Gtk.Align.START)
+        sub_label2.add_css_class("dim-label")
+        sub_label2.add_css_class("caption")
+        sub_label2.set_wrap(True)
+        sub_label2.set_max_width_chars(45)
+
+        v_box2.append(label2)
+        v_box2.append(sub_label2)
+
+        self.dco_switch = Gtk.Switch.new()
+        self.dco_switch.set_halign(Gtk.Align.CENTER)
+        self.dco_switch.set_valign(Gtk.Align.CENTER)
+        dco_state = self.get_setting(self.SETTING.OPENVPN3_DCO)
+        self.dco_switch.set_state(dco_state)
+        self.dco_switch.set_active(dco_state)
+
+        h_box2.append(icon2)
+        h_box2.append(v_box2)
+        h_box2.append(self.dco_switch)
+        self.dco_row.set_child(h_box2)
+        backend_list_box.append(self.dco_row)
+
+        backend_frame.set_child(backend_list_box)
+        self.backend_box.append(backend_frame)
+
+        # Set initial DCO row visibility
+        self.dco_row.set_visible(True if manager == "openvpn3" else False)
+        
+        # Connect DCO switch signal
+        self.dco_switch.connect("state-set", self.signals.openvpn3_dco_set)
         
 
         #connect signals
@@ -456,11 +524,20 @@ class Signals(Base):
         GLib.idle_add(self.remove_only, True)
         self.retrieve(StorageItem.FLAG).hide()
 
+    def openvpn3_dco_set(self, switch, state):
+        self.set_setting(self.SETTING.OPENVPN3_DCO, state)
+
     def on_backend_selected(self, box):
         id = box.get_property("active_id")
         self.set_setting(self.SETTING.MANAGER, id)
         callback = self.retrieve("on_connection_event")
         self.store("CM", {"name": id, "instance": NetworkManager(callback) if id == "networkmanager" else OpenVPN3(callback)})
+        try:
+            sw = self.retrieve("settings_window_instance")
+            if hasattr(sw, "dco_row"):
+                sw.dco_row.set_visible(True if id == "openvpn3" else False)
+        except Exception as e:
+            logger.error(f"Error updating DCO visibility: {e}")
 
     def on_validate_btn_click(self, button, entry, ca_button, spinner):
         self.validate_and_load(spinner, ca_button)
