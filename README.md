@@ -4,6 +4,14 @@
     <img src="static/window_connected_with_flag.png" alt="eOVPN-Pro" width="600">
 </div>
 
+<div align="center">
+
+[![Repository](https://img.shields.io/badge/GitHub-Mahdi--Arts%2FeOVPN--Pro-181717?logo=github)](https://github.com/Mahdi-Arts/eOVPN-Pro)
+[![Version](https://img.shields.io/badge/version-1.5-3E8914)](https://github.com/Mahdi-Arts/eOVPN-Pro/releases)
+[![License](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
+
+</div>
+
 ---
 
 **eOVPN-Pro** is an advanced, high-performance, and feature-rich OpenVPN configuration manager built with GTK4 and Libadwaita. It is a modernized and significantly upgraded version of the original client, engineered to provide unparalleled speed, visual insight, and robust connectivity features for Linux power users.
@@ -54,6 +62,14 @@
 
 ## 🛠️ Installation & Execution (نصب و اجرا)
 
+### Step 0: Clone the Repository (دریافت سورس پروژه)
+```bash
+git clone -b 1.5 https://github.com/Mahdi-Arts/eOVPN-Pro.git
+cd eOVPN-Pro
+```
+
+---
+
 ### Option A: Run via VS Code (ساده‌ترین روش - از طریق ویژوال استودیو کد)
 1. Open the project folder in **VS Code** (**File -> Open Folder**).
 2. Install the **Python** and **Python Debugger** extensions in VS Code.
@@ -100,13 +116,19 @@ sudo ninja uninstall -C build
 
 ## 💎 Project Information (مشخصات پروژه)
 
-- **Application Name (نام برنامه)**: eOVPN-Pro
+- **Application Display Name (نام نمایشی برنامه)**: eOVPN Pro
+- **Repository Name (نام مخزن)**: eOVPN-Pro
 - **Application ID (شناسه برنامه)**: `com.github.mahdi-bagheban.eovpn-pro`
+- **Repository (آدرس مخزن پروژه)**: [github.com/Mahdi-Arts/eOVPN-Pro](https://github.com/Mahdi-Arts/eOVPN-Pro)
+- **Issue Tracker (گزارش مشکلات)**: [github.com/Mahdi-Arts/eOVPN-Pro/issues](https://github.com/Mahdi-Arts/eOVPN-Pro/issues)
 - **Current Version (نسخه)**: 1.5
 - **Lead Developer & Publisher (توسعه‌دهنده اصلی)**: [Mahdi Bagheban](http://www.MahdiArts.ir)
 - **Official Website (وب‌سایت رسمی)**: [MahdiArts](http://www.MahdiArts.ir)
 - **Primary Support Mail (ایمیل پشتیبانی)**: info@MahdiArts.ir
 - **Secondary Mail (ایمیل ثانویه)**: mehdi.bagheban@gmail.com
+
+> ℹ️ Note: The technical **Application ID** (`com.github.mahdi-bagheban.eovpn-pro`) intentionally remains unchanged even though the repository moved to the `Mahdi-Arts` organization. This ID is baked into GSettings schemas, Flatpak identifiers, and existing user installations — renaming it would break saved settings and stored credentials for current users. Only outward-facing links (repository, issues, screenshots) were updated to the new address.
+> ℹ️ توجه: شناسه فنی برنامه (**Application ID**) با وجود انتقال مخزن به سازمان `Mahdi-Arts` به‌عمد بدون تغییر باقی مانده است، چون این شناسه در اسکیمای GSettings، شناسه فلت‌پک و نصب‌های فعلی کاربران تعبیه شده و تغییر آن باعث از دست رفتن تنظیمات و اطلاعات ورود ذخیره‌شده کاربران فعلی می‌شود. فقط لینک‌های بیرونی (مخزن، ایشوها، اسکرین‌شات) به آدرس جدید به‌روزرسانی شدند.
 
 ---
 

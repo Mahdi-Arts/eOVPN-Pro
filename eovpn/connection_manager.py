@@ -215,7 +215,7 @@ class OpenVPN3(ConnectionManager):
         self.session_path = None
 
     def pause(self):
-        self.ovpn3.pause_vpn("User Action in eOVPN".encode("utf-8"))
+        self.ovpn3.pause_vpn("User Action in eOVPN Pro".encode("utf-8"))
 
     def resume(self):
         self.ovpn3.resume_vpn()

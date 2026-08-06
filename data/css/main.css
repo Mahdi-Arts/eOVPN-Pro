@@ -115,17 +115,53 @@ margin: 6px;
 }
 
 
-/* Traffic Card & Details */
+/* Traffic Card & Details (Redesigned - v1.5) */
 .traffic-card {
     background-color: @card_bg_color;
     border: 1px solid @card_border_color;
-    border-radius: 12px;
-    padding: 10px;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    border-radius: 14px;
+    padding: 8px 4px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+
+.traffic-card separator {
+    min-height: 30px;
+    margin-top: 8px;
+    margin-bottom: 8px;
+    background-color: alpha(@card_fg_color, 0.12);
 }
 
 .traffic-value {
     font-family: monospace, Courier, monospace;
     font-size: 0.95rem;
     font-weight: bold;
+    letter-spacing: -0.2px;
+}
+
+.traffic-caption {
+    font-size: 0.72rem;
+    margin-top: 1px;
+}
+
+/* Colored circular icon badges for each traffic stat */
+.traffic-icon-badge {
+    min-width: 26px;
+    min-height: 26px;
+    border-radius: 999px;
+    padding: 4px;
+}
+
+.traffic-icon-download {
+    background-color: alpha(@accent_bg_color, 0.16);
+    color: @accent_color;
+}
+
+.traffic-icon-upload {
+    background-color: alpha(@success_color, 0.16);
+    color: @success_color;
+}
+
+.traffic-icon-total {
+    background-color: alpha(@warning_color, 0.18);
+    color: @warning_color;
 }

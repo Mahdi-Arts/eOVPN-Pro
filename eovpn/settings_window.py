@@ -24,7 +24,7 @@ class SettingsWindow(Base, Gtk.Builder):
 
         self.add_from_resource(self.EOVPN_GRESOURCE_PREFIX + "/ui/" + "settings.ui")
         self.window = self.get_object("settings_window")
-        self.window.set_title("eOVPN Settings")
+        self.window.set_title(gettext.gettext("{} Settings").format(self.APP_NAME))
 
         self.window.set_transient_for(self.retrieve(StorageItem.MAIN_WINDOW))
         self.window.set_modal(True)

@@ -4,7 +4,7 @@
   <metadata_license>FSFAP</metadata_license>
   <project_license>GPL-3.0+</project_license>
   <developer_name>Mahdi Bagheban</developer_name>
-  <name>eOVPN-Pro</name>
+  <name>eOVPN Pro</name>
   <summary>OpenVPN Configuration Manager (Pro Version)</summary>
 
   <description>
@@ -23,13 +23,14 @@
 
   <screenshots>
     <screenshot type="default">
-      <image>https://raw.githubusercontent.com/Mahdi-Bagheban/eOVPN-Pro/master/static/window.png</image>
+      <image>https://raw.githubusercontent.com/Mahdi-Arts/eOVPN-Pro/1.5/static/window.png</image>
     </screenshot>
   </screenshots>
 
   <url type="homepage">https://www.MahdiArts.ir</url>
-  <url type="bugtracker">https://github.com/Mahdi-Bagheban/eOVPN-Pro/issues</url>
+  <url type="bugtracker">https://github.com/Mahdi-Arts/eOVPN-Pro/issues</url>
   <url type="donation">https://www.MahdiArts.ir/donate</url>
+  <url type="vcs-browser">https://github.com/Mahdi-Arts/eOVPN-Pro</url>
 
   <provides>
     <binary>eovpn</binary>
