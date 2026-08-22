@@ -161,14 +161,19 @@ package() {
 
 ## 5. Automated CI/CD Deployment
 
-The repository ships an active GitHub Actions workflow (`.github/workflows/ci-cd.yml`,
-also mirrored in `dist/ci/ci-cd.yml`) that automatically:
+The repository ships two active GitHub Actions workflows that automatically:
 
-1. Runs the full offline test suite, flake8 linting and metadata validation on every commit/PR.
-2. Builds native `.deb` packages in Ubuntu runner environments.
-3. Builds the Flatpak bundle on version tags (and manual dispatch).
-4. Attaches the `.deb` installer to new GitHub Releases upon creating version tags
+### Test & Build Pipeline (`.github/workflows/ci-cd.yml`)
+1. **test**: Runs unit tests, flake8/ruff/mypy linting, metadata validation and byte-compilation on every commit/PR.
+2. **build-deb**: Builds native `.deb` packages in Ubuntu runner environments.
+3. **build-flatpak**: Builds the Flatpak bundle on version tags (and manual dispatch).
+4. **release**: Attaches the `.deb` installer to new GitHub Releases upon creating version tags
    (e.g. `git tag v1.5.0 && git push origin v1.5.0`).
+
+### Release Pipeline (`.github/workflows/release.yml`)
+- Triggered by version tags (`v*`) only.
+- Builds both `.deb` and Flatpak packages.
+- Creates a GitHub Release with both artifacts and auto-generated release notes.
 
 See `docs/RELEASE_CHECKLIST.md` for the full release runbook.
 راهنمای کامل انتشار در `docs/RELEASE_CHECKLIST.md` موجود است.

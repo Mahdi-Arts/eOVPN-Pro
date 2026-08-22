@@ -21,17 +21,17 @@ from .main_window import MainWindow
 logger = logging.getLogger(__name__)
 
 
-class eovpn(Base):
+class Eovpn(Base):
     """
     Main application wrapper controlling initialization and UI display.
     کلاس مدیریت اصلی جهت بارگذاری رابط کاربری و تنظیمات زبان.
     """
 
     def __init__(self, app: Gtk.Application):
-        super(eovpn, self).__init__()
+        super(Eovpn, self).__init__()
         self.app = app
 
-    def start(self):
+    def start(self) -> None:
         """
         Configures text direction (RTL/LTR), custom CSS styles, and initializes MainWindow.
         تنظیم جهت متن (راست‌به‌چپ برای فارسی)، بارگذاری استایل‌های CSS و نمایش پنجره اصلی.
@@ -57,8 +57,9 @@ class eovpn(Base):
         main_window.show()
 
 
-def on_activate(app: Gtk.Application):
-    main = eovpn(app)
+def on_activate(app: Gtk.Application) -> None:
+    """Callback when the application is activated / فراخوان هنگام فعال‌سازی برنامه."""
+    main = Eovpn(app)
     main.start()
 
 
@@ -74,7 +75,9 @@ def launch_eovpn() -> int:
 
     app.add_main_option(
         "debug", ord("d"), GLib.OptionFlags.NONE,
-        GLib.OptionArg.STRING, "Show Debug Messages.", "[CRITICAL|ERROR|WARNING|INFO|DEBUG]"
+        GLib.OptionArg.STRING,
+        "Show Debug Messages. / نمایش پیام‌های دیباگ.",
+        "[CRITICAL|ERROR|WARNING|INFO|DEBUG]"
     )
 
     app.connect('activate', on_activate)
@@ -84,28 +87,34 @@ def launch_eovpn() -> int:
     # understand, so they cannot cause a startup failure.
     # حذف آرگومان‌های قدیمی که پارسر GLib آن‌ها را نمی‌شناسد تا باعث خطای راه‌اندازی نشوند
     for legacy_flag in ("-c", "--config"):
-        if legacy_flag in sys.argv:
+        while legacy_flag in sys.argv:
             sys.argv.remove(legacy_flag)
 
     return app.run(sys.argv)
 
 
 def do_command_line(app: Gtk.Application, args: Gio.ApplicationCommandLine) -> bool:
+    """
+    Handles command-line arguments with GLib option parsing.
+    مدیریت آرگومان‌های خط فرمان با پارسر GLib.
+    """
     options_dict = args.get_options_dict()
 
     if options_dict.contains("debug"):
         debug_val = options_dict.lookup_value("debug", None)
         if debug_val:
             debug_lvl = debug_val.get_string()
-            if debug_lvl.isnumeric():
+            if debug_lvl and debug_lvl.isnumeric():
                 lvl_int = int(debug_lvl)
                 if lvl_int <= 50:
                     logging.basicConfig(
-                        level=lvl_int, format='%(levelname)s:%(name)s.py:%(funcName)s:%(message)s'
+                        level=lvl_int,
+                        format='%(levelname)s:%(name)s.py:%(funcName)s:%(message)s'
                     )
-            elif debug_lvl in ["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"]:
+            elif debug_lvl in {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"}:
                 logging.basicConfig(
-                    level=debug_lvl, format='%(levelname)s:%(name)s.py:%(funcName)s:%(message)s'
+                    level=debug_lvl,
+                    format='%(levelname)s:%(name)s.py:%(funcName)s:%(message)s'
                 )
 
     app.activate()

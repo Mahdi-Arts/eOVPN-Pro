@@ -1,0 +1,33 @@
+# eOVPN-Pro Editor Configuration
+# پیکربندی یکنواخت ویرایشگر برای پروژه eOVPN-Pro
+#
+# Top-most EditorConfig file — stop searching upward
+# فایل ریشه EditorConfig — توقف جستجو در مسیرهای بالاتر
+
+root = true
+
+[*]
+indent_style = space
+indent_size = 4
+end_of_line = lf
+charset = utf-8
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+[*.md]
+trim_trailing_whitespace = false
+
+[*.{yml,yaml}]
+indent_size = 2
+
+[*.{json,json.in}]
+indent_size = 4
+
+[*.c]
+indent_size = 4
+
+[*.{xml,xsl,xsd,blp}]
+indent_size = 2
+
+[Makefile]
+indent_style = tab

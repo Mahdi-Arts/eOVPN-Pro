@@ -1,0 +1,33 @@
+# eOVPN-Pro Docker Ignore
+# فایل نادیده‌گیری داکر برای eOVPN-Pro
+#
+# Exclude the following paths from Docker build context for CI or container builds.
+# مسیرهای زیر از بافت ساخت داکر برای CI یا ساخت کانتینر حذف می‌شوند.
+
+.git
+__pycache__/
+*.py[cod]
+*.so
+*.o
+*.deb
+*.rpm
+*.flatpak
+build/
+builddir/
+build-dir/
+repo/
+dist/packages/
+.flatpak-builder/
+.mypy_cache/
+.ruff_cache/
+.cache/
+.venv/
+node_modules/
+*.ovpn
+*.crt
+*.pem
+*.key
+playground.py
+*~
+*#
+.wraplock
