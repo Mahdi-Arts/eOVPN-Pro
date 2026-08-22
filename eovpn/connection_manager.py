@@ -32,6 +32,52 @@ from .eovpn_base import Base
 
 logger = logging.getLogger(__name__)
 
+
+def _secure_temp_dir() -> str | None:
+    """
+    Returns the most private directory available for short-lived credential files.
+
+    ``$XDG_RUNTIME_DIR`` is created by the login manager as a user-owned
+    ``0700`` directory on a tmpfs that is wiped at logout, which makes it a far
+    better home for a config file containing an inline ``<ca>`` block than the
+    world-readable ``/tmp``. A dedicated ``eovpn-pro`` sub-directory keeps our
+    artefacts separated from other applications. When the variable is unset or
+    unusable (minimal containers, some cron-like sessions) the function returns
+    ``None`` so the caller falls back to the platform default.
+
+    محرمانه‌ترین پوشهٔ در دسترس برای فایل‌های موقت حاوی اطلاعات حساس را
+    برمی‌گرداند.
+
+    مقدار `$XDG_RUNTIME_DIR` را مدیر ورود سیستم به‌صورت پوشه‌ای با مالکیت کاربر و
+    مجوز `0700` روی tmpfs می‌سازد که هنگام خروج از حساب پاک می‌شود؛ بنابراین برای
+    نگهداری فایل کانفیگی که بلوک درون‌خطی `<ca>` دارد بسیار مناسب‌تر از `/tmp`
+    است که برای همه قابل خواندن است. یک زیرپوشهٔ اختصاصی `eovpn-pro` نیز فایل‌های
+    ما را از سایر برنامه‌ها جدا نگه می‌دارد. اگر این متغیر تعریف یا قابل استفاده
+    نباشد (کانتینرهای کمینه و برخی نشست‌های غیرتعاملی)، مقدار `None` برگردانده
+    می‌شود تا فراخوان به مسیر پیش‌فرض سیستم بازگردد.
+
+    :return: Path of the private directory, or ``None``.
+             مسیر پوشهٔ خصوصی، یا ``None``.
+    """
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+    if not runtime_dir or not os.path.isdir(runtime_dir):
+        return None
+
+    private_dir = os.path.join(runtime_dir, "eovpn-pro")
+    try:
+        os.makedirs(private_dir, mode=0o700, exist_ok=True)
+        # Re-assert the mode: makedirs() honours the umask on creation and
+        # leaves a pre-existing directory untouched.
+        # اعمال مجدد مجوز: makedirs هنگام ساخت تابع umask است و پوشهٔ از پیش
+        # موجود را تغییر نمی‌دهد.
+        os.chmod(private_dir, 0o700)
+    except OSError as error:
+        logger.debug("XDG_RUNTIME_DIR unusable (%s); falling back to system temp.", error)
+        return None
+
+    return private_dir
+
+
 _NM_IMPORT_ERROR: Exception | None = None
 _OVPN3_IMPORT_ERROR: Exception | None = None
 
@@ -205,9 +251,13 @@ class NetworkManager(CFFIStringMixin, ConnectionManager):
                 logger.debug("Secret service lookup error: %s", e)
                 nm_password = self.get_session_password()
 
-        # Secure temporary file: unique name, private mode and explicit 0600.
-        # فایل موقت امن: نام یکتا، مالکیت اختصاصی و مجوز صریح 0600.
-        fd, tmp_path = tempfile.mkstemp(suffix=".ovpn", text=True)
+        # Secure temporary file: private runtime directory, unique name and
+        # explicit 0600. The file briefly holds the CA material, so it is kept
+        # out of the shared /tmp whenever XDG_RUNTIME_DIR is available.
+        # فایل موقت امن: پوشهٔ اجرای خصوصی، نام یکتا و مجوز صریح 0600. این فایل
+        # برای مدت کوتاهی محتوای CA را نگه می‌دارد، بنابراین تا وقتی
+        # XDG_RUNTIME_DIR در دسترس باشد از پوشهٔ اشتراکی /tmp دور نگه داشته می‌شود.
+        fd, tmp_path = tempfile.mkstemp(suffix=".ovpn", dir=_secure_temp_dir(), text=True)
         self._temp_config_path = tmp_path
         try:
             os.chmod(tmp_path, 0o600)

@@ -64,8 +64,23 @@ install_data(
   install_dir: join_paths(get_option('mandir'), 'man1')
 )
 
-# Offline unit tests runnable via `meson test` as well
-# تست‌های واحد آفلاین؛ با دستور meson test نیز قابل اجرا هستند
-test('unit', python_installation, args: ['-m', 'unittest', 'discover', '-s', 'tests', '-v'])
+# Offline unit tests, runnable via `meson test` and picked up automatically by
+# dh_auto_test when the Debian package is built.
+# `workdir` is pinned to the source root because `unittest discover -s tests`
+# resolves its path relative to the current directory, and Meson runs tests
+# from the build directory by default.
+#
+# تست‌های واحد آفلاین که با `meson test` اجرا می‌شوند و هنگام ساخت بستهٔ دبیان
+# به‌صورت خودکار توسط dh_auto_test نیز فراخوانی می‌گردند.
+# مقدار `workdir` روی ریشهٔ سورس تثبیت شده، چون `unittest discover -s tests`
+# مسیر را نسبت به پوشهٔ جاری حل می‌کند و Meson به‌صورت پیش‌فرض تست‌ها را از پوشهٔ
+# ساخت اجرا می‌کند.
+test(
+  'unit',
+  python_installation,
+  args: ['-m', 'unittest', 'discover', '-s', 'tests', '-v'],
+  workdir: meson.project_source_root(),
+  timeout: 120,
+)
 
 meson.add_install_script('meson_post_install.py')

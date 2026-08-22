@@ -11,8 +11,8 @@ with `.deb` and Flatpak artifacts.
 ## ✅ Before Release / پیش از انتشار
 
 - [ ] `python3 -m unittest discover -s tests -v` — all green / همه تست‌ها سبز
-- [ ] `python3 -m flake8 eovpn tests run_program_debug.py cffi_compile.py meson_post_install.py` — zero warnings / بدون هشدار
-- [ ] `python3 -m ruff check .` — clean / تمیز
+- [ ] `python3 -m ruff check .` — zero warnings / بدون هشدار
+- [ ] `python3 -m ruff format --check --diff .` — formatting clean / قالب‌بندی تمیز
 - [ ] `python3 -m mypy --ignore-missing-imports eovpn tests` — clean / تمیز
 - [ ] `python3 scripts/check_project_meta.py` — versions/schema/resources in sync
   بررسی خودکار هماهنگی نسخه‌ها، اسکیما و منابع
@@ -24,7 +24,8 @@ with `.deb` and Flatpak artifacts.
   `data/*.metainfo.xml`, `README.md` badge — then run `scripts/check_project_meta.py`
   نسخه در این فایل‌ها هماهنگ شود (منبع اصلی `meson.build` است) و سپس بررسی خودکار اجرا شود
 - [ ] New changelog entry added to `metainfo.xml` `<releases>` and `CHANGELOG.md`
-- [ ] `QA_REPORT.md` re-checked for unresolved P0/P1 items
+- [ ] `docs/REVIEW_SENIOR_2026-08.md` re-checked for unresolved P0/P1 items
+  بررسی مجدد موارد حل‌نشدهٔ P0/P1 در آخرین گزارش ممیزی
 
 ## 📦 Build .deb Locally / ساخت بسته دبیان به‌صورت محلی
 

@@ -1,0 +1,173 @@
+# Maintainer: Mahdi Bagheban <info@MahdiArts.ir>
+# ---------------------------------------------------------------------------
+# eOVPN-Pro — Arch Linux package recipe (.pkg.tar.zst)
+# دستور ساخت بسته آرچ‌لینوکس برای eOVPN-Pro
+# ---------------------------------------------------------------------------
+# EN: This PKGBUILD works in two modes.
+#     1. In-tree mode  — when run from `dist/arch` inside a repository checkout
+#        it builds the working tree directly (used by CI and by developers):
+#            cd dist/arch && makepkg -sf --skipinteg
+#     2. Release mode  — when the surrounding source tree is absent it fetches
+#        the tagged tarball from GitHub (this is the mode the AUR uses):
+#            makepkg -si
+#
+# FA: این PKGBUILD دو حالت کاری دارد.
+#     ۱. حالت درون‌مخزنی — اگر از داخل مسیر dist/arch در یک کپی از مخزن اجرا شود،
+#        مستقیماً همان درخت کاری را می‌سازد (روش مورد استفاده CI و توسعه‌دهنده):
+#            cd dist/arch && makepkg -sf --skipinteg
+#     ۲. حالت انتشار — اگر درخت منبع در دسترس نباشد، آرشیو نسخهٔ تگ‌خورده را از
+#        GitHub دریافت می‌کند (روشی که AUR از آن استفاده می‌کند):
+#            makepkg -si
+#
+# NOTE / نکته:
+#   Schema compilation, icon cache and desktop database refresh are handled by
+#   pacman hooks on Arch, so no .install scriptlet is required.
+#   کامپایل اسکیما، کش آیکون و پایگاه دادهٔ desktop روی آرچ توسط hookهای pacman
+#   انجام می‌شود، بنابراین به اسکریپت .install نیازی نیست.
+# ---------------------------------------------------------------------------
+
+pkgname=eovpn-pro
+pkgver=1.5.0
+pkgrel=1
+pkgdesc="Modern high-performance OpenVPN GUI client built with GTK4 and Libadwaita (Persian/RTL ready)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/Mahdi-Arts/eOVPN-Pro"
+license=('GPL-3.0-or-later')
+
+# Runtime dependencies / وابستگی‌های زمان اجرا
+depends=(
+  'python'
+  'python-gobject'
+  'python-cffi'
+  'gtk4'
+  'libadwaita'
+  'libsecret'
+  'libnotify'
+  'networkmanager'
+  'networkmanager-openvpn'
+  'openvpn'
+  'hicolor-icon-theme'
+)
+
+# Build-time dependencies / وابستگی‌های زمان ساخت
+makedepends=(
+  'meson'
+  'ninja'
+  'gcc'
+  'pkgconf'
+  'gettext'
+  'desktop-file-utils'
+  'appstream-glib'
+  'git'
+)
+
+# Optional features / قابلیت‌های اختیاری
+optdepends=(
+  'openvpn3: OpenVPN 3 backend with DCO kernel acceleration / بک‌اند OpenVPN 3 با شتاب‌دهی هسته'
+  'openvpn-dco-dkms: Data Channel Offload kernel module / ماژول هسته برای انتقال داده در سطح کرنل'
+)
+
+options=('!debug')
+
+# ---------------------------------------------------------------------------
+# Source selection / انتخاب منبع
+# EN: `$startdir` is dist/arch, so the repository root is two levels above.
+# FA: مسیر $startdir همان dist/arch است، پس ریشهٔ مخزن دو سطح بالاتر قرار دارد.
+# ---------------------------------------------------------------------------
+_treeroot="$(cd "${startdir}/../.." 2>/dev/null && pwd || true)"
+
+if [[ -n ${_treeroot} && -f ${_treeroot}/meson.build ]]; then
+  # In-tree mode: nothing to download, build the checkout as-is.
+  # حالت درون‌مخزنی: چیزی دانلود نمی‌شود و همان درخت کاری ساخته می‌شود.
+  source=()
+  sha256sums=()
+else
+  # Release mode: fetch the signed-off tarball for this exact tag.
+  # حالت انتشار: آرشیو همین تگ نسخه از GitHub دریافت می‌شود.
+  _treeroot=""
+  source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz")
+  sha256sums=('SKIP')
+fi
+
+# ---------------------------------------------------------------------------
+# Helper: resolve the directory that holds meson.build
+# تابع کمکی: تعیین مسیری که فایل meson.build در آن قرار دارد
+# ---------------------------------------------------------------------------
+_sourcedir() {
+  if [[ -n ${_treeroot} ]]; then
+    printf '%s\n' "${_treeroot}"
+  else
+    printf '%s\n' "${srcdir}/eOVPN-Pro-${pkgver}"
+  fi
+}
+
+prepare() {
+  local _src
+  _src="$(_sourcedir)"
+
+  # Guard against a stale build directory from a previous run.
+  # جلوگیری از باقی ماندن پوشهٔ build از اجرای قبلی.
+  rm -rf "${srcdir}/build"
+
+  # Verify that every packaging file declares the same version as this recipe.
+  # بررسی اینکه نسخهٔ اعلام‌شده در همهٔ فایل‌های بسته‌بندی با این نسخه یکسان است.
+  local _meson_version
+  _meson_version="$(grep -oP "version:\s*'\K[0-9.]+" "${_src}/meson.build" | head -1)"
+  if [[ ${_meson_version} != "${pkgver}" ]]; then
+    echo "==> ERROR: meson.build version (${_meson_version}) != pkgver (${pkgver})" >&2
+    echo "==> خطا: نسخهٔ meson.build با pkgver این PKGBUILD یکسان نیست." >&2
+    return 1
+  fi
+}
+
+build() {
+  local _src
+  _src="$(_sourcedir)"
+
+  # EN: The OpenVPN 3 backend is disabled by default because it is not part of
+  #     the official Arch repositories; NetworkManager remains the default
+  #     backend. Users who install openvpn3 from the AUR can rebuild with
+  #     `-Dopenvpn3=true`.
+  # FA: بک‌اند OpenVPN 3 به‌صورت پیش‌فرض غیرفعال است چون در مخازن رسمی آرچ وجود
+  #     ندارد و NetworkManager بک‌اند پیش‌فرض باقی می‌ماند. کاربرانی که openvpn3
+  #     را از AUR نصب می‌کنند می‌توانند با -Dopenvpn3=true دوباره بسازند.
+  arch-meson "${_src}" "${srcdir}/build" \
+    -Dopenvpn3=false
+
+  meson compile -C "${srcdir}/build"
+}
+
+check() {
+  # Offline unit tests registered in meson.build (no network, no D-Bus).
+  # تست‌های واحد آفلاین ثبت‌شده در meson.build (بدون شبکه و بدون D-Bus).
+  meson test -C "${srcdir}/build" --print-errorlogs
+}
+
+package() {
+  local _src
+  _src="$(_sourcedir)"
+
+  meson install -C "${srcdir}/build" --destdir "${pkgdir}"
+
+  # Arch keeps a per-package copy of non-common licences.
+  # آرچ برای مجوزهای غیرعمومی یک نسخه به‌ازای هر بسته نگهداری می‌کند.
+  install -Dm644 "${_src}/LICENSE" \
+    "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+
+  # User-facing documentation shipped with the package.
+  # مستندات کاربری همراه بسته.
+  local _doc
+  for _doc in README.md CHANGELOG.md PACKAGING.md SECURITY.md; do
+    [[ -f ${_src}/${_doc} ]] &&
+      install -Dm644 "${_src}/${_doc}" "${pkgdir}/usr/share/doc/${pkgname}/${_doc}"
+  done
+
+  # Sanity checks on the staged tree — cheap, and they catch install regressions.
+  # بررسی سلامت خروجی نصب‌شده؛ کم‌هزینه است و خطاهای نصب را زود آشکار می‌کند.
+  desktop-file-validate \
+    "${pkgdir}/usr/share/applications/com.github.mahdi-arts.eovpn-pro.desktop"
+  appstream-util validate-relax --nonet \
+    "${pkgdir}/usr/share/metainfo/com.github.mahdi-arts.eovpn-pro.metainfo.xml" || true
+}
+
+# vim: set ts=2 sw=2 et:

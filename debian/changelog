@@ -10,7 +10,7 @@ eovpn-pro (1.5.0-1) unstable; urgency=medium
     staging download (no config loss on failed updates), safe redirects and zip-bomb protection.
   * Updated application ID to com.github.mahdi-arts.eovpn-pro to match the repository.
   * Fixed off-by-one in last-connected cursor restore and thread-safety of IP lookup UI updates.
-  * Added linting (flake8), unit tests for the server filter, and an active CI/CD workflow (.deb + Flatpak).
+  * Added lint/type-check configuration, an offline unit test suite and a metadata consistency checker.
   * Added bilingual CONTRIBUTING.md, SECURITY.md, docs/ARCHITECTURE.md and docs/RELEASE_CHECKLIST.md.
 
  -- Mahdi Bagheban <info@MahdiArts.ir>  Sat, 22 Aug 2026 12:00:00 +0330

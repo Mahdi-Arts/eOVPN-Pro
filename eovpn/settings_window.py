@@ -297,7 +297,22 @@ class SettingsWindow(Base, Gtk.Builder):
         frame.set_child(list_box)
         self.pref_box.append(frame)
 
-        self.remove_all_vpn_btn = Gtk.Button.new_with_label(gettext.gettext("Delete All VPN Connections!"))
+        # The native backend only ever removes profiles tagged
+        # ``managed-by=eovpn-pro`` (see eovpn_connection_is_managed() in
+        # subprojects/networkmanager/eovpn_nm.c), so the label must not imply a
+        # system-wide wipe.
+        # بک‌اند بومی فقط پروفایل‌های دارای برچسب `managed-by=eovpn-pro` را حذف
+        # می‌کند (تابع eovpn_connection_is_managed در فایل eovpn_nm.c)، بنابراین
+        # برچسب دکمه نباید پاک‌سازی سراسری سیستم را القا کند.
+        self.remove_all_vpn_btn = Gtk.Button.new_with_label(
+            gettext.gettext("Delete All eOVPN-Pro Profiles")
+        )
+        self.remove_all_vpn_btn.set_tooltip_text(
+            gettext.gettext(
+                "Removes every VPN profile created by eOVPN-Pro from NetworkManager. "
+                "Profiles added by other applications are left untouched."
+            )
+        )
         self.remove_all_vpn_btn.add_css_class("m-6")
         self.remove_all_vpn_btn.add_css_class("destructive-action")
         self.remove_all_vpn_btn.set_valign(Gtk.Align.END)
@@ -445,37 +460,63 @@ class SettingsWindow(Base, Gtk.Builder):
 
     def confirm_delete_all_connections(self, button: Gtk.Button):
         """
-        Asks for explicit confirmation before removing ALL VPN profiles from
-        NetworkManager, because profiles created by other applications would
-        also be deleted. This action cannot be undone.
-        درخواست تأیید صریح پیش از حذف تمام پروفایل‌های VPN از NetworkManager؛
-        زیرا پروفایل‌های ساخته‌شده توسط سایر برنامه‌ها نیز حذف می‌شوند و این
-        عمل قابل بازگشت نیست.
+        Asks for explicit confirmation before removing the VPN profiles that
+        eOVPN-Pro itself created in NetworkManager.
+
+        The scope is deliberately narrow: ``delete_all_vpn_connections()`` in
+        the native backend iterates the NetworkManager profile list and skips
+        every connection that is not tagged ``managed-by=eovpn-pro``. Profiles
+        belonging to other applications are therefore never touched, and the
+        confirmation text states exactly that so the user is not warned about
+        damage the code cannot cause. The action is still irreversible for our
+        own profiles.
+
+        درخواست تأیید صریح پیش از حذف پروفایل‌های VPN که خودِ eOVPN-Pro در
+        NetworkManager ساخته است.
+
+        دامنهٔ عملیات عمداً محدود است: تابع `delete_all_vpn_connections()` در
+        بک‌اند بومی فهرست پروفایل‌های NetworkManager را پیمایش می‌کند و از هر
+        اتصالی که برچسب `managed-by=eovpn-pro` ندارد عبور می‌کند. بنابراین
+        پروفایل‌های سایر برنامه‌ها هرگز دست‌کاری نمی‌شوند و متن تأیید دقیقاً همین
+        را بیان می‌کند تا کاربر دربارهٔ خسارتی که کد اصلاً توان ایجادش را ندارد
+        هشدار نگیرد. با این حال این عمل برای پروفایل‌های خودِ ما بازگشت‌ناپذیر است.
         """
         dialog = Gtk.AlertDialog.new(
-            gettext.gettext("Delete All VPN Connections?")
+            gettext.gettext("Delete all eOVPN-Pro profiles?")
         )
         dialog.set_detail(
             gettext.gettext(
-                "This will permanently remove ALL VPN profiles from NetworkManager, "
-                "including profiles created by other applications. "
-                "This action cannot be undone."
+                "Every VPN profile that eOVPN-Pro created in NetworkManager will be "
+                "permanently removed. VPN profiles added by other applications are "
+                "not affected. This action cannot be undone."
             )
         )
         dialog.set_buttons([
             gettext.gettext("Cancel"),
-            gettext.gettext("Delete All"),
+            gettext.gettext("Delete Profiles"),
         ])
         dialog.set_cancel_button(0)
-        dialog.set_default_button(1)
+        # Cancel is also the default so that Enter or Escape never destroys data.
+        # «انصراف» دکمهٔ پیش‌فرض هم هست تا فشردن Enter یا Escape هرگز داده‌ای را
+        # از بین نبرد.
+        dialog.set_default_button(0)
         dialog.choose(self.window, None, self._on_delete_all_confirmed, None)
 
     def _on_delete_all_confirmed(self, dialog: Gtk.AlertDialog, result, *args):
-        """Deletes all VPN connections only if the destructive button was chosen."""
+        """
+        Deletes the managed profiles only when the destructive button was chosen.
+        فقط در صورتی که دکمهٔ مخرب انتخاب شده باشد، پروفایل‌های مدیریت‌شده را حذف می‌کند.
+        """
         try:
             if dialog.choose_finish(result) == 1:
                 NetworkManager(None).delete_all_connections()
-                logger.info("All VPN connections were deleted by user confirmation.")
+                logger.info("eOVPN-Pro managed VPN profiles were deleted by user confirmation.")
+        except GLib.Error as error:
+            # Dismissing the dialog (Escape) raises DIALOG_ERROR_DISMISSED; that
+            # is a normal cancellation and must not be logged as a failure.
+            # بستن دیالوگ با Escape خطای DIALOG_ERROR_DISMISSED می‌دهد که یک
+            # انصراف عادی است و نباید به‌عنوان خطا ثبت شود.
+            logger.debug("Delete-all dialog dismissed: %s", error.message)
         except Exception as e:
             logger.error("Delete-all confirmation failed: %s", e)
 
@@ -490,8 +531,15 @@ class SettingsSignals(Base):
     مدیریت سیگنال‌ها و رویدادهای پنجره تنظیمات.
     """
 
+    #: Idle time (ms) after the last keystroke before the password is persisted.
+    #: مدت بی‌کاری (میلی‌ثانیه) پس از آخرین کلید، پیش از ماندگار کردن رمز.
+    _KEYRING_DEBOUNCE_MS = 800
+
     def __init__(self):
         super().__init__()
+        # GLib source id of the pending keyring write, or None.
+        # شناسهٔ منبع GLib برای نوشتن معلق در جاکلیدی، یا None.
+        self._keyring_write_source: int | None = None
 
     def process_config_entry(self, entry, revealer):
         text = entry.get_text()
@@ -529,33 +577,92 @@ class SettingsSignals(Base):
         self.set_setting(self.SETTING.AUTH_USER, text if text else None)
 
     def process_password(self, entry):
+        """
+        Caches the typed password in RAM and schedules a debounced keyring write.
+
+        The ``changed`` signal fires on every keystroke. Writing to the Secret
+        Service that often would emit one D-Bus round-trip per character,
+        leaving a trail of partial passwords in the keyring journal and, on
+        some keyring back-ends, triggering an unlock prompt storm. The
+        in-memory session cache is still updated immediately (it is cheap and
+        the connection path reads it), while the persistent write is deferred
+        until the user has paused typing for ``_KEYRING_DEBOUNCE_MS``.
+
+        رمز واردشده را در حافظه ذخیره می‌کند و نوشتن در جاکلیدی را با تأخیر
+        زمان‌بندی می‌کند.
+
+        سیگنال `changed` با هر بار فشردن کلید فعال می‌شود. نوشتن با این تناوب در
+        Secret Service به‌ازای هر کاراکتر یک رفت‌وبرگشت D-Bus ایجاد می‌کند، ردی از
+        رمزهای ناقص در ژورنال جاکلیدی باقی می‌گذارد و در برخی پیاده‌سازی‌ها موجب
+        سیل درخواست‌های باز کردن قفل می‌شود. حافظهٔ نشست بی‌درنگ به‌روزرسانی می‌شود
+        (کم‌هزینه است و مسیر اتصال از آن می‌خواند) اما نوشتن ماندگار تا زمانی که
+        کاربر به‌اندازهٔ `_KEYRING_DEBOUNCE_MS` تایپ را متوقف کند به تعویق می‌افتد.
+        """
         pwd = entry.get_text()
         username = self.get_setting(self.SETTING.AUTH_USER)
+
+        # Any new keystroke invalidates a pending write.
+        # هر کلید جدید، نوشتن معلق قبلی را باطل می‌کند.
+        self._cancel_pending_keyring_write()
 
         if pwd and username:
             # Store in volatile RAM session cache
             # ذخیره در حافظه موقت پروسس
             self.set_session_password(pwd)
-
-            def on_password_stored(source, result):
-                try:
-                    Secret.password_store_finish(result)
-                    logger.debug("Password stored securely in Secret Service.")
-                except Exception as e:
-                    logger.info("Secret service unavailable, retained in memory session: %s", e)
-
-            attributes = {"username": username}
-            Secret.password_store(
-                self.EOVPN_SECRET_SCHEMA,
-                attributes,
-                Secret.COLLECTION_DEFAULT,
-                "eOVPN Password",
+            self._keyring_write_source = GLib.timeout_add(
+                self._KEYRING_DEBOUNCE_MS,
+                self._flush_password_to_keyring,
+                username,
                 pwd,
-                None,
-                on_password_stored
             )
         else:
             self.set_session_password(None)
+
+    def _cancel_pending_keyring_write(self) -> None:
+        """
+        Drops a scheduled keyring write, if one is still queued.
+        در صورت وجود، نوشتن زمان‌بندی‌شده در جاکلیدی را لغو می‌کند.
+        """
+        if self._keyring_write_source is not None:
+            GLib.source_remove(self._keyring_write_source)
+            self._keyring_write_source = None
+
+    def _flush_password_to_keyring(self, username: str, pwd: str) -> bool:
+        """
+        Performs the actual asynchronous Secret Service write.
+
+        Returns ``GLib.SOURCE_REMOVE`` so the timeout fires exactly once.
+        A failure here is not fatal: the password remains in the session cache
+        for the lifetime of the process, which is what a keyring-less system
+        (or a locked collection) falls back to anyway.
+
+        نوشتن واقعی و ناهمگام در Secret Service را انجام می‌دهد.
+
+        مقدار `GLib.SOURCE_REMOVE` را برمی‌گرداند تا تایمر فقط یک بار اجرا شود.
+        شکست در این مرحله بحرانی نیست: رمز تا پایان عمر پروسه در حافظهٔ نشست
+        باقی می‌ماند و همان چیزی است که سیستم فاقد جاکلیدی (یا مجموعهٔ قفل‌شده)
+        به آن بازمی‌گردد.
+        """
+        self._keyring_write_source = None
+
+        def on_password_stored(source, result):
+            try:
+                Secret.password_store_finish(result)
+                logger.debug("Password stored securely in Secret Service.")
+            except Exception as e:
+                logger.info("Secret service unavailable, retained in memory session: %s", e)
+
+        attributes = {"username": username}
+        Secret.password_store(
+            self.EOVPN_SECRET_SCHEMA,
+            attributes,
+            Secret.COLLECTION_DEFAULT,
+            "eOVPN Password",
+            pwd,
+            None,
+            on_password_stored
+        )
+        return GLib.SOURCE_REMOVE
 
     def process_ca(self, chooser, response, button):
         if response == Gtk.ResponseType.ACCEPT:

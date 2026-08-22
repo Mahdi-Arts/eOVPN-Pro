@@ -7,8 +7,11 @@
 # Core runtime / زمان اجرا
 -r requirements.txt
 
-# Testing / تست
-flake8>=7.0.0
+# Linting, formatting and type checking / لینت، قالب‌بندی و بررسی نوع
+# ruff is the single linter/formatter for this project; it fully replaces
+# flake8, isort and pycodestyle. Configuration lives in pyproject.toml.
+# ruff تنها لینتر و قالب‌بند این پروژه است و جایگزین کامل flake8، isort و
+# pycodestyle می‌شود. پیکربندی آن در pyproject.toml قرار دارد.
 ruff>=0.5.0
 mypy>=1.10.0
 

@@ -13,7 +13,6 @@ import json
 import logging
 import os
 import shutil
-import subprocess
 import threading
 from pathlib import Path
 from typing import Any
@@ -126,13 +125,13 @@ class ConfigRow(Gtk.ListBoxRow):
         self.edit_button.set_visible(False)
         self.edit_button.add_css_class("btn-no-dec")
 
-        target_file = Path(self.ovpn_dir).joinpath(filename)
-        # Launch the editor asynchronously so the UI thread is never blocked.
-        # اجرای غیرمسدودکننده ویرایشگر تا نخ رابط کاربری هرگز قفل نشود.
-        self.edit_button.connect(
-            "clicked",
-            lambda w: subprocess.Popen(["xdg-open", str(target_file)]),
-        )
+        # The editor is opened through a validated handler rather than a raw
+        # subprocess call, because ``filename`` originates from user-supplied
+        # archives and must never be trusted verbatim.
+        # ویرایشگر از طریق یک هندلر اعتبارسنجی‌شده باز می‌شود و نه فراخوانی خام
+        # پروسه، چون مقدار filename از آرشیوهای کاربر می‌آید و نباید بدون بررسی
+        # مورد اعتماد قرار گیرد.
+        self.edit_button.connect("clicked", self._on_edit_clicked)
 
         self.box.append(self.fav_button)
         self.box.append(self.label)
@@ -140,6 +139,99 @@ class ConfigRow(Gtk.ListBoxRow):
         self.box.append(self.latency_label)
         self.box.append(self.edit_button)
         self.set_child(self.box)
+
+    def _resolve_editable_path(self) -> Path | None:
+        """
+        Resolves the row's configuration file and proves it is a real ``.ovpn``
+        file located inside the managed configuration directory.
+
+        Filenames come from imported archives, so three properties are checked
+        before the file is handed to a launcher: the extension must be
+        ``.ovpn``, the fully resolved path must stay inside ``ovpn_dir`` (which
+        defeats ``../`` traversal and symlinks pointing elsewhere), and the
+        target must be a regular file.
+
+        مسیر فایل کانفیگ این ردیف را استخراج می‌کند و اثبات می‌کند که یک فایل
+        واقعی `.ovpn` داخل پوشهٔ کانفیگ مدیریت‌شده است.
+
+        نام فایل‌ها از آرشیوهای واردشده می‌آیند، بنابراین پیش از تحویل فایل به
+        اجراکننده سه شرط بررسی می‌شود: پسوند باید `.ovpn` باشد، مسیر کاملاً
+        resolve‌شده باید داخل `ovpn_dir` بماند (که پیمایش `../` و symlinkهای
+        خارج از پوشه را خنثی می‌کند) و مقصد باید یک فایل معمولی باشد.
+
+        :return: The validated path, or ``None`` when validation fails.
+                 مسیر معتبر، یا ``None`` در صورت شکست اعتبارسنجی.
+        """
+        try:
+            base_dir = Path(self.ovpn_dir).resolve(strict=True)
+            target = (base_dir / self.filename).resolve(strict=True)
+        except (OSError, RuntimeError, ValueError):
+            logger.warning("Edit refused: configuration path cannot be resolved.")
+            return None
+
+        if target.suffix.lower() != ".ovpn":
+            logger.warning("Edit refused: not an .ovpn file.")
+            return None
+
+        # ``is_relative_to`` is the traversal guard / نگهبان پیمایش مسیر
+        if not target.is_relative_to(base_dir):
+            logger.warning("Edit refused: path escapes the configuration directory.")
+            return None
+
+        if not target.is_file():
+            logger.warning("Edit refused: target is not a regular file.")
+            return None
+
+        return target
+
+    def _on_edit_clicked(self, _button: Gtk.Button) -> None:
+        """
+        Opens the configuration file in the user's default text editor.
+
+        Uses ``Gtk.FileLauncher`` (GTK 4.10+), which delegates to the XDG
+        desktop portal and therefore works inside a Flatpak sandbox as well.
+        On older GTK versions it falls back to ``Gio.AppInfo``. No shell is
+        involved in either path, so a hostile filename cannot inject arguments.
+
+        فایل کانفیگ را در ویرایشگر متن پیش‌فرض کاربر باز می‌کند.
+
+        از `Gtk.FileLauncher` (نسخهٔ ۴٫۱۰ به بالا) استفاده می‌کند که کار را به
+        پورتال دسکتاپ XDG می‌سپارد و در نتیجه داخل سندباکس Flatpak هم کار
+        می‌کند. روی نسخه‌های قدیمی‌تر GTK به `Gio.AppInfo` بازمی‌گردد. در هیچ‌کدام
+        از این دو مسیر پوسته (shell) دخالت ندارد، بنابراین نام فایل مخرب
+        نمی‌تواند آرگومان تزریق کند.
+        """
+        target = self._resolve_editable_path()
+        if target is None:
+            return
+
+        gfile = Gio.File.new_for_path(str(target))
+        parent = self.get_root()
+        parent_window = parent if isinstance(parent, Gtk.Window) else None
+
+        if hasattr(Gtk, "FileLauncher"):
+            launcher = Gtk.FileLauncher.new(gfile)
+            # Asynchronous, so the UI thread is never blocked.
+            # به‌صورت ناهمگام تا نخ رابط کاربری هرگز قفل نشود.
+            launcher.launch(parent_window, None, self._on_launch_finished)
+            return
+
+        try:
+            Gio.AppInfo.launch_default_for_uri(gfile.get_uri(), None)
+        except GLib.Error as error:
+            logger.warning("Could not open the configuration file: %s", error.message)
+
+    @staticmethod
+    def _on_launch_finished(launcher: Any, result: Gio.AsyncResult) -> None:
+        """
+        Completes the asynchronous launch and logs a failure without raising.
+        عملیات ناهمگام باز کردن فایل را تکمیل می‌کند و خطا را بدون پرتاب استثنا
+        در لاگ ثبت می‌کند.
+        """
+        try:
+            launcher.launch_finish(result)
+        except GLib.Error as error:
+            logger.warning("Could not open the configuration file: %s", error.message)
 
     def _on_favorite_toggled(self, button: Gtk.ToggleButton):
         """Updates star icon and persists the favorite state."""
