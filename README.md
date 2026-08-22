@@ -39,13 +39,13 @@
   - Multi-threaded worker pools test socket-level latency to all remote endpoints within `.ovpn` files concurrently in under 2 seconds.
   - استخراج تمامی آدرس‌ها و پورت‌های مقصد از فایل‌های کانفیگ و انجام تست دست‌دهی پروتکل TCP به صورت چندنخی و کاملاً موازی در کمتر از ۲ ثانیه بدون افت فریم در برنامه.
 
-- 🔄 **Dynamic Latency Sorting & Auto-Select (مرتب‌سازی داینامیک و انتخاب هوشمند)**:
-  - Instantly sorts your VPN configuration list from lowest to highest latency, moving failed servers to the bottom automatically, and auto-selects the fastest server with one click.
-  - مرتب‌سازی آنی لیست کانفیگ‌ها از سریع‌ترین (کمترین پینگ) به سنگین‌ترین سرورها به صورت کاملاً خودکار و انتخاب سریع‌ترین سرور فعال در کل لیست تنها با یک کلیک.
+- 🔄 **Dynamic Latency Sorting & Cascading Auto-Connect (مرتب‌سازی داینامیک و اتصال آبشاری)**:
+  - Instantly sorts your VPN configuration list from lowest to highest latency, moving failed servers to the bottom automatically. **Connect Fastest** then walks the current sorted/filtered list (including the TCP/UDP filter) and tries each handshake with an adaptive timeout, switching to the next server on failure (`Ctrl+Shift+C`).
+  - مرتب‌سازی آنی لیست کانفیگ‌ها از سریع‌ترین به سنگین‌ترین. دکمه **اتصال به سریع‌ترین** از اولین سرورِ لیستِ مرتب و فیلترشده (از جمله فیلتر TCP/UDP) تلاش می‌کند و در صورت شکست دست‌دهی، با تایم‌اوت تطبیقی به سرور بعدی می‌رود (`Ctrl+Shift+C`).
 
 - 🔎 **Live Search, Filter & Favorites (جستجوی زنده، فیلتر هوشمند و ستاره‌دار کردن سرورها)**:
-  - Real-time server search (`Ctrl+F`), smart filtering (All / Favorites / Online / Offline), star-marked favorite servers with persistent storage, and a live visible/total counter.
-  - جستجوی زنده سرورها (`Ctrl+F`)، فیلتر هوشمند (همه / مورد علاقه‌ها / آنلاین / آفلاین)، نشان‌کردن سرورهای محبوب با ستاره و ذخیره دائمی آن‌ها، به همراه شمارنده زنده تعداد سرورهای نمایش‌داده‌شده.
+  - Real-time server search (`Ctrl+F`), smart filtering (All / Favorites / Online / Offline), TCP/UDP protocol filter, star-marked favorite servers with persistent storage, and a live visible/total counter.
+  - جستجوی زنده سرورها (`Ctrl+F`)، فیلتر هوشمند (همه / مورد علاقه‌ها / آنلاین / آفلاین)، فیلتر پروتکل TCP/UDP، نشان‌کردن سرورهای محبوب با ستاره و ذخیره دائمی آن‌ها، به همراه شمارنده زنده تعداد سرورهای نمایش‌داده‌شده.
 
 - 📊 **Real-time Bandwidth Monitor (نمایشگر زنده پهنای باند و ترافیک)**:
   - Monitors and displays live download speed, upload speed, and total traffic usage from `/proc/net/dev` once connected.

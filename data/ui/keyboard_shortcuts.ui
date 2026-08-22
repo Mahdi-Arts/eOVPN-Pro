@@ -28,6 +28,20 @@
             <child>
               <object class="GtkShortcutsShortcut">
                 <property name="visible">True</property>
+                <property name="title" translatable="yes" context="shortcut window">Connect Fastest</property>
+                <property name="accelerator">&lt;primary&gt;&lt;shift&gt;C</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="visible">True</property>
+                <property name="title" translatable="yes" context="shortcut window">Search Servers</property>
+                <property name="accelerator">&lt;primary&gt;F</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="visible">True</property>
                 <property name="title" translatable="yes" context="shortcut window">Open Settings</property>
                 <property name="accelerator">&lt;primary&gt;S</property>
               </object>

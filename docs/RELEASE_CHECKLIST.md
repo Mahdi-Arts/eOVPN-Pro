@@ -42,6 +42,8 @@ Verify / بررسی کنید:
 - [ ] Window opens with configs list / پنجره با لیست کانفیگ باز می‌شود
 - [ ] Search, filter and favorites work / جستجو، فیلتر و ستاره‌ها کار می‌کنند
 - [ ] Speed test completes and sorting updates / تست سرعت تمام و مرتب‌سازی به‌روز می‌شود
+- [ ] TCP/UDP filter hides the opposite transport / فیلتر TCP/UDP پروتکل مخالف را پنهان می‌کند
+- [ ] Connect Fastest walks the visible list and fails over on timeout / اتصال به سریع‌ترین روی لیست نمایان حرکت می‌کند و در تایم‌اوت به بعدی می‌رود
 - [ ] Connect/disconnect to a real VPN server / اتصال/قطع به یک سرور واقعی
 
 ## 📦 Build Flatpak Locally / ساخت فلت‌پک به‌صورت محلی

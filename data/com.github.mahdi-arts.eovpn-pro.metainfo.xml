@@ -40,7 +40,8 @@
     <release version="1.5.0" date="2026-08-22">
       <description>
         <ul>
-          <li>Added live server search, smart filtering (All / Favorites / Online / Offline) and star-marked favorite servers.</li>
+          <li>Added live server search, smart filtering (All / Favorites / Online / Offline), TCP/UDP protocol filter and star-marked favorite servers.</li>
+          <li>Connect Fastest now walks the current sorted/filtered list and automatically tries the next server when a handshake times out or fails.</li>
           <li>Security hardening: removed OTP logging, added delete-all confirmation dialog, safe ZIP size limits and staging download.</li>
           <li>Updated application ID to match the repository (com.github.mahdi-arts.eovpn-pro).</li>
         </ul>

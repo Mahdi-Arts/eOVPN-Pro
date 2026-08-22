@@ -13,6 +13,7 @@ This guide provides step-by-step instructions for building and packaging **eOVPN
 3. [Flatpak (Universal Sandbox)](#3-flatpak-universal-sandbox)
 4. [Arch Linux / Manjaro (PKGBUILD)](#4-arch-linux--manjaro-pkgbuild)
 5. [Automated CI/CD Deployment](#5-automated-cicd-deployment)
+6. [AppImage status](#6-appimage-status)
 
 > **Note:** The OpenVPN 3 (DCO) backend is optional (`-Dopenvpn3=false` by default).
 > Building with `-Dopenvpn3=true` additionally requires the Python `openvpn3` bindings
@@ -171,6 +172,20 @@ also mirrored in `dist/ci/ci-cd.yml`) that automatically:
 
 See `docs/RELEASE_CHECKLIST.md` for the full release runbook.
 راهنمای کامل انتشار در `docs/RELEASE_CHECKLIST.md` موجود است.
+
+---
+
+## 6. AppImage status
+
+**Not ready.** There is no AppDir, `linuxdeploy` recipe or CI job for AppImage.
+eOVPN-Pro talks to the **system** NetworkManager / OpenVPN 3 D-Bus services, so a
+portable AppImage would still require those host services (and the OpenVPN NM
+plugin) to be installed. A GTK4 + PyGObject + CFFI native-library bundle is a
+separate engineering task, not a packaging-file tweak.
+
+**آماده نیست.** هیچ AppDir، دستور `linuxdeploy` یا جاب CI برای AppImage وجود ندارد.
+برنامه با سرویس‌های سیستمی NetworkManager / OpenVPN 3 صحبت می‌کند؛ بنابراین حتی
+یک AppImage قابل‌حمل هم به نصب بودن آن سرویس‌ها روی میزبان نیاز دارد.
 
 ---
 
