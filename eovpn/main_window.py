@@ -38,7 +38,7 @@ from .cascade import (
     cascade_reason_label,
     cascade_remaining_seconds,
 )
-from .connection_manager import NetworkManager, OpenVPN3
+from .connection_manager import create_connection_manager
 from .eovpn_base import Base, ConfigRow, StorageItem
 from .ip_lookup.lookup import Lookup
 from .settings_window import SettingsWindow
@@ -122,15 +122,33 @@ class MainWindow(Base, Gtk.Builder):
         # Initialize and setup Connection Manager (CM)
         # مقداردهی اولیه مدیریت‌کننده اتصالات
         ###########################################################
-        preferred = self.get_setting(self.SETTING.MANAGER)
-        self.store("CM", {
-            "name": preferred,
-            "instance": NetworkManager(self.on_connection_event)
-            if preferred == "networkmanager"
-            else OpenVPN3(self.on_connection_event)
-        })
+        preferred = self.get_setting(self.SETTING.MANAGER) or "networkmanager"
+        instance = None
+        selected_name = preferred
+        try:
+            instance = create_connection_manager(self.on_connection_event, preferred)
+            selected_name = instance.get_name()
+            if selected_name != preferred:
+                self.set_setting(self.SETTING.MANAGER, selected_name)
+        except Exception as exc:
+            logger.error("No usable VPN backend found: %s", exc)
+            self.generic_critical_error_dialog([
+                gettext.gettext("No usable VPN backend is available."),
+                gettext.gettext(
+                    "Install network-manager-openvpn (and OpenVPN 3 if needed), "
+                    "then rebuild/reinstall eOVPN-Pro."
+                ),
+                str(exc),
+            ])
+
+        self.store("CM", {"name": selected_name, "instance": instance})
         self.store("on_connection_event", self.on_connection_event)
-        self.CM = lambda: self.retrieve("CM")["instance"]
+
+        def get_cm():
+            record = self.retrieve("CM")
+            return record.get("instance") if record else None
+
+        self.CM = get_cm
 
         self.lookup = Lookup()
 
@@ -139,13 +157,15 @@ class MainWindow(Base, Gtk.Builder):
         Cleans up D-Bus signal subscriptions before the window closes.
         پاک‌سازی اشتراک‌های سیگنال D-Bus پیش از بسته‌شدن پنجره.
         """
+        self.stop_network_monitor()
         try:
-            cm = self.retrieve("CM")["instance"]
+            cm = self.retrieve("CM").get("instance")
             stop = getattr(cm, "stop_watch", None)
             if callable(stop):
                 stop()
         except Exception as e:
             logger.debug("Failed to stop connection watch on close: %s", e)
+        self.set_session_password(None)
         return False  # allow the window to close / اجازه بسته‌شدن پنجره داده می‌شود
 
     def notify_config_audit(self, results: dict[str, list[str]]):
@@ -583,7 +603,7 @@ class MainWindow(Base, Gtk.Builder):
         # ---------------------------------------------------------
         self.progress_bar = Gtk.ProgressBar.new()
 
-        if self.CM().status():
+        if self.CM() is not None and self.CM().status():
             self.connect_btn.set_label(gettext.gettext("Disconnect"))
             self.connect_btn.add_css_class("destructive-action")
             self.progress_bar.add_css_class("progress-full-green")
@@ -1044,7 +1064,8 @@ class MainWindow(Base, Gtk.Builder):
 
         current = self.get_selected_config()
         try:
-            already = bool(self.CM().status())
+            cm = self.CM()
+            already = bool(cm and cm.status())
         except Exception:
             already = False
         if already and current == queue[0]:
@@ -1112,15 +1133,16 @@ class MainWindow(Base, Gtk.Builder):
         )
 
         try:
-            if self.CM().status():
+            cm = self.CM()
+            if cm is not None and cm.status():
                 self._cascade_expect_disconnect = True
                 self.manual_disconnect = True
                 self._cascade_phase = CascadePhase.SETTLING
                 self._update_cascade_banner(
                     status=gettext.gettext("Disconnecting current session…")
                 )
-                self.CM().start_watch()
-                self.CM().disconnect()
+                cm.start_watch()
+                cm.disconnect()
                 self._arm_settle(self._try_current_server)
                 return
         except Exception as exc:
@@ -1149,6 +1171,9 @@ class MainWindow(Base, Gtk.Builder):
         self._arm_timeout_and_ticks()
 
         manager = self.CM()
+        if manager is None:
+            self._finish_cascade(CascadePhase.EXHAUSTED)
+            return False
         try:
             manager.start_watch()
             if manager.status():
@@ -1263,9 +1288,9 @@ class MainWindow(Base, Gtk.Builder):
             self._arm_timeout_and_ticks()
             return False
         try:
-            if self.CM().status():
-                # Handshake landed in the same tick as the timeout
-                # دست‌دهی درست همزمان با اتمام تایم‌اوت موفق شده است
+            cm = self.CM()
+            if cm is not None and cm.status():
+                # Handshake landed in the same tick as the timeout.
                 return False
         except Exception:
             pass
@@ -1321,8 +1346,9 @@ class MainWindow(Base, Gtk.Builder):
         self.manual_disconnect = True
 
         try:
-            if self.CM().status():
-                self.CM().disconnect()
+            cm = self.CM()
+            if cm is not None and cm.status():
+                cm.disconnect()
                 self._arm_settle(self._try_current_server)
                 return
         except Exception as exc:
@@ -1400,9 +1426,10 @@ class MainWindow(Base, Gtk.Builder):
             self._toast(gettext.gettext("Auto-connect cancelled"))
             if restore_connect_ui and not was_preparing:
                 try:
-                    if self.CM().status():
+                    cm = self.CM()
+                    if cm is not None and cm.status():
                         self.manual_disconnect = True
-                        self.CM().disconnect()
+                        cm.disconnect()
                 except Exception:
                     pass
             return
@@ -1667,7 +1694,8 @@ class MainWindow(Base, Gtk.Builder):
 
             self.swap_pause_btn_signal_resume_to_pause()
 
-            if self.CM().get_name().lower() == "openvpn3" and self.CM().config_path is not None:
+            cm = self.CM()
+            if cm is not None and cm.get_name().lower() == "openvpn3" and cm.config_path is not None:
                 self.pause_resume_btn.set_visible(True)
 
         else:
@@ -1728,7 +1756,10 @@ class MainWindowSignals(Base):
         super().__init__()
 
     def connect(self, button, config_callable):
-        manager = self.retrieve("CM")["instance"]
+        manager = self.retrieve("CM").get("instance")
+        if manager is None:
+            logger.error("Cannot connect: no VPN backend is available.")
+            return
         manager.start_watch()
         if manager.status():
             self.disconnect(None, manager)
@@ -1747,6 +1778,8 @@ class MainWindowSignals(Base):
         self.connect(None, config_callable)
 
     def disconnect(self, button, manager):
+        if manager is None:
+            return
         try:
             mw = self.retrieve("main_window_instance")
             if mw:

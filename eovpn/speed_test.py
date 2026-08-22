@@ -14,6 +14,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 logger = logging.getLogger(__name__)
 
+# Conservative caps prevent a huge or maliciously crafted config list from
+# opening too many parallel sockets or running indefinitely.
+# محدودیت‌های محافظه‌کارانه جلوی سوکت‌های همزمان بیش از حد را می‌گیرند.
+MAX_WORKERS = 16
+MAX_ENDPOINTS_PER_CONFIG = 16
+
 
 def parse_ovpn_remote(file_path: str) -> list[tuple[str, int]]:
     """
@@ -72,7 +78,11 @@ def test_single_ovpn(file_path: str, timeout: float = 1.5) -> float | None:
         return None
 
     best_rtt = None
-    for host, port in remotes:
+    for host, port in remotes[:MAX_ENDPOINTS_PER_CONFIG]:
+        # Skip malformed endpoint declarations without scanning private
+        # networks beyond what the user-provided config explicitly contains.
+        if not host or not (1 <= int(port) <= 65535):
+            continue
         rtt = ping_host(host, port, timeout=timeout)
         if rtt is not None and (best_rtt is None or rtt < best_rtt):
             best_rtt = rtt
@@ -97,6 +107,7 @@ def test_all_configs(
     if not valid_files:
         return results
 
+    max_workers = max(1, min(int(max_workers), MAX_WORKERS))
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_file = {}
         for file in valid_files:

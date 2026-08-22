@@ -4,9 +4,21 @@ eOVPN-Pro Connection Manager Module
 
 Provides an abstract interface and concrete implementations for connecting,
 disconnecting, and monitoring VPN tunnels via NetworkManager and OpenVPN 3 Linux.
-ارائه‌دهنده ساختار انتزاعی و پیاده‌سازی‌های عملیاتی جهت مدیریت تونل‌های
+
+ارائه‌دهنده ساختار انتزاعی و پیاده‌سازی‌های عملیاتی برای مدیریت تونل‌های
 OpenVPN از طریق NetworkManager و OpenVPN 3.
+
+Backend native bindings are imported defensively. The application can therefore
+be imported, tested and configured even when one backend's CFFI module is not
+available; instantiation fails with a clear error only when that backend is
+actually selected.
+
+بایندینگ‌های بومی به‌صورت تدافعی ایمپورت می‌شوند تا برنامه حتی در صورت نبود یکی
+از بک‌اندها قابل ایمپورت/تست/پیکربندی باشد و فقط هنگام استفاده از همان بک‌اند،
+خطای شفاف دریافت شود.
 """
+
+from __future__ import annotations
 
 import logging
 import os
@@ -16,17 +28,30 @@ from abc import ABC, abstractmethod
 from gi.repository import Secret
 
 from .backend._base import CFFIStringMixin
-from .backend.networkmanager import _libeovpn_nm  # type: ignore[attr-defined]
-from .backend.networkmanager.dbus import NMDbus
 from .eovpn_base import Base
 
 logger = logging.getLogger(__name__)
 
+_NM_IMPORT_ERROR: Exception | None = None
+_OVPN3_IMPORT_ERROR: Exception | None = None
+
+try:
+    from .backend.networkmanager import _libeovpn_nm  # type: ignore[attr-defined]
+    from .backend.networkmanager.dbus import NMDbus
+except Exception as exc:  # pragma: no cover - depends on native build/runtime
+    _libeovpn_nm = None
+    NMDbus = None
+    _NM_IMPORT_ERROR = exc
+    logger.warning("NetworkManager backend module unavailable: %s", exc)
+
 try:
     from .backend.openvpn3 import _libopenvpn3  # type: ignore[attr-defined]
     from .backend.openvpn3.dbus import OVPN3Dbus
-except Exception as e:
-    logger.warning("OpenVPN 3 backend module unavailable: %s", e)
+except Exception as exc:  # pragma: no cover - depends on native build/runtime
+    _libopenvpn3 = None
+    OVPN3Dbus = None
+    _OVPN3_IMPORT_ERROR = exc
+    logger.warning("OpenVPN 3 backend module unavailable: %s", exc)
 
 
 class ConnectionManager(ABC, Base):
@@ -47,60 +72,114 @@ class ConnectionManager(ABC, Base):
     @abstractmethod
     def start_watch(self):
         """Subscribes to connection state change events."""
-        pass
 
     @abstractmethod
     def version(self) -> str | None:
         """Returns backend version string."""
-        pass
 
     @abstractmethod
     def connect(self, openvpn_config: str):
         """Initiates VPN connection using the provided configuration file."""
-        pass
 
     @abstractmethod
     def disconnect(self):
         """Terminates active VPN connection."""
-        pass
 
     @abstractmethod
     def status(self) -> bool:
         """Checks if a VPN tunnel is currently active."""
-        pass
+
+
+def available_backend_names() -> set[str]:
+    """
+    Returns the identifiers of backends whose native bindings loaded successfully.
+
+    شناسه بک‌اندهایی که بایندینگ بومی آن‌ها با موفقیت بارگذاری شده است را برمی‌گرداند.
+    """
+    available: set[str] = set()
+    if _libeovpn_nm is not None:
+        available.add("networkmanager")
+    if _libopenvpn3 is not None:
+        available.add("openvpn3")
+    return available
+
+
+def create_connection_manager(callback, preferred: str | None = None):
+    """
+    Creates a backend instance, preferring ``preferred`` when it is available.
+
+    If the requested backend is unavailable, another available backend is used
+    as a safe fallback. Raises ``RuntimeError`` when no backend is available.
+
+    یک نمونه بک‌اند می‌سازد و در صورت موجود بودن، ``preferred`` را اولویت می‌دهد.
+    اگر بک‌اند درخواست‌شده در دسترس نباشد، به بک‌اند موجود دیگر fallback می‌شود.
+    اگر هیچ بک‌اندی موجود نباشد، ``RuntimeError`` پرتاب می‌کند.
+    """
+    available = available_backend_names()
+    if not available:
+        details = {
+            "networkmanager": _NM_IMPORT_ERROR,
+            "openvpn3": _OVPN3_IMPORT_ERROR,
+        }
+        raise RuntimeError(
+            "No VPN backend is available. Install/network-manager-openvpn and "
+            f"build the native bindings. Details: {details}"
+        )
+
+    order: list[str] = []
+    if preferred in available:
+        order.append(preferred)
+    order.extend(name for name in ("networkmanager", "openvpn3") if name in available and name not in order)
+
+    last_error: Exception | None = None
+    for name in order:
+        try:
+            if name == "networkmanager":
+                return NetworkManager(callback)
+            return OpenVPN3(callback)
+        except Exception as exc:
+            last_error = exc
+            logger.warning("Failed to initialize %s backend: %s", name, exc)
+    raise RuntimeError(f"Unable to initialize any VPN backend: {last_error}")
 
 
 class NetworkManager(CFFIStringMixin, ConnectionManager):
     """
     NetworkManager backend implementation using libnm via CFFI and D-Bus signals.
-    پیاده‌سازی بک‌اند NetworkManager با استفاده از بایندینگ C و سیگنال‌های D-Bus.
+    پیاده‌سازی بک‌اند NetworkManager با استفاده از libnm، CFFI و سیگنال‌های D-Bus.
     """
 
     def __init__(self, callback):
         super().__init__("NetworkManager")
+        if _libeovpn_nm is None:
+            raise RuntimeError(
+                "NetworkManager native bindings are unavailable. Build with "
+                "Meson/Ninja and install network-manager-openvpn."
+            ) from _NM_IMPORT_ERROR
+
         self.uuid = None
         self.nm_manager = _libeovpn_nm.lib
         self.ffi = _libeovpn_nm.ffi
         self.callback = callback
         self._temp_config_path: str | None = None
 
-        self.dbus = NMDbus()
+        self.dbus = NMDbus() if NMDbus is not None else None
         self.watch = False
 
     def get_name(self) -> str:
         return "networkmanager"
 
     def start_watch(self):
-        if not self.watch:
+        if not self.watch and self.dbus is not None:
             self.dbus.watch(self.callback)
             self.watch = True
 
     def stop_watch(self):
         """
-        Unsubscribes from NetworkManager D-Bus signals (call on window close).
-        لغو اشتراک سیگنال‌های D-Bus شبکه (هنگام بسته‌شدن پنجره فراخوانی شود).
+        Unsubscribes from NetworkManager D-Bus signals.
+        لغو اشتراک سیگنال‌های D-Bus شبکه.
         """
-        if self.watch:
+        if self.watch and self.dbus is not None:
             try:
                 self.dbus.remove_watch()
             finally:
@@ -115,49 +194,49 @@ class NetworkManager(CFFIStringMixin, ConnectionManager):
         nm_password = None
         nm_ca = self.get_setting(self.SETTING.CA)
 
-        # Retrieve password from Secret Service (Keyring) or in-memory session cache
-        # دریافت کلمه عبور از سرویس امن Secret Service یا حافظه موقت پروسس
         if nm_username is not None:
             try:
                 nm_password = Secret.password_lookup_sync(
                     self.EOVPN_SECRET_SCHEMA,
                     {"username": nm_username},
-                    None
+                    None,
                 )
             except Exception as e:
                 logger.debug("Secret service lookup error: %s", e)
                 nm_password = self.get_session_password()
 
-        # Secure Temporary File Creation (0o600 permissions, unique random name)
-        # ایجاد امن فایل کانفیگ موقت با مجوز دسترسی اختصاصی کاربر جاری جهت ممانعت از حملات Race Condition
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".ovpn", delete=False) as tmp_file:
-            os.chmod(tmp_file.name, 0o600)
-            self._temp_config_path = tmp_file.name
+        # Secure temporary file: unique name, private mode and explicit 0600.
+        # فایل موقت امن: نام یکتا، مالکیت اختصاصی و مجوز صریح 0600.
+        fd, tmp_path = tempfile.mkstemp(suffix=".ovpn", text=True)
+        self._temp_config_path = tmp_path
+        try:
+            os.chmod(tmp_path, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as tmp_file:
+                with open(openvpn_config, encoding="utf-8", errors="ignore") as f:
+                    tmp_file.write(f.read() + "\n")
 
-            with open(openvpn_config, encoding="utf-8", errors="ignore") as f:
-                data = f.read() + "\n"
-
-            if nm_ca is not None and os.path.exists(nm_ca):
-                with open(nm_ca, encoding="utf-8", errors="ignore") as caf:
-                    data += f"\n<ca>\n{caf.read()}\n</ca>\n"
-
-            tmp_file.write(data)
+                if nm_ca is not None and os.path.exists(nm_ca):
+                    with open(nm_ca, encoding="utf-8", errors="ignore") as caf:
+                        tmp_file.write(f"\n<ca>\n{caf.read()}\n</ca>\n")
+        except Exception:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            self._temp_config_path = None
+            raise
 
         try:
             uuid = self.nm_manager.add_connection(
                 self._temp_config_path.encode("utf-8"),
-                (nm_username.encode('utf-8') if nm_username is not None else None),
-                (nm_password.encode('utf-8') if nm_password is not None else None),
+                (nm_username.encode("utf-8") if nm_username is not None else None),
+                (nm_password.encode("utf-8") if nm_password is not None else None),
                 self.ffi.NULL,
             )
             self.uuid = self.to_cffi_string(uuid)
+            if not self.uuid:
+                raise RuntimeError("NetworkManager could not import the VPN profile.")
             self.nm_manager.activate_connection(self.uuid)
-
-            if self.uuid:
-                self.set_setting(self.SETTING.NM_ACTIVE_UUID, self.uuid.decode("utf-8"))
+            self.set_setting(self.SETTING.NM_ACTIVE_UUID, self.uuid.decode("utf-8"))
         finally:
-            # Securely remove temporary config file after importing into NetworkManager
-            # پاک‌سازی امن فایل موقت پس از ایمپورت شدن در سرویس شبکه
             if self._temp_config_path and os.path.exists(self._temp_config_path):
                 try:
                     os.remove(self._temp_config_path)
@@ -167,16 +246,15 @@ class NetworkManager(CFFIStringMixin, ConnectionManager):
 
     def disconnect(self):
         """
-        Deactivates and removes the VPN connection profile.
-        قطع اتصال و حذف پروفایل موقت VPN.
+        Deactivates and removes this backend's VPN profile.
+        قطع اتصال و حذف پروفایل VPN مربوط به این بک‌اند.
         """
         if self.uuid is None:
-            while self.nm_manager.get_active_vpn_connection_uuid() is not None:
-                active_uuid = self.to_cffi_string(self.nm_manager.get_active_vpn_connection_uuid())
-                if active_uuid:
-                    self.nm_manager.disconnect(active_uuid)
-                else:
+            for _ in range(3):
+                active_uuid = self.to_cffi_string(self.nm_manager.get_eovpn_active_vpn_connection_uuid())
+                if not active_uuid:
                     break
+                self.nm_manager.disconnect(active_uuid)
             return
 
         is_uuid_found = self.nm_manager.is_vpn_activated(self.uuid)
@@ -191,6 +269,7 @@ class NetworkManager(CFFIStringMixin, ConnectionManager):
         return bool(self.nm_manager.is_vpn_running())
 
     def delete_all_connections(self):
+        """Deletes only profiles marked as managed by eOVPN-Pro."""
         self.nm_manager.delete_all_vpn_connections()
 
     def version(self) -> str | None:
@@ -209,6 +288,11 @@ class OpenVPN3(CFFIStringMixin, ConnectionManager):
 
     def __init__(self, update_callback):
         super().__init__("OpenVPN3")
+        if _libopenvpn3 is None or OVPN3Dbus is None:
+            raise RuntimeError(
+                "OpenVPN 3 native bindings are unavailable. Install openvpn3-linux "
+                "and build with -Dopenvpn3=true."
+            ) from _OVPN3_IMPORT_ERROR
 
         self.ovpn3 = _libopenvpn3.lib
         self.ffi = _libopenvpn3.ffi
@@ -230,10 +314,7 @@ class OpenVPN3(CFFIStringMixin, ConnectionManager):
             self.watch = True
 
     def stop_watch(self):
-        """
-        Unsubscribes from all OpenVPN 3 D-Bus signals (call on window close).
-        لغو اشتراک همه سیگنال‌های D-Bus سرویس OpenVPN 3 (هنگام بستن پنجره).
-        """
+        """Unsubscribes all OpenVPN 3 D-Bus signals."""
         if self.watch:
             try:
                 self.dbus.unsubscribe_all()
@@ -248,10 +329,7 @@ class OpenVPN3(CFFIStringMixin, ConnectionManager):
         return status is None
 
     def connect(self, openvpn_config: str):
-        """
-        Imports config and prepares tunnel session on OpenVPN 3 Linux service.
-        ایمپورت کانفیگ و آماده‌سازی سشن تونل در سرویس OpenVPN 3 لینوکس.
-        """
+        """Imports config and prepares an OpenVPN 3 tunnel session."""
         with open(openvpn_config, encoding="utf-8", errors="ignore") as f:
             config_content = f.read()
 
@@ -260,10 +338,9 @@ class OpenVPN3(CFFIStringMixin, ConnectionManager):
             with open(ca, encoding="utf-8", errors="ignore") as caf:
                 config_content += f"\n<ca>\n{caf.read()}\n</ca>\n"
 
-        config_bytes = config_content.encode('utf-8')
         config_path = self.ovpn3.import_config(
-            os.path.basename(openvpn_config).encode('utf-8'),
-            config_bytes
+            os.path.basename(openvpn_config).encode("utf-8"),
+            config_content.encode("utf-8"),
         )
         self.config_path = self.to_cffi_string(config_path)
         logger.info("OpenVPN 3 Config Path: %s", self.config_path)
@@ -276,7 +353,7 @@ class OpenVPN3(CFFIStringMixin, ConnectionManager):
 
     def disconnect(self):
         if self.session_path is not None:
-            logger.info("Disconnecting OpenVPN 3 session %s", self.session_path.decode('utf-8'))
+            logger.info("Disconnecting OpenVPN 3 session %s", self.session_path.decode("utf-8"))
             self.ovpn3.disconnect_vpn()
         else:
             self.ovpn3.disconnect_all_sessions()

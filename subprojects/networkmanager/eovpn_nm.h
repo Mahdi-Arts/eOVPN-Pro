@@ -26,7 +26,7 @@ char *add_connection (char *config_name, char *username, char *password, char *c
 int   activate_connection (char *uuid);
 int   disconnect (char *uuid);
 int   delete_connection (char *uuid);
-char *get_active_vpn_connection_uuid (void);
+char *get_eovpn_active_vpn_connection_uuid (void);
 char *get_version (void);
 int   delete_all_vpn_connections (void);
 int   is_vpn_running (void);
