@@ -8,8 +8,9 @@
 
 [![Repository](https://img.shields.io/badge/GitHub-Mahdi--Arts%2FeOVPN--Pro-181717?logo=github)](https://github.com/Mahdi-Arts/eOVPN-Pro)
 [![Version](https://img.shields.io/badge/version-1.5.0-3E8914)](https://github.com/Mahdi-Arts/eOVPN-Pro/releases)
-[![CI](https://img.shields.io/github/actions/workflow/status/Mahdi-Arts/eOVPN-Pro/ci.yml?branch=master&label=CI&logo=github)](https://github.com/Mahdi-Arts/eOVPN-Pro/actions/workflows/ci.yml)
-[![Packaging](https://img.shields.io/badge/Package-.deb%20%7C%20.rpm%20%7C%20Flatpak-blue)](PACKAGING.md)
+[![CI](https://img.shields.io/github/actions/workflow/status/Mahdi-Arts/eOVPN-Pro/ci.yml?branch=master&label=CI&logo=githubactions&logoColor=white)](https://github.com/Mahdi-Arts/eOVPN-Pro/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/actions/workflow/status/Mahdi-Arts/eOVPN-Pro/release.yml?label=Release&logo=githubactions&logoColor=white)](https://github.com/Mahdi-Arts/eOVPN-Pro/actions/workflows/release.yml)
+[![Packaging](https://img.shields.io/badge/Packages-.deb%20%7C%20.rpm%20%7C%20.pkg.tar.zst%20%7C%20AppImage%20%7C%20Flatpak-blue)](PACKAGING.md)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 
 </div>
@@ -68,64 +69,116 @@
 
 ## 🛠️ Installation & Execution (نصب و اجرا)
 
-### Option 1: Debian / Ubuntu Package (.deb) — *Recommended*
-Download the latest `.deb` release package from [GitHub Releases](https://github.com/Mahdi-Arts/eOVPN-Pro/releases) and install:
+Every release publishes prebuilt packages plus a `SHA256SUMS` manifest on the
+[Releases page](https://github.com/Mahdi-Arts/eOVPN-Pro/releases).
+هر انتشار، بسته‌های آمادهٔ نصب به همراه فایل `SHA256SUMS` را در صفحهٔ Releases قرار می‌دهد.
+
 ```bash
-sudo dpkg -i eovpn-pro_1.5.0-1_amd64.deb
-sudo apt install -f
+# Verify what you downloaded before installing / راستی‌آزمایی فایل دانلودشده پیش از نصب
+sha256sum -c SHA256SUMS --ignore-missing
+```
+
+### Option 1: Debian / Ubuntu (`.deb`) — *Recommended (پیشنهادی)*
+```bash
+sudo apt install ./eovpn-pro_1.5.0-1_amd64.deb
 ```
 
 ---
 
-### Option 2: Flatpak (Universal Sandbox)
+### Option 2: Fedora / RHEL / openSUSE (`.rpm`)
 ```bash
+sudo dnf install ./eovpn-pro-1.5.0-1.x86_64.rpm
+```
+
+---
+
+### Option 3: Arch Linux / Manjaro (`.pkg.tar.zst`)
+```bash
+# A) Install the prebuilt package / نصب بستهٔ آماده
+sudo pacman -U eovpn-pro-1.5.0-1-x86_64.pkg.tar.zst
+
+# B) Or build it yourself from the repository / یا ساخت از روی مخزن
+git clone https://github.com/Mahdi-Arts/eOVPN-Pro.git
+cd eOVPN-Pro/dist/arch
+makepkg -si
+```
+
+---
+
+### Option 4: AppImage (Portable / قابل حمل)
+```bash
+chmod +x eovpn-pro-1.5.0-x86_64.AppImage
+./eovpn-pro-1.5.0-x86_64.AppImage
+```
+> ℹ️ The AppImage bundles the GTK4 user interface only. NetworkManager and its
+> OpenVPN plugin must still be installed on the host system.
+> این بسته فقط رابط کاربری GTK4 را باندل می‌کند؛ NetworkManager و افزونهٔ OpenVPN آن
+> باید روی خود سیستم نصب باشند.
+
+---
+
+### Option 5: Flatpak (Universal Sandbox / جعبهٔ ایمن همگانی)
+```bash
+# From a published bundle / از روی باندل منتشرشده
+flatpak install --user eovpn-pro.flatpak
+
+# Or build locally / یا ساخت محلی
 cd dist/flatpak
 flatpak-builder --user --install --force-clean build-dir com.github.mahdi-arts.eovpn-pro.yml
+
 flatpak run com.github.mahdi-arts.eovpn-pro
 ```
 
 ---
 
-### Option 3: Global System Installation (Meson / Ninja)
+### Option 6: Global System Installation (Meson / Ninja)
 ```bash
-# 1. Setup the meson build system
-meson setup build -Dprefix=/usr
+# 1. Setup the meson build system / پیکربندی سیستم ساخت
+meson setup build --prefix=/usr
 
-# 2. Compile and install
+# 2. Compile and install / کامپایل و نصب
 sudo ninja install -C build
 ```
 
-To uninstall:
+To uninstall / برای حذف نصب:
 ```bash
 sudo ninja uninstall -C build
 ```
 
 ---
 
-### Option 4: Local Python Debug Run
+### Option 7: Local Python Debug Run (اجرای محلی برای توسعه)
 ```bash
-# 1. Install dependencies
+# 1. Install dependencies / نصب وابستگی‌ها
 pip install -r requirements.txt
 
-# 2. Run the automated debug script
+# 2. Run the automated debug script / اجرای اسکریپت اشکال‌زدایی
 python3 run_program_debug.py
 ```
 
-*For building `.rpm` (Fedora/RHEL) and Arch Linux packages, refer to [PACKAGING.md](PACKAGING.md).*
+*Detailed, distribution-by-distribution build instructions live in [PACKAGING.md](PACKAGING.md).*
+*راهنمای کامل و توزیع‌به‌توزیع ساخت بسته‌ها در [PACKAGING.md](PACKAGING.md) آمده است.*
 
 ---
 
 ## 🧪 Testing & Quality Assurance (آزمون و تست نرم‌افزار)
 
-Run the full offline test suite, linting, type checking, and metadata validation:
+The project ships **56 offline unit tests** that require no network, no D-Bus and
+no display server, so they run identically on a laptop and inside CI.
+این پروژه دارای **۵۶ تست واحد آفلاین** است که به شبکه، D-Bus یا سرور نمایش نیاز
+ندارند و به همین دلیل روی سیستم شخصی و داخل CI یکسان اجرا می‌شوند.
+
 ```bash
-# Unit tests / تست‌های واحد
+# Unit tests / تست‌های واحد  (56 tests)
 python3 -m unittest discover -s tests -v
+
+# …or through Meson / یا از طریق Meson
+meson test -C build --print-errorlogs
 
 # Linting / بررسی کیفیت کد
 pip install -r requirements-dev.txt
-python3 -m flake8 eovpn tests run_program_debug.py cffi_compile.py meson_post_install.py
 python3 -m ruff check .
+python3 -m ruff format --check .
 
 # Type checking / بررسی نوع‌ها
 python3 -m mypy --ignore-missing-imports eovpn tests
@@ -135,16 +188,21 @@ python3 -m mypy --ignore-missing-imports eovpn tests
 python3 scripts/check_project_meta.py
 
 # Security audit of dependencies / ممیزی امنیتی وابستگی‌ها
-python3 -m pip_audit -r requirements.txt
+python3 -m pip_audit --requirement requirements.txt --strict
 
 # Byte-compile all sources / کامپایل همه فایل‌ها
 python3 -m compileall -q eovpn tests run_program_debug.py cffi_compile.py meson_post_install.py
 ```
 
-These checks run automatically in the CI pipeline (`.github/workflows/ci.yml`) on every push/PR.
-Release builds (`.deb` and Flatpak) are published by `.github/workflows/release.yml` on version tags.
-این بررسی‌ها به‌صورت خودکار در خط لوله CI روی هر push/PR اجرا می‌شوند.
-ساخت بسته‌های انتشار (.deb و Flatpak) با `.github/workflows/release.yml` روی تگ‌های نسخه انجام می‌شود.
+### Continuous Integration (یکپارچه‌سازی مداوم)
+
+| Workflow / وورک‌فلو | Trigger / محرک | What it does / وظیفه |
+|---|---|---|
+| [`ci.yml`](.github/workflows/ci.yml) | every push & pull request — هر push و pull request | Ruff lint + format check, mypy, 56 unit tests on Python 3.10/3.11/3.12, `pip-audit`, CodeQL, Meson build, and smoke builds of the `.deb`, `.rpm` and Arch packages |
+| [`release.yml`](.github/workflows/release.yml) | version tags `v*.*.*` — تگ‌های نسخه | Verifies version parity across all packaging metadata, then builds `.deb`, `.rpm`, `.pkg.tar.zst`, AppImage and Flatpak, generates `SHA256SUMS`, and publishes the GitHub Release |
+
+هر push و pull request توسط `ci.yml` بررسی می‌شود و ساخت و انتشار همهٔ قالب‌های بسته
+با ایجاد تگ نسخه توسط `release.yml` به‌صورت خودکار انجام می‌گیرد.
 
 ---
 
@@ -153,13 +211,13 @@ Release builds (`.deb` and Flatpak) are published by `.github/workflows/release.
 | Document / مستند | Description / شرح |
 |---|---|
 | [CHANGELOG.md](CHANGELOG.md) | Version history — تاریخچه نسخه‌ها |
-| [PACKAGING.md](PACKAGING.md) | Packaging guide (.deb / .rpm / Flatpak / Arch) — راهنمای بسته‌بندی |
+| [PACKAGING.md](PACKAGING.md) | Packaging guide (.deb / .rpm / Arch / AppImage / Flatpak) — راهنمای بسته‌بندی |
 | [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) | Release runbook — راهنمای انتشار نسخه |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Architecture overview — نمای کلی معماری |
-| [docs/ANALYSIS.md](docs/ANALYSIS.md) | Deep technical analysis — تحلیل فنی موشکافانه |
+| [docs/REVIEW_SENIOR_2026-08.md](docs/REVIEW_SENIOR_2026-08.md) | Senior engineering audit & action plan — ممیزی مهندسی ارشد و طرح اجرایی |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guide — راهنمای مشارکت |
 | [SECURITY.md](SECURITY.md) | Security policy — خط مشی امنیتی |
-| [QA_REPORT.md](QA_REPORT.md) | Latest quality report — آخرین گزارش کیفیت |
+| [docs/archive/](docs/archive/) | Superseded review reports — گزارش‌های بازبینی منسوخ |
 
 ---
 

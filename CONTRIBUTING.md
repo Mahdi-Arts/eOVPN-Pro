@@ -20,8 +20,10 @@ sudo apt install -y meson ninja-build python3-cffi python3-gi \
 # 3. Run the test suite / اجرای تست‌ها
 python3 -m unittest discover -s tests -v
 
-# 4. Run linting / بررسی کیفیت کد
-python3 -m flake8 eovpn tests run_program_debug.py cffi_compile.py meson_post_install.py
+# 4. Run linting, formatting and type checks / بررسی کیفیت، قالب و نوع کد
+python3 -m ruff check .
+python3 -m ruff format --check --diff .
+python3 -m mypy eovpn
 
 # 5. Build & run locally / ساخت و اجرای محلی
 python3 run_program_debug.py   # requires a desktop session / نیازمند نشست گرافیکی
@@ -31,16 +33,20 @@ python3 run_program_debug.py   # requires a desktop session / نیازمند ن�
 
 ## 📏 Code Style / سبک کد
 
-- **Python**: PEP 8 with `max-line-length = 110` (see `.flake8`); type hints required on new code.
-  PEP 8 با حداکثر طول خط ۱۱۰ (رجوع به `.flake8`)؛ تایپ‌هینت برای کد جدید الزامی است.
+- **Python**: PEP 8 with `line-length = 110`, enforced by **ruff** (configured in `pyproject.toml`
+  under `[tool.ruff]`); type hints are required on new code.
+  PEP 8 با حداکثر طول خط ۱۱۰ که توسط **ruff** اعمال می‌شود (پیکربندی در `pyproject.toml` بخش
+  `[tool.ruff]`)؛ تایپ‌هینت برای کد جدید الزامی است.
 - **C**: GNU style via `.clang-format` (4-space indent, 80-column limit).
   سبک GNU با `.clang-format` (تورفتگی ۴ فاصله، حداکثر ۸۰ ستون).
 - **Bilingual requirement**: every new docstring, comment, README entry and UI string must
   be written in **English + Persian (فارسی)**. This is a hard project rule.
   **نیازمندی دوزبانه**: هر داک‌استرینگ، کامنت، مطلب README و رشته رابط کاربری جدید باید
   **انگلیسی + فارسی** باشد. این یک قانون الزامی پروژه است.
-- **No dead code**: run `python3 -m flake8 .` before pushing; zero warnings expected.
-  کد مرده ممنوع؛ پیش از پوش، `flake8` باید بدون هشدار پاس شود.
+- **No dead code**: run `python3 -m ruff check .` before pushing; zero warnings expected.
+  The same command runs in the `lint` job of CI, so a clean local run means a green pipeline.
+  کد مرده ممنوع؛ پیش از پوش، `python3 -m ruff check .` باید بدون هشدار پاس شود. همین دستور در
+  جاب `lint` در CI اجرا می‌شود، پس اجرای تمیز محلی یعنی خط لولهٔ سبز.
 
 ---
 

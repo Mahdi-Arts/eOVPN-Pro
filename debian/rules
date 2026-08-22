@@ -1,13 +1,48 @@
 #!/usr/bin/make -f
+#
+# eOVPN-Pro Debian build rules / قواعد ساخت بستهٔ دبیان eOVPN-Pro
+#
+# The project is built by Meson, not by pybuild: `meson.build` installs the
+# `eovpn` package with install_subdir() and compiles the CFFI extension for the
+# NetworkManager backend. The `python3` debhelper add-on is therefore requested
+# explicitly so that dh_python3 still runs — it is what byte-compiles the
+# installed modules and fills the ${python3:Depends} substitution variable used
+# in debian/control.
+#
+# این پروژه با Meson ساخته می‌شود نه با pybuild: فایل `meson.build` بستهٔ `eovpn`
+# را با install_subdir() نصب و افزونهٔ CFFI مربوط به بک‌اند NetworkManager را
+# کامپایل می‌کند. بنابراین افزونهٔ debhelper با نام `python3` صریحاً درخواست شده
+# تا dh_python3 اجرا شود؛ همان ابزاری که ماژول‌های نصب‌شده را بایت‌کامپایل کرده و
+# متغیر جایگزینی ${python3:Depends} در debian/control را پر می‌کند.
 
 export DH_VERBOSE = 1
-export PYBUILD_NAME = eovpn
+
+# Enable every compiler hardening flag Debian offers. This matters because the
+# package ships a C extension (libeovpn_nm) that parses data coming from
+# NetworkManager over D-Bus.
+#
+# فعال‌سازی تمام پرچم‌های سخت‌سازی کامپایلر که دبیان ارائه می‌دهد. این مورد اهمیت
+# دارد چون بسته شامل یک افزونهٔ C (libeovpn_nm) است که داده‌های دریافتی از
+# NetworkManager روی D-Bus را تجزیه می‌کند.
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 
 %:
-	dh $@ --buildsystem=meson
+	dh $@ --buildsystem=meson --with python3
 
+# The OpenVPN 3 backend is disabled: its D-Bus service is not packaged in
+# Debian or Ubuntu, so the NetworkManager backend is the only supported one
+# here. Enabling it would add a build dependency that cannot be satisfied.
+#
+# بک‌اند OpenVPN 3 غیرفعال است: سرویس D-Bus آن در دبیان و اوبونتو بسته‌بندی نشده،
+# بنابراین تنها بک‌اند پشتیبانی‌شده در اینجا NetworkManager است. فعال کردن آن یک
+# وابستگی ساخت غیرقابل تأمین اضافه می‌کند.
 override_dh_auto_configure:
 	dh_auto_configure -- -Dopenvpn3=false
 
-override_dh_auto_install:
-	dh_auto_install
+# No override for dh_auto_test is needed: `meson.build` registers the offline
+# unit suite as test('unit', ...), so the default dh_auto_test runs `meson test`
+# and honours DEB_BUILD_OPTIONS=nocheck on its own.
+#
+# نیازی به بازنویسی dh_auto_test نیست: فایل `meson.build` مجموعهٔ تست آفلاین را
+# با test('unit', ...) ثبت کرده است، بنابراین dh_auto_test پیش‌فرض دستور
+# `meson test` را اجرا می‌کند و خودش DEB_BUILD_OPTIONS=nocheck را رعایت می‌کند.

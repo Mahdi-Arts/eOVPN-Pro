@@ -7,9 +7,27 @@ All notable changes are documented here. Format follows [Keep a Changelog](https
 ## [Unreleased]
 
 ### Added / افزوده‌شده
-- Real GitHub Actions CI and release workflows (`ci.yml`, `release.yml`) for tests,
-  Meson smoke builds, Debian packages, Flatpak bundles and SHA256 checksums.
-  وورک‌فلوهای واقعی GitHub Actions برای تست، build نمونه Meson، بسته Debian، Flatpak و checksum.
+- **Continuous integration** — `.github/workflows/ci.yml` with seven jobs: Ruff lint and
+  format check, mypy, the 56 offline unit tests across Python 3.10/3.11/3.12, `pip-audit`
+  and CodeQL scanning, a full Meson build with desktop/AppStream/translation validation,
+  and smoke builds of the `.deb`, `.rpm` and Arch packages.
+  **یکپارچه‌سازی مداوم** — ورک‌فلوی `ci.yml` با هفت job شامل لینت و بررسی قالب‌بندی Ruff،
+  بررسی نوع mypy، اجرای ۵۶ تست واحد آفلاین روی پایتون ۳٫۱۰ تا ۳٫۱۲، پویش `pip-audit` و
+  CodeQL، ساخت کامل Meson همراه با اعتبارسنجی desktop و AppStream و ترجمه‌ها، و ساخت
+  آزمایشی بسته‌های `.deb` و `.rpm` و آرچ.
+- **Release automation** — `.github/workflows/release.yml` builds all five package formats
+  (`.deb`, `.rpm`, `.pkg.tar.zst`, AppImage, Flatpak) on a version tag, verifies that every
+  packaging file declares the same version as the tag, generates a `SHA256SUMS` manifest,
+  and publishes the GitHub Release with notes extracted from this changelog.
+  **انتشار خودکار** — ورک‌فلوی `release.yml` با ایجاد تگ نسخه، هر پنج قالب بسته را می‌سازد،
+  یکسان بودن نسخه در همهٔ فایل‌های بسته‌بندی را بررسی می‌کند، فایل `SHA256SUMS` را تولید
+  می‌کند و نسخه را با یادداشت‌های برگرفته از همین فایل منتشر می‌سازد.
+- **Arch Linux packaging** — `dist/arch/PKGBUILD` and `dist/arch/.SRCINFO`. The recipe is
+  dual-mode: it builds the working tree when run inside a checkout, or downloads the tagged
+  release tarball when used standalone (AUR).
+  **بسته‌بندی آرچ‌لینوکس** — فایل‌های `dist/arch/PKGBUILD` و `dist/arch/.SRCINFO`. این دستور
+  دو حالته است: داخل مخزن، درخت کاری را می‌سازد و به‌صورت مستقل (AUR) آرشیو نسخهٔ تگ‌خورده
+  را دانلود می‌کند.
 - Offline smoke tests for import-safe pure modules. / تست‌های دود برای ماژول‌های خالص قابل ایمپورت.
 
 ### Security / امنیت
@@ -23,6 +41,12 @@ All notable changes are documented here. Format follows [Keep a Changelog](https
   به VPNهای دیگر آسیب نزند.
 - NetworkManager import now aborts if the agent-owned password secret flag cannot be set.
   اگر پرچم agent-owned رمز عبور قابل تنظیم نباشد، import متوقف می‌شود.
+- Dependency CVE scanning (`pip-audit --strict`) and CodeQL static analysis now run on every
+  push and pull request, so a vulnerable dependency blocks the merge gate.
+  پویش CVE وابستگی‌ها و تحلیل ایستای CodeQL اکنون در هر push و pull request اجرا می‌شوند و
+  وجود وابستگی آسیب‌پذیر مانع عبور از دروازهٔ ادغام می‌شود.
+- Releases now ship a `SHA256SUMS` manifest so downloads can be verified before installation.
+  انتشارها اکنون فایل `SHA256SUMS` دارند تا فایل دانلودشده پیش از نصب راستی‌آزمایی شود.
 
 ### Fixed / رفع‌شده
 - All OpenVPN 3 native D-Bus calls now use bounded timeouts. / همه تماس‌های بومی OpenVPN 3 D-Bus
@@ -31,6 +55,19 @@ All notable changes are documented here. Format follows [Keep a Changelog](https
 - Backend switching stops the old watcher before replacing it. / تعویض بک‌اند قبل از جایگزینی، watcher قبلی را متوقف می‌کند.
 - AppImage build script now installs through Meson and places desktop/icon/schema assets correctly.
   اسکریپت ساخت AppImage از طریق Meson نصب می‌کند و فایل‌های desktop، icon و schema را درست قرار می‌دهد.
+
+### Documentation / مستندات
+- `README.md`, `PACKAGING.md` and `SECURITY.md` no longer describe CI/CD, package formats or
+  security scanning that did not exist. Every claim is now backed by a file in the repository,
+  and the test count is stated accurately (56).
+  فایل‌های `README.md` و `PACKAGING.md` و `SECURITY.md` دیگر قابلیت‌های موجود نبودهٔ CI/CD،
+  قالب‌های بسته و پویش امنیتی را توصیف نمی‌کنند. اکنون هر ادعا به یک فایل واقعی در مخزن متکی
+  است و تعداد تست‌ها دقیق (۵۶) ذکر شده است.
+- Installation instructions added for all five package formats, plus a format support matrix.
+  دستور نصب برای هر پنج قالب بسته و یک جدول وضعیت پشتیبانی قالب‌ها افزوده شد.
+- Known limitations are now documented explicitly, including the absence of a kill-switch and
+  DNS-leak protection. / محدودیت‌های شناخته‌شده از جمله نبود kill-switch و محافظت نشت DNS صریحاً
+  مستند شدند.
 
 ## [1.5.0] — 2026-08-22
 
@@ -53,8 +90,12 @@ All notable changes are documented here. Format follows [Keep a Changelog](https
   هشدار ممیزی امنیتی برای کانفیگ‌های واردشده دارای دایرکتیوهای اجرایی OpenVPN.
 - Staging (atomic) config downloads so a failed update never destroys existing configs.
   دانلود مرحله‌ای و جایگزینی اتمی تا خطای به‌روزرسانی هرگز کانفیگ‌های قبلی را از بین نبرد.
-- CI/CD pipeline: unit tests, flake8/ruff/mypy, pip-audit, metadata checks, .deb/.rpm/Flatpak builds, auto-release.
-  خط لوله CI/CD: تست واحد، لینت و تایپ‌چک، ممیزی CVE، بررسی متادیتا، ساخت بسته‌ها و انتشار خودکار.
+- Local quality tooling: offline unit-test suite, lint/type-check configuration, dependency audit
+  configuration and the `scripts/check_project_meta.py` metadata consistency checker.
+  ابزارهای کیفیت محلی: مجموعه تست واحد آفلاین، پیکربندی لینت و بررسی نوع، پیکربندی ممیزی
+  وابستگی‌ها و اسکریپت `scripts/check_project_meta.py` برای بررسی یکپارچگی متادیتا.
+  > Note: the GitHub Actions pipeline itself landed after 1.5.0 — see `[Unreleased]`.
+  > نکته: خود خط لوله GitHub Actions پس از نسخهٔ ۱٫۵٫۰ اضافه شد؛ به بخش `[Unreleased]` مراجعه کنید.
 
 ### Security / امنیت
 - OTP values are never logged. / کدهای یک‌بارمصرف هرگز لاگ نمی‌شوند.
@@ -103,4 +144,5 @@ All notable changes are documented here. Format follows [Keep a Changelog](https
   تست پینگ TCP چندنخی و مرتب‌سازی بر اساس سرعت.
 - "Select Fastest" automated utility. / ابزار خودکار انتخاب سریع‌ترین سرور.
 
+[Unreleased]: https://github.com/Mahdi-Arts/eOVPN-Pro/compare/v1.5.0...HEAD
 [1.5.0]: https://github.com/Mahdi-Arts/eOVPN-Pro/releases/tag/v1.5.0
