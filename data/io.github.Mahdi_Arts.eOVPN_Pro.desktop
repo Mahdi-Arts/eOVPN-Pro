@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=eOVPN Pro
+GenericName=VPN Configuration Manager
+Comment=Import, test, and connect to OpenVPN configurations securely
+Icon=io.github.Mahdi_Arts.eOVPN_Pro
+Exec=eovpn
+Terminal=false
+Type=Application
+Categories=Network;Security;
+Keywords=OpenVPN;VPN;Network;Privacy;Security;
+StartupNotify=true
+StartupWMClass=io.github.Mahdi_Arts.eOVPN_Pro

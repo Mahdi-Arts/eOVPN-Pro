@@ -2,42 +2,51 @@ Source: eovpn-pro
 Section: net
 Priority: optional
 Maintainer: Mahdi Bagheban <info@MahdiArts.ir>
-Build-Depends: debhelper-compat (= 13),
-               meson (>= 0.60.0),
-               ninja-build,
-               pkg-config,
-               python3-all,
-               python3-cffi,
-               libnm-dev,
-               libglib2.0-dev,
-               libgtk-4-dev,
-               libadwaita-1-dev,
-               libsecret-1-dev,
-               libnotify-dev,
-               gettext,
-               desktop-file-utils
-Standards-Version: 4.6.2
+Build-Depends:
+ debhelper-compat (= 13),
+ dh-sequence-python3,
+ meson (>= 0.60.0),
+ ninja-build,
+ pkg-config,
+ python3-all (>= 3.10),
+ python3-cffi,
+ libnm-dev (>= 1.30),
+ libglib2.0-dev,
+ libgtk-4-dev (>= 4.6),
+ libadwaita-1-dev (>= 1.1),
+ libsecret-1-dev (>= 0.20),
+ libnotify-dev,
+ gettext,
+ desktop-file-utils,
+ appstream
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
 Homepage: https://github.com/Mahdi-Arts/eOVPN-Pro
 Vcs-Browser: https://github.com/Mahdi-Arts/eOVPN-Pro
 Vcs-Git: https://github.com/Mahdi-Arts/eOVPN-Pro.git
 
 Package: eovpn-pro
 Architecture: any
-Depends: ${shlibs:Depends},
-         ${misc:Depends},
-         ${python3:Depends},
-         python3-gi (>= 3.42),
-         gir1.2-gtk-4.0,
-         gir1.2-adw-1,
-         gir1.2-secret-1,
-         gir1.2-notify-0.7,
-         gir1.2-nm-1.0,
-         python3-cffi,
-         network-manager-openvpn,
-         openvpn
-Recommends: openvpn-dco-dkms
-Description: Modern and high-performance OpenVPN GUI Client for Linux
- eOVPN-Pro is an advanced OpenVPN client built with GTK4 and Libadwaita.
- It features concurrent multi-threaded TCP latency testing, dynamic server
- sorting, real-time network bandwidth monitoring, OpenVPN 3 DCO acceleration,
- and full Persian (RTL) localization.
+Depends:
+ ${shlibs:Depends},
+ ${misc:Depends},
+ ${python3:Depends},
+ python3 (>= 3.10),
+ python3-gi (>= 3.42),
+ gir1.2-gtk-4.0 (>= 4.6),
+ gir1.2-adw-1 (>= 1.1),
+ gir1.2-secret-1,
+ gir1.2-notify-0.7,
+ gir1.2-nm-1.0,
+ python3-cffi,
+ network-manager-openvpn,
+ network-manager-openvpn-gnome,
+ openvpn
+Description: Secure OpenVPN profile manager for GTK4 desktops
+ eOVPN-Pro imports OpenVPN profiles from private local storage or HTTPS,
+ performs honest TCP latency measurements, filters and favorites servers,
+ and manages only the NetworkManager UUIDs created by the application.
+ .
+ The package includes Persian localization and right-to-left layout support.
+ Public IP lookup is opt-in and imported profiles are stored with restrictive
+ filesystem permissions.

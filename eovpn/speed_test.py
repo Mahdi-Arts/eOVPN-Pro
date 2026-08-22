@@ -1,125 +1,101 @@
 """
-eOVPN-Pro High-Performance Speed & Latency Test Module
-ماژول پرسرعت و موازی سنجش تأخیر و پینگ سرورها در eOVPN-Pro
+Concurrent TCP latency measurement for OpenVPN configurations.
+اندازه‌گیری هم‌زمان تأخیر TCP برای کانفیگ‌های OpenVPN.
 
-Measures socket-level round-trip time (TCP latency) to remote OpenVPN endpoints concurrently.
-محاسبه همزمان و چندنخی میزان تأخیر دست‌دهی شبکه (TCP RTT) به سرورهای OpenVPN.
+UDP endpoints are deliberately reported as unmeasured rather than probed with
+TCP and incorrectly labelled offline. ``math.inf`` means a TCP endpoint was
+actually attempted and unreachable; ``None`` means no TCP measurement exists.
+سرورهای UDP عمداً با TCP آزمایش نمی‌شوند تا به‌اشتباه آفلاین گزارش نشوند.
+``math.inf`` یعنی TCP واقعاً آزمایش و ناموفق بوده و ``None`` یعنی سنجشی وجود ندارد.
 """
 
-import os
+from __future__ import annotations
+
+import logging
+import math
 import socket
 import time
-import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+
+from .auto_connect import PROTO_TCP, parse_ovpn_endpoints
 
 logger = logging.getLogger(__name__)
 
 
 def parse_ovpn_remote(file_path: str) -> list[tuple[str, int]]:
-    """
-    Parses an .ovpn file and extracts the list of (host, port) from remote directives.
-    پارس کردن فایل .ovpn و استخراج آدرس سرورها و پورت‌های مقصد از خطوط remote.
-
-    :param file_path: Path to the .ovpn configuration file.
-    :return: List of (host, port) tuples.
-    """
-    remotes = []
-    try:
-        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#") or line.startswith(";"):
-                    continue
-                parts = line.split()
-                if parts and parts[0] == "remote":
-                    if len(parts) > 1:
-                        host = parts[1]
-                        port = 1194  # Standard default OpenVPN port / پورت پیش‌فرض
-                        if len(parts) > 2 and parts[2].isdigit():
-                            port = int(parts[2])
-                        remotes.append((host, port))
-    except Exception as e:
-        logger.error("Error parsing %s: %s", file_path, e)
-    return remotes
+    """Compatibility view of parsed remotes / نمای سازگار از مقصدهای پارس‌شده."""
+    return [(host, port) for host, port, _protocol in parse_ovpn_endpoints(file_path)]
 
 
 def ping_host(host: str, port: int, timeout: float = 1.5) -> float | None:
     """
-    Measures TCP connection latency to a host and port.
-    If the connection succeeds or is refused (host replied with RST, meaning alive), returns RTT in ms.
-    محاسبه تأخیر رفت‌وبرگشت (RTT) بر حسب میلی‌ثانیه از طریق سوکت TCP.
-
-    :param host: Target hostname or IP address.
-    :param port: Target port number.
-    :param timeout: Socket timeout in seconds.
-    :return: Latency in milliseconds or None if unreachable.
+    Measures one TCP handshake; a refused connection still proves reachability.
+    اندازه‌گیری دست‌دهی TCP؛ پاسخ Refused نیز دسترس‌پذیری میزبان را ثابت می‌کند.
     """
-    t0 = time.perf_counter()
+    started = time.perf_counter()
     try:
-        s = socket.create_connection((host, port), timeout=timeout)
-        rtt = (time.perf_counter() - t0) * 1000.0
-        s.close()
-        return round(rtt, 1)
+        with socket.create_connection((host, port), timeout=timeout):
+            return round((time.perf_counter() - started) * 1000.0, 1)
     except ConnectionRefusedError:
-        # Host is reachable and actively rejected the connection
-        # سرور فعال بوده و پکت بازنشانی ارتباط (RST) ارسال کرده است
-        rtt = (time.perf_counter() - t0) * 1000.0
-        return round(rtt, 1)
-    except Exception:
+        return round((time.perf_counter() - started) * 1000.0, 1)
+    except (OSError, TimeoutError):
         return None
 
 
 def test_single_ovpn(file_path: str, timeout: float = 1.5) -> float | None:
     """
-    Tests latency for a single .ovpn file by querying its remote endpoints.
-    Returns the lowest RTT found among all declared endpoints.
-    تست سرعت برای یک کانفیگ منفرد و بازگرداندن کمترین پینگ ثبت‌شده.
+    Returns best TCP RTT, infinity for attempted failure, or None for UDP-only.
+    بازگرداندن بهترین RTT، بی‌نهایت برای شکست واقعی یا None برای کانفیگ فقط UDP.
     """
-    remotes = parse_ovpn_remote(file_path)
-    if not remotes:
+    tcp_endpoints = [
+        (host, port)
+        for host, port, protocol in parse_ovpn_endpoints(file_path)
+        if protocol == PROTO_TCP
+    ]
+    if not tcp_endpoints:
         return None
 
-    best_rtt = None
-    for host, port in remotes:
-        rtt = ping_host(host, port, timeout=timeout)
-        if rtt is not None:
-            if best_rtt is None or rtt < best_rtt:
-                best_rtt = rtt
-    return best_rtt
+    results = [ping_host(host, port, timeout=timeout) for host, port in tcp_endpoints]
+    reachable = [value for value in results if value is not None]
+    return min(reachable) if reachable else math.inf
 
 
 def test_all_configs(
-    config_dir: str, file_list: list[str], timeout: float = 1.5, max_workers: int = 12
+    config_dir: str,
+    file_list: list[str] | tuple[str, ...] | None,
+    timeout: float = 1.5,
+    max_workers: int = 12,
 ) -> dict[str, float | None]:
     """
-    Runs latency tests on a list of .ovpn files concurrently using a thread pool.
-    اجرای موازی و ناهمگام تست پینگ بر روی لیست کانفیگ‌ها با استفاده از استخر نخ‌ها.
-
-    :param config_dir: Directory where .ovpn files reside.
-    :param file_list: List of configuration filenames.
-    :param timeout: Per-endpoint timeout in seconds.
-    :param max_workers: Number of parallel worker threads.
-    :return: Dictionary mapping filename -> RTT in milliseconds.
+    Measures safe filenames concurrently with a bounded worker pool.
+    سنجش هم‌زمان نام‌فایل‌های امن با تعداد محدود Worker.
     """
-    results: dict[str, float | None] = {}
-    valid_files = [f for f in file_list if f and f.endswith(".ovpn")]
+    root = Path(config_dir).resolve()
+    valid_files = [
+        name
+        for name in (file_list or [])
+        if name
+        and Path(name).name == name
+        and Path(name).suffix.lower() == ".ovpn"
+        and (root / name).is_file()
+        and not (root / name).is_symlink()
+    ]
     if not valid_files:
-        return results
+        return {}
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_file = {}
-        for file in valid_files:
-            full_path = os.path.join(config_dir, file)
-            future = executor.submit(test_single_ovpn, full_path, timeout)
-            future_to_file[future] = file
-
-        for future in as_completed(future_to_file):
-            file = future_to_file[future]
+    results: dict[str, float | None] = {}
+    workers = min(32, max(1, int(max_workers)), len(valid_files))
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="eovpn-rtt") as executor:
+        futures = {
+            executor.submit(test_single_ovpn, str(root / name), timeout): name
+            for name in valid_files
+        }
+        for future in as_completed(futures):
+            name = futures[future]
             try:
-                rtt = future.result()
-                results[file] = rtt
-            except Exception as e:
-                logger.error("Error testing %s: %s", file, e)
-                results[file] = None
-
+                results[name] = future.result()
+            except Exception as exc:
+                logger.error("Latency test failed for %s: %s", name, exc)
+                results[name] = math.inf
     return results

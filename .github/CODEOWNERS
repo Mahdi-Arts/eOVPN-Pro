@@ -1,0 +1,12 @@
+# Default review owner / مالک پیش‌فرض بازبینی
+* @Mahdi-Arts
+
+# Security-sensitive paths / مسیرهای حساس امنیتی
+/eovpn/backend/ @Mahdi-Arts
+/eovpn/config_import.py @Mahdi-Arts
+/eovpn/config_repository.py @Mahdi-Arts
+/eovpn/secret_store.py @Mahdi-Arts
+/subprojects/ @Mahdi-Arts
+/debian/ @Mahdi-Arts
+/dist/flatpak/ @Mahdi-Arts
+/.github/workflows/ @Mahdi-Arts

@@ -1,162 +1,298 @@
-# eOVPN-Pro CI/CD Pipeline
-# خط لوله یکپارچه‌سازی و استقرار مداوم eOVPN-Pro
-#
-# Jobs:
-#   1. test          - unit tests, linting, metadata validation
-#   2. build-deb     - native .deb package (Ubuntu)
-#   3. build-flatpak - sandboxed Flatpak package (tags / manual dispatch)
-#   4. release       - attach .deb to GitHub Releases on version tags
-#
-# Only run flatpak job on tags / manual dispatch (builds NetworkManager from source)
-# اجرای ساخت فلت‌پک تنها روی تگ‌ها/اجرای دستی (چون NetworkManager از سورس ساخته می‌شود)
-
-name: eOVPN-Pro CI/CD Pipeline
+---
+name: eOVPN-Pro CI, Packages, and Release
 
 on:
   push:
-    branches: [master, main, arena/*]
+    branches:
+      - master
+      - main
+      - 'arena/**'
     tags:
       - 'v*'
   pull_request:
-    branches: [master, main]
+    branches:
+      - master
+      - main
   workflow_dispatch:
 
-jobs:
-  test:
-    name: Run Unit Tests & Quality Checks
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+permissions:
+  contents: read
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+concurrency:
+  group: eovpn-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  DEBIAN_FRONTEND: noninteractive
+  APP_ID: io.github.Mahdi_Arts.eOVPN_Pro
+
+jobs:
+  quality:
+    name: Test, lint, validate, and compile
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.11'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
 
-      - name: Install system dependencies
+      - name: Install native QA and build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libgirepository1.0-dev \
-            libnm-dev \
+            appstream \
+            build-essential \
+            clang-format \
+            cppcheck \
+            desktop-file-utils \
+            gettext \
+            libadwaita-1-dev \
             libglib2.0-dev \
             libgtk-4-dev \
-            libadwaita-1-dev \
-            libsecret-1-dev \
+            libnm-dev \
             libnotify-dev \
-            desktop-file-utils \
-            appstream
+            libsecret-1-dev \
+            meson \
+            ninja-build \
+            pkg-config \
+            python3-cffi \
+            python3-gi
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
 
-      - name: Install Python dependencies
+      - name: Run Python style and bytecode checks
         run: |
-          pip install --upgrade pip
-          pip install flake8 cffi PyGObject
+          python -m flake8 \
+            eovpn tests run_program_debug.py cffi_compile.py \
+            meson_post_install.py dist/flatpak/prepare_flathub_manifest.py
+          python -m compileall -q \
+            eovpn tests run_program_debug.py cffi_compile.py \
+            meson_post_install.py dist/flatpak/prepare_flathub_manifest.py
 
-      - name: Validate desktop and metainfo files
+      - name: Run tests with a coverage gate for pure security logic
         run: |
-          desktop-file-validate data/com.github.mahdi-arts.eovpn-pro.desktop
-          appstreamcli validate data/com.github.mahdi-arts.eovpn-pro.metainfo.xml || true
+          coverage run -m unittest discover -s tests -v
+          coverage report --show-missing --fail-under=85
+          coverage xml -o coverage.xml
 
-      - name: Lint with flake8
+      - name: Run security and dependency checks
         run: |
-          python3 -m flake8 eovpn tests run_program_debug.py cffi_compile.py meson_post_install.py
+          bandit -r eovpn -lll
+          pip-audit -r requirements.txt
 
-      - name: Compile all Python sources
+      - name: Validate desktop integration and translations
         run: |
-          python3 -m compileall -q eovpn tests run_program_debug.py cffi_compile.py meson_post_install.py
+          desktop-file-validate "data/${APP_ID}.desktop"
+          appstreamcli validate --no-net "data/${APP_ID}.metainfo.xml"
+          glib-compile-schemas --strict --dry-run data
+          python tools/check_translations.py
 
-      - name: Run Unit Tests
+      - name: Validate YAML and native formatting
         run: |
-          python3 -m unittest discover -s tests -v
+          yamllint .github/workflows/ci-cd.yml \
+            dist/flatpak/${APP_ID}.yml
+          clang-format --dry-run --Werror \
+            subprojects/networkmanager/eovpn_nm.c \
+            subprojects/networkmanager/eovpn_nm.h \
+            subprojects/openvpn3/openvpn3.c \
+            subprojects/openvpn3/openvpn3.h
+          cppcheck --enable=warning,performance,portability \
+            --error-exitcode=1 --inline-suppr \
+            subprojects/networkmanager/eovpn_nm.c \
+            subprojects/openvpn3/openvpn3.c
+
+      - name: Build native bindings and run Meson tests
+        run: |
+          meson setup build -Dprefix=/usr -Dopenvpn3=false -Dwerror=true
+          meson compile -C build
+          meson test -C build --print-errorlogs
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+          if-no-files-found: error
 
   build-deb:
-    name: Build Debian (.deb) Package
+    name: Build and inspect Debian package
     runs-on: ubuntu-24.04
-    needs: test
+    needs: quality
+    timeout-minutes: 30
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Check out the exact revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Install build toolchain
+      - name: Install Debian build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
+            appstream \
             build-essential \
             debhelper \
             dh-python \
+            gettext \
+            libadwaita-1-dev \
+            libglib2.0-dev \
+            libgtk-4-dev \
+            libnm-dev \
+            libnotify-dev \
+            libsecret-1-dev \
+            lintian \
             meson \
             ninja-build \
             pkg-config \
             python3-all \
             python3-cffi \
-            python3-gi \
-            libnm-dev \
-            libglib2.0-dev \
-            libgtk-4-dev \
-            libadwaita-1-dev \
-            libsecret-1-dev \
-            libnotify-dev \
-            gettext \
-            desktop-file-utils
+            python3-gi
 
-      - name: Build Debian Package
-        run: |
-          dpkg-buildpackage -us -uc -b
+      - name: Build binary packages
+        run: dpkg-buildpackage --build=binary --no-sign
 
-      - name: Collect built packages
+      - name: Inspect and lint packages
         run: |
+          lintian --fail-on error ../eovpn-pro_*.changes
           mkdir -p dist/packages
-          cp ../*.deb dist/packages/ || true
-          ls -la dist/packages/
+          cp ../eovpn-pro_*.deb dist/packages/
+          dpkg-deb --info dist/packages/*.deb
+          dpkg-deb --contents dist/packages/*.deb > dist/packages/contents.txt
+          sha256sum dist/packages/*.deb > dist/packages/SHA256SUMS
 
-      - name: Upload .deb Artifact
-        uses: actions/upload-artifact@v4
+      - name: Upload Debian artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: eovpn-pro-deb
-          path: dist/packages/*.deb
+          name: eovpn-pro-debian
+          path: dist/packages/
+          if-no-files-found: error
+
+  build-source:
+    name: Build Debian source and Flathub release manifest
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    needs: quality
+    timeout-minutes: 30
+    steps:
+      - name: Check out complete release history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Install source-package tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            debhelper devscripts dh-python xz-utils
+
+      - name: Verify tag and build deterministic source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          test "$(dpkg-parsechangelog -S Version | cut -d- -f1)" = "$version"
+          mkdir -p dist/packages
+          git archive --format=tar --prefix="eovpn-pro-${version}/" HEAD \
+            | xz -9e > "dist/packages/eovpn-pro-${version}.tar.xz"
+          cp "dist/packages/eovpn-pro-${version}.tar.xz" \
+            "../eovpn-pro_${version}.orig.tar.xz"
+          archive_sha="$(sha256sum "dist/packages/eovpn-pro-${version}.tar.xz" | cut -d' ' -f1)"
+          python3 dist/flatpak/prepare_flathub_manifest.py \
+            --version "$version" \
+            --sha256 "$archive_sha" \
+            --output "dist/packages/${APP_ID}.yml"
+          dpkg-buildpackage --build=source --no-sign --no-check-builddeps
+          cp ../eovpn-pro_*.dsc ../eovpn-pro_*.debian.tar.* dist/packages/
+          sha256sum dist/packages/* > dist/packages/SHA256SUMS-source
+
+      - name: Upload source artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: eovpn-pro-source
+          path: dist/packages/
+          if-no-files-found: error
 
   build-flatpak:
-    name: Build Flatpak Package
-    runs-on: ubuntu-24.04
-    needs: test
-    # Expensive job: only on tags or manual dispatch
-    # کار پرهزینه: فقط روی تگ‌ها یا اجرای دستی
+    name: Build Flatpak bundle
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    needs: quality
+    timeout-minutes: 120
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Check out the exact revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Build Flatpak
-        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        uses: flatpak/flatpak-github-actions/flatpak-builder@401fe28a8384095fc1531b9d320b292f0ee45adb # v6
         with:
           bundle: eovpn-pro.flatpak
-          manifest-path: dist/flatpak/com.github.mahdi-arts.eovpn-pro.yml
+          manifest-path: dist/flatpak/io.github.Mahdi_Arts.eOVPN_Pro.yml
           cache: true
 
-      - name: Upload Flatpak Artifact
-        uses: actions/upload-artifact@v4
+      - name: Create Flatpak checksum
+        run: sha256sum eovpn-pro.flatpak > eovpn-pro.flatpak.sha256
+
+      - name: Upload Flatpak artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: eovpn-pro-flatpak
-          path: eovpn-pro.flatpak
+          path: |
+            eovpn-pro.flatpak
+            eovpn-pro.flatpak.sha256
+          if-no-files-found: error
 
   release:
-    name: Publish Release Assets
-    runs-on: ubuntu-24.04
-    needs: build-deb
+    name: Publish verified release assets
     if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    needs:
+      - build-deb
+      - build-source
+      - build-flatpak
     permissions:
       contents: write
     steps:
-      - name: Download .deb Artifact
-        uses: actions/download-artifact@v4
+      - name: Download Debian artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: eovpn-pro-deb
-          path: dist/packages
+          name: eovpn-pro-debian
+          path: release/debian
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Download source artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          files: dist/packages/*.deb
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: eovpn-pro-source
+          path: release/source
+
+      - name: Download Flatpak artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: eovpn-pro-flatpak
+          path: release/flatpak
+
+      - name: Create combined checksums
+        run: |
+          find release -type f ! -name 'SHA256SUMS*' -print0 \
+            | sort -z \
+            | xargs -0 sha256sum > release/SHA256SUMS
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            release/debian/*.deb
+            release/source/*.dsc
+            release/source/*.debian.tar.*
+            release/source/eovpn-pro-*.tar.xz
+            release/source/io.github.Mahdi_Arts.eOVPN_Pro.yml
+            release/flatpak/eovpn-pro.flatpak
+            release/SHA256SUMS

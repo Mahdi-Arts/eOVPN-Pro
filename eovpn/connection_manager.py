@@ -1,293 +1,477 @@
 """
-eOVPN-Pro Connection Manager Module
-ماژول مدیریت اتصال VPN در eOVPN-Pro
+Scoped VPN backend implementations for eOVPN-Pro.
+پیاده‌سازی محدودشده بک‌اندهای VPN در eOVPN-Pro.
 
-Provides an abstract interface and concrete implementations for connecting,
-disconnecting, and monitoring VPN tunnels via NetworkManager and OpenVPN 3 Linux.
-ارائه‌دهنده ساختار انتزاعی و پیاده‌سازی‌های عملیاتی جهت مدیریت تونل‌های
-OpenVPN از طریق NetworkManager و OpenVPN 3.
+Both backends operate only on UUIDs or D-Bus object paths created by this
+application. They never disconnect, delete, or monitor unrelated VPN sessions.
+هر دو بک‌اند فقط روی UUID یا مسیر D-Bus ساخته‌شده توسط همین برنامه عمل می‌کنند
+و نشست‌های VPN نامرتبط را پایش، قطع یا حذف نمی‌کنند.
 """
 
-import os
+from __future__ import annotations
+
+import gettext
 import logging
+import os
 import tempfile
 from abc import ABC, abstractmethod
+from pathlib import Path
 
-from gi.repository import Secret
+from gi.repository import NM
 
-from .eovpn_base import Base
-from .backend.networkmanager import _libeovpn_nm
 from .backend.networkmanager.dbus import NMDbus
+from .constants import NM_PROFILE_LABEL_PREFIX
+from .context import ApplicationContext
+from .eovpn_base import Base
+from .secret_store import DEFAULT_SECRET_STORE
 
 logger = logging.getLogger(__name__)
+_ = gettext.gettext
 
-try:
-    from .backend.openvpn3 import _libopenvpn3
-    from .backend.openvpn3.dbus import OVPN3Dbus
-except Exception as e:
-    logger.warning("OpenVPN 3 backend module unavailable: %s", e)
+
+class BackendUnavailableError(RuntimeError):
+    """Raised when an optional system backend is unavailable / خطای نبود بک‌اند اختیاری."""
+
+
+class ConnectionError(RuntimeError):
+    """Raised when a backend operation fails / خطای شکست عملیات بک‌اند."""
 
 
 class ConnectionManager(ABC, Base):
-    """
-    Abstract base class for VPN connection managers.
-    کلاس پایه انتزاعی برای مدیریت‌کننده‌های اتصال VPN.
-    """
+    """Minimal backend contract / قرارداد حداقلی بک‌اند اتصال."""
 
-    def __init__(self, name: str):
-        super().__init__()
-        self.__NAME__ = name
+    def __init__(
+        self,
+        name: str,
+        context: ApplicationContext | None = None,
+    ) -> None:
+        super().__init__(context)
+        self._name = name
 
     @abstractmethod
     def get_name(self) -> str:
-        """Returns the identifier name of the backend."""
-        return self.__NAME__
+        """Returns the stable backend identifier / بازگرداندن شناسه پایدار بک‌اند."""
 
     @abstractmethod
-    def start_watch(self):
-        """Subscribes to connection state change events."""
-        pass
+    def start_watch(self) -> None:
+        """Requests scoped status monitoring / درخواست پایش محدود وضعیت."""
+
+    @abstractmethod
+    def stop_watch(self) -> None:
+        """Stops status monitoring / توقف پایش وضعیت."""
 
     @abstractmethod
     def version(self) -> str | None:
-        """Returns backend version string."""
-        pass
+        """Returns backend version / بازگرداندن نسخه بک‌اند."""
 
     @abstractmethod
-    def connect(self, openvpn_config: str):
-        """Initiates VPN connection using the provided configuration file."""
-        pass
+    def connect(self, openvpn_config: str) -> bool:
+        """Starts one owned VPN session / شروع یک نشست متعلق به برنامه."""
 
     @abstractmethod
-    def disconnect(self):
-        """Terminates active VPN connection."""
-        pass
+    def disconnect(self) -> bool:
+        """Stops only the owned session / قطع فقط نشست متعلق به برنامه."""
 
     @abstractmethod
     def status(self) -> bool:
-        """Checks if a VPN tunnel is currently active."""
-        pass
+        """Reports only the owned session state / گزارش فقط وضعیت نشست خود برنامه."""
 
 
 class NetworkManager(ConnectionManager):
     """
-    NetworkManager backend implementation using libnm via CFFI and D-Bus signals.
-    پیاده‌سازی بک‌اند NetworkManager با استفاده از بایندینگ C و سیگنال‌های D-Bus.
+    NetworkManager backend with UUID-scoped lifecycle and D-Bus monitoring.
+    بک‌اند NetworkManager با چرخه عمر و پایش محدود به UUID.
     """
 
-    def __init__(self, callback):
-        super().__init__("NetworkManager")
-        self.uuid = None
-        self.nm_manager = _libeovpn_nm.lib
-        self.ffi = _libeovpn_nm.ffi
+    def __init__(
+        self,
+        callback,
+        native_module=None,
+        dbus: NMDbus | None = None,
+        context: ApplicationContext | None = None,
+    ) -> None:
+        super().__init__("NetworkManager", context)
+        if native_module is None:
+            try:
+                from .backend.networkmanager import _libeovpn_nm as native_module
+            except Exception as exc:
+                raise BackendUnavailableError(
+                    _("The NetworkManager native binding is unavailable.")
+                ) from exc
+
+        self.native = native_module.lib
+        self.ffi = native_module.ffi
         self.callback = callback
+        self.dbus = dbus or NMDbus()
+        self.uuid: str | None = self.get_setting(self.SETTING.NM_ACTIVE_UUID)
+        self._watch_requested = False
+        self._disconnect_event_seen = False
         self._temp_config_path: str | None = None
 
-        self.dbus = NMDbus()
-        self.watch = False
+        # A saved UUID is trusted only because eOVPN created and persisted it.
+        # UUID ذخیره‌شده فقط به‌دلیل ایجاد و ثبت توسط eOVPN قابل اعتماد است.
+        if self.uuid and self.uuid not in self._owned_uuids():
+            self.uuid = None
+            self.set_setting(self.SETTING.NM_ACTIVE_UUID, None)
 
     def get_name(self) -> str:
         return "networkmanager"
 
-    def to_cffi_string(self, data, decode: bool = False):
-        if data == self.ffi.NULL:
+    def _consume_c_string(self, value, decode: bool = True):
+        """Copies and frees an owned C string / کپی و آزادسازی رشته تحت مالکیت C."""
+        if value == self.ffi.NULL:
             return None
-        _str = self.ffi.string(data)
-        if decode:
-            return _str.decode("utf-8")
-        return _str
+        raw = self.ffi.string(value)
+        self.native.eovpn_free(value)
+        return raw.decode("utf-8", errors="replace") if decode else raw
 
-    def start_watch(self):
-        if not self.watch:
-            self.dbus.watch(self.callback)
-            self.watch = True
+    def _owned_uuids(self) -> set[str]:
+        return set(self.get_setting(self.SETTING.NM_OWNED_UUIDS) or [])
 
-    def connect(self, openvpn_config: str):
-        """
-        Creates and activates a NetworkManager OpenVPN connection securely.
-        ایجاد و فعال‌سازی امن کانکشن در NetworkManager.
-        """
-        nm_username = self.get_setting(self.SETTING.AUTH_USER)
-        nm_password = None
-        nm_ca = self.get_setting(self.SETTING.CA)
+    def _remember_uuid(self, uuid: str) -> None:
+        owned = self._owned_uuids()
+        owned.add(uuid)
+        self.set_setting(self.SETTING.NM_OWNED_UUIDS, sorted(owned))
+        self.set_setting(self.SETTING.NM_ACTIVE_UUID, uuid)
 
-        # Retrieve password from Secret Service (Keyring) or in-memory session cache
-        # دریافت کلمه عبور از سرویس امن Secret Service یا حافظه موقت پروسس
-        if nm_username is not None:
-            try:
-                nm_password = Secret.password_lookup_sync(
-                    self.EOVPN_SECRET_SCHEMA,
-                    {"username": nm_username},
-                    None
-                )
-            except Exception as e:
-                logger.debug("Secret service lookup error: %s", e)
-                nm_password = self.get_session_password()
-
-        # Secure Temporary File Creation (0o600 permissions, unique random name)
-        # ایجاد امن فایل کانفیگ موقت با مجوز دسترسی اختصاصی کاربر جاری جهت ممانعت از حملات Race Condition
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".ovpn", delete=False) as tmp_file:
-            os.chmod(tmp_file.name, 0o600)
-            self._temp_config_path = tmp_file.name
-
-            with open(openvpn_config, "r", encoding="utf-8", errors="ignore") as f:
-                data = f.read() + "\n"
-
-            if nm_ca is not None and os.path.exists(nm_ca):
-                with open(nm_ca, "r", encoding="utf-8", errors="ignore") as caf:
-                    data += f"\n<ca>\n{caf.read()}\n</ca>\n"
-
-            tmp_file.write(data)
-
-        try:
-            uuid = self.nm_manager.add_connection(
-                self._temp_config_path.encode("utf-8"),
-                (nm_username.encode('utf-8') if nm_username is not None else None),
-                (nm_password.encode('utf-8') if nm_password is not None else None),
-                self.ffi.NULL,
-            )
-            self.uuid = self.to_cffi_string(uuid)
-            self.nm_manager.activate_connection(self.uuid)
-
-            if self.uuid:
-                self.set_setting(self.SETTING.NM_ACTIVE_UUID, self.uuid.decode("utf-8"))
-        finally:
-            # Securely remove temporary config file after importing into NetworkManager
-            # پاک‌سازی امن فایل موقت پس از ایمپورت شدن در سرویس شبکه
-            if self._temp_config_path and os.path.exists(self._temp_config_path):
-                try:
-                    os.remove(self._temp_config_path)
-                except Exception as ex:
-                    logger.warning("Failed to remove temp config file: %s", ex)
-                self._temp_config_path = None
-
-    def disconnect(self):
-        """
-        Deactivates and removes the VPN connection profile.
-        قطع اتصال و حذف پروفایل موقت VPN.
-        """
-        if self.uuid is None:
-            while self.nm_manager.get_active_vpn_connection_uuid() is not None:
-                active_uuid = self.to_cffi_string(self.nm_manager.get_active_vpn_connection_uuid())
-                if active_uuid:
-                    self.nm_manager.disconnect(active_uuid)
-                else:
-                    break
-            return
-
-        is_uuid_found = self.nm_manager.is_vpn_activated(self.uuid)
-        if is_uuid_found != -1:
-            logger.info("Disconnecting NetworkManager VPN UUID (%s).", self.uuid)
-            self.nm_manager.disconnect(self.uuid)
-            self.nm_manager.delete_connection(self.uuid)
-            self.uuid = None
+    def _forget_uuid(self, uuid: str) -> None:
+        owned = self._owned_uuids()
+        owned.discard(uuid)
+        self.set_setting(self.SETTING.NM_OWNED_UUIDS, sorted(owned))
+        if self.get_setting(self.SETTING.NM_ACTIVE_UUID) == uuid:
             self.set_setting(self.SETTING.NM_ACTIVE_UUID, None)
 
-    def status(self) -> bool:
-        return bool(self.nm_manager.is_vpn_running())
+    def _active_object_path(self) -> str | None:
+        if not self.uuid:
+            return None
+        value = self.native.get_active_vpn_connection_path(self.uuid.encode("utf-8"))
+        return self._consume_c_string(value)
 
-    def delete_all_connections(self):
-        self.nm_manager.delete_all_vpn_connections()
+    def _on_dbus_event(self, result, error=None) -> None:
+        if result is False:
+            self._disconnect_event_seen = True
+        if self.callback:
+            self.callback(result, error)
+
+    def _attach_watch(self) -> None:
+        if not self._watch_requested:
+            return
+        object_path = self._active_object_path()
+        if object_path:
+            self.dbus.watch(self._on_dbus_event, object_path)
+
+    def start_watch(self) -> None:
+        self._watch_requested = True
+        self._attach_watch()
+
+    def stop_watch(self) -> None:
+        self._watch_requested = False
+        self.dbus.remove_watch()
+
+    def _validate_config(self, openvpn_config: str) -> Path:
+        root = Path(self.EOVPN_OVPN_CONFIG_DIR).resolve()
+        candidate = Path(openvpn_config)
+        if candidate.is_symlink():
+            raise ConnectionError(_("Selected OpenVPN configuration must not be a symbolic link."))
+        config = candidate.resolve()
+        try:
+            config.relative_to(root)
+        except ValueError as exc:
+            raise ConnectionError(_("Configuration path is outside the managed repository.")) from exc
+        if not config.is_file() or config.suffix.lower() != ".ovpn":
+            raise ConnectionError(_("Selected OpenVPN configuration is not a safe regular file."))
+        config.chmod(0o600)
+        return config
+
+    def _remove_stale_profile(self) -> None:
+        if not self.uuid or self.status():
+            return
+        stale = self.uuid
+        if self.native.delete_connection(stale.encode("utf-8")):
+            self._forget_uuid(stale)
+            self.uuid = None
+
+    def connect(self, openvpn_config: str) -> bool:
+        """Imports, activates, and watches one eOVPN-owned NM profile."""
+        config = self._validate_config(openvpn_config)
+        self._remove_stale_profile()
+        if self.uuid and self.status():
+            raise ConnectionError(_("An eOVPN NetworkManager connection is already active."))
+        if not self.is_openvpn_plugin_available():
+            raise BackendUnavailableError(
+                _("The NetworkManager OpenVPN editor plugin is not installed.")
+            )
+
+        username = self.get_setting(self.SETTING.AUTH_USER)
+        password = DEFAULT_SECRET_STORE.lookup(username)
+        ca_path = self.get_setting(self.SETTING.CA)
+
+        data = config.read_text(encoding="utf-8", errors="ignore") + "\n"
+        has_ca_directive = any(
+            line.strip().lower().startswith(("ca ", "<ca>"))
+            for line in data.splitlines()
+            if line.strip() and not line.lstrip().startswith(("#", ";"))
+        )
+        if not has_ca_directive and ca_path and Path(ca_path).is_file():
+            ca_data = Path(ca_path).read_text(encoding="utf-8", errors="ignore")
+            data += f"\n<ca>\n{ca_data}\n</ca>\n"
+
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                suffix=".ovpn",
+                prefix="eovpn-",
+                delete=False,
+            ) as temporary:
+                self._temp_config_path = temporary.name
+                os.chmod(temporary.name, 0o600)
+                temporary.write(data)
+                temporary.flush()
+                os.fsync(temporary.fileno())
+
+            profile_name = f"{NM_PROFILE_LABEL_PREFIX} — {config.stem}"
+            raw_uuid = self.native.add_connection(
+                self._temp_config_path.encode("utf-8"),
+                profile_name.encode("utf-8"),
+                username.encode("utf-8") if username else self.ffi.NULL,
+                password.encode("utf-8") if password else self.ffi.NULL,
+                self.ffi.NULL,
+            )
+            uuid = self._consume_c_string(raw_uuid)
+            if not uuid:
+                raise ConnectionError(_("NetworkManager could not import the configuration."))
+
+            self.uuid = uuid
+            self._remember_uuid(uuid)
+            if not self.native.activate_connection(uuid.encode("utf-8")):
+                self.native.delete_connection(uuid.encode("utf-8"))
+                self._forget_uuid(uuid)
+                self.uuid = None
+                raise ConnectionError(_("NetworkManager could not activate the VPN profile."))
+
+            self._attach_watch()
+            if self.status() and self.callback:
+                self.callback(True)
+            return True
+        finally:
+            if self._temp_config_path:
+                try:
+                    Path(self._temp_config_path).unlink(missing_ok=True)
+                except OSError as exc:
+                    logger.warning("Could not remove private temporary configuration: %s", exc)
+                self._temp_config_path = None
+
+    def disconnect(self) -> bool:
+        """Deactivates and removes only the current eOVPN profile."""
+        if not self.uuid:
+            return False
+
+        uuid = self.uuid
+        was_active = self.status()
+        self._disconnect_event_seen = False
+        disconnected = True
+        if was_active:
+            disconnected = bool(self.native.disconnect(uuid.encode("utf-8")))
+        deleted = bool(self.native.delete_connection(uuid.encode("utf-8")))
+        if deleted:
+            self._forget_uuid(uuid)
+            self.uuid = None
+        self.stop_watch()
+        if self.callback and not self._disconnect_event_seen:
+            self.callback(False, None if disconnected else _("NetworkManager disconnect failed."))
+        return disconnected and deleted
+
+    def status(self) -> bool:
+        if not self.uuid:
+            return False
+        state = self.native.is_vpn_activated(self.uuid.encode("utf-8"))
+        return state == int(NM.VpnConnectionState.ACTIVATED)
+
+    def delete_managed_connections(self) -> tuple[int, int]:
+        """
+        Deletes only UUIDs recorded as eOVPN-owned.
+        حذف فقط UUIDهایی که مالکیت آن‌ها توسط eOVPN ثبت شده است.
+        """
+        deleted = 0
+        failed: set[str] = set()
+        active_uuid = self.uuid
+        for uuid in sorted(self._owned_uuids()):
+            encoded = uuid.encode("utf-8")
+            state = self.native.is_vpn_activated(encoded)
+            if state != -1 and not self.native.disconnect(encoded):
+                failed.add(uuid)
+                continue
+            if self.native.delete_connection(encoded):
+                deleted += 1
+            else:
+                failed.add(uuid)
+        self.set_setting(self.SETTING.NM_OWNED_UUIDS, sorted(failed))
+        if active_uuid not in failed:
+            self.uuid = None
+            self.set_setting(self.SETTING.NM_ACTIVE_UUID, None)
+        return deleted, len(failed)
 
     def version(self) -> str | None:
-        ver = self.nm_manager.get_version()
-        return self.to_cffi_string(ver, True)
+        return self._consume_c_string(self.native.get_version())
 
     def is_openvpn_plugin_available(self) -> bool:
-        return bool(self.nm_manager.is_openvpn_plugin_available())
+        return bool(self.native.is_openvpn_plugin_available())
 
 
 class OpenVPN3(ConnectionManager):
-    """
-    OpenVPN 3 Linux D-Bus backend implementation.
-    پیاده‌سازی بک‌اند مدرن OpenVPN 3 بر بستر D-Bus سیستم‌عامل.
-    """
+    """OpenVPN 3 backend scoped to one persisted session path."""
 
-    def __init__(self, update_callback):
-        super().__init__("OpenVPN3")
+    def __init__(
+        self,
+        callback,
+        native_module=None,
+        dbus=None,
+        context: ApplicationContext | None = None,
+    ) -> None:
+        super().__init__("OpenVPN3", context)
+        if native_module is None:
+            try:
+                from .backend.openvpn3 import _libopenvpn3 as native_module
+            except Exception as exc:
+                raise BackendUnavailableError(_("The OpenVPN 3 backend is unavailable.")) from exc
+        if dbus is None:
+            try:
+                from .backend.openvpn3.dbus import OVPN3Dbus
 
-        self.ovpn3 = _libopenvpn3.lib
-        self.ffi = _libopenvpn3.ffi
-        self.callback = update_callback
+                dbus = OVPN3Dbus(context=self.context)
+            except Exception as exc:
+                raise BackendUnavailableError(_("OpenVPN 3 D-Bus is unavailable.")) from exc
 
-        self.config_path = None
-        self.session_path = None
+        self.native = native_module.lib
+        self.ffi = native_module.ffi
+        self.callback = callback
+        self.dbus = dbus
+        self.config_path: str | None = self.get_setting(self.SETTING.OVPN3_CONFIG_PATH)
+        self.session_path: str | None = self.get_setting(self.SETTING.OVPN3_SESSION_PATH)
+        self._watch_requested = False
+        self.dbus.set_binding(self)
 
-        self.watch = False
-        self.dbus = OVPN3Dbus()
+        if self.session_path:
+            self.native.init_unique_session(self.session_path.encode("utf-8"))
 
     def get_name(self) -> str:
         return "openvpn3"
 
-    def to_cffi_string(self, data, decode: bool = False):
-        if data == self.ffi.NULL:
+    def _consume_c_string(self, value) -> str | None:
+        if value == self.ffi.NULL:
             return None
-        _str = self.ffi.string(data)
-        if decode:
-            return _str.decode("utf-8")
-        return _str
+        raw = self.ffi.string(value).decode("utf-8", errors="replace")
+        self.native.eovpn_free(value)
+        return raw
 
-    def start_watch(self):
-        if not self.watch:
-            self.dbus.set_binding(self)
-            self.dbus.subscribe_for_attention()
-            self.watch = True
+    def start_watch(self) -> None:
+        self._watch_requested = True
+        if self.session_path:
+            self.dbus.subscribe(self.session_path, self.callback)
 
-    def get_session_path(self):
-        return self.session_path
+    def stop_watch(self) -> None:
+        self._watch_requested = False
+        self.dbus.unsubscribe_all()
+
+    def get_session_path(self) -> bytes | None:
+        return self.session_path.encode("utf-8") if self.session_path else None
 
     def is_ready(self) -> bool:
-        status = self.to_cffi_string(self.ovpn3.is_ready_to_connect())
-        return status is None
+        error = self._consume_c_string(self.native.is_ready_to_connect())
+        return error is None
 
-    def connect(self, openvpn_config: str):
-        """
-        Imports config and prepares tunnel session on OpenVPN 3 Linux service.
-        ایمپورت کانفیگ و آماده‌سازی سشن تونل در سرویس OpenVPN 3 لینوکس.
-        """
-        with open(openvpn_config, "r", encoding="utf-8", errors="ignore") as f:
-            config_content = f.read()
+    def connect(self, openvpn_config: str) -> bool:
+        candidate = Path(openvpn_config)
+        if candidate.is_symlink():
+            raise ConnectionError(_("Selected OpenVPN configuration must not be a symbolic link."))
+        config = candidate.resolve()
+        root = Path(self.EOVPN_OVPN_CONFIG_DIR).resolve()
+        try:
+            config.relative_to(root)
+        except ValueError as exc:
+            raise ConnectionError(_("Configuration path is outside the managed repository.")) from exc
+        if not config.is_file() or config.suffix.lower() != ".ovpn":
+            raise ConnectionError(_("Selected OpenVPN configuration is not a safe regular file."))
+        if self.session_path:
+            self.disconnect()
 
-        ca = self.get_setting(self.SETTING.CA)
-        if ca is not None and os.path.exists(ca):
-            with open(ca, "r", encoding="utf-8", errors="ignore") as caf:
-                config_content += f"\n<ca>\n{caf.read()}\n</ca>\n"
-
-        config_bytes = config_content.encode('utf-8')
-        config_path = self.ovpn3.import_config(
-            os.path.basename(openvpn_config).encode('utf-8'),
-            config_bytes
+        content = config.read_text(encoding="utf-8", errors="ignore")
+        ca_path = self.get_setting(self.SETTING.CA)
+        has_ca_directive = any(
+            line.strip().lower().startswith(("ca ", "<ca>"))
+            for line in content.splitlines()
+            if line.strip() and not line.lstrip().startswith(("#", ";"))
         )
-        self.config_path = self.to_cffi_string(config_path)
-        logger.info("OpenVPN 3 Config Path: %s", self.config_path)
+        if not has_ca_directive and ca_path and Path(ca_path).is_file():
+            ca_data = Path(ca_path).read_text(encoding="utf-8", errors="ignore")
+            content += f"\n<ca>\n{ca_data}\n</ca>\n"
 
-        if self.config_path:
-            session_path = self.ovpn3.prepare_tunnel(self.config_path)
-            self.session_path = self.to_cffi_string(session_path)
-            logger.info("OpenVPN 3 Session Path: %s", self.session_path)
-            self.status()
+        raw_config_path = self.native.import_config(
+            config.name.encode("utf-8"), content.encode("utf-8")
+        )
+        self.config_path = self._consume_c_string(raw_config_path)
+        if not self.config_path:
+            raise ConnectionError(_("OpenVPN 3 could not import the configuration."))
+        self.set_setting(self.SETTING.OVPN3_CONFIG_PATH, self.config_path)
 
-    def disconnect(self):
-        if self.session_path is not None:
-            logger.info("Disconnecting OpenVPN 3 session %s", self.session_path.decode('utf-8'))
-            self.ovpn3.disconnect_vpn()
-        else:
-            self.ovpn3.disconnect_all_sessions()
-            if self.callback:
-                self.callback(False)
+        raw_session_path = self.native.prepare_tunnel(self.config_path.encode("utf-8"))
+        self.session_path = self._consume_c_string(raw_session_path)
+        if not self.session_path:
+            self.set_setting(self.SETTING.OVPN3_CONFIG_PATH, None)
+            self.config_path = None
+            raise ConnectionError(_("OpenVPN 3 could not create a tunnel session."))
+        self.set_setting(self.SETTING.OVPN3_SESSION_PATH, self.session_path)
+
+        session_bytes = self.session_path.encode("utf-8")
+        self.native.init_unique_session(session_bytes)
+        self.native.set_dco(
+            session_bytes,
+            int(bool(self.get_setting(self.SETTING.OPENVPN3_DCO))),
+        )
+        self.dbus.subscribe(self.session_path, self.callback)
+        self._watch_requested = True
+        self.dbus.try_to_connect()
+        return True
+
+    def _clear_owned_session(self) -> None:
+        """Clears only the persisted paths owned by this instance / پاک‌سازی مسیرهای متعلق به همین نمونه."""
+        self.stop_watch()
         self.session_path = None
+        self.config_path = None
+        self.set_setting(self.SETTING.OVPN3_SESSION_PATH, None)
+        self.set_setting(self.SETTING.OVPN3_CONFIG_PATH, None)
 
-    def pause(self):
-        self.ovpn3.pause_vpn("User Action in eOVPN Pro".encode("utf-8"))
+    def handle_backend_disconnected(self) -> None:
+        """Accepts a terminal event already reported by D-Bus / ثبت رویداد نهایی گزارش‌شده توسط D-Bus."""
+        self._clear_owned_session()
 
-    def resume(self):
-        self.ovpn3.resume_vpn()
+    def disconnect(self) -> bool:
+        if not self.session_path:
+            return False
+        # Unsubscribe first so one user action produces one UI transition.
+        # ابتدا اشتراک حذف می‌شود تا هر اقدام کاربر فقط یک تغییر UI ایجاد کند.
+        self.stop_watch()
+        success = bool(self.native.disconnect_vpn())
+        self._clear_owned_session()
+        if self.callback:
+            self.callback(False, None if success else _("OpenVPN 3 disconnect failed."))
+        return success
+
+    def pause(self) -> bool:
+        return bool(self.native.pause_vpn(b"User action in eOVPN Pro"))
+
+    def resume(self) -> bool:
+        return bool(self.native.resume_vpn())
 
     def version(self) -> str | None:
-        v = self.ovpn3.p_get_version()
-        if v:
-            return self.to_cffi_string(v, True)
-        return None
+        return self._consume_c_string(self.native.p_get_version())
 
     def status(self) -> bool:
-        return bool(self.ovpn3.p_get_connection_status())
+        if not self.session_path:
+            return False
+        return bool(
+            self.native.get_specific_connection_status(
+                self.session_path.encode("utf-8")
+            )
+        )

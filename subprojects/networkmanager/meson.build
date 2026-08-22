@@ -1,7 +1,6 @@
 project('eovpn_nm', 'c')
 
 main_project = 'eovpn'
-main_project_id = 'com.github.mahdi-arts.eovpn-pro'
 
 deps = [
     dependency('libnm'),
@@ -9,7 +8,7 @@ deps = [
 
 python = import('python')
 python_exe = python.find_installation()
-python_dir = python_exe.get_install_dir()
+python_dir = python_exe.get_install_dir(pure: false)
 lib_install_dir = python_dir / main_project / 'backend' / 'networkmanager'
 message(lib_install_dir)
 

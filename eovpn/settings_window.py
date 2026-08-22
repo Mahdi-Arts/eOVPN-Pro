@@ -1,595 +1,695 @@
 """
-eOVPN-Pro Settings & Preferences Window Module
-ماژول پنجره تنظیمات و پیکربندی در eOVPN-Pro
+eOVPN-Pro settings, privacy, credentials, and backend preferences.
+تنظیمات، حریم خصوصی، اطلاعات احراز هویت و بک‌اند eOVPN-Pro.
 
-Manages user preferences, configuration sources (ZIP/Folder), credentials, and backend options.
-مدیریت ترجیحات کاربر، منابع کانفیگ، نام کاربری و کلمه عبور و گزینه‌های بک‌اند.
+The window uses explicit save/import actions for operations with side effects,
+shows actionable status feedback, and confirms every destructive operation.
+این پنجره برای عملیات اثرگذار دکمه صریح ذخیره/واردکردن، بازخورد قابل‌اقدام و
+تأیید جداگانه برای همه عملیات مخرب ارائه می‌دهد.
 """
 
-import logging
-import os
-import shutil
+from __future__ import annotations
+
 import gettext
+import logging
+import shutil
+from pathlib import Path
 
 import gi
-gi.require_version('Gtk', '4.0')
-from gi.repository import Gtk, Gio, GLib, Secret
 
+gi.require_version("Gtk", "4.0")
+from gi.repository import Gio, GLib, Gtk
+
+from .connection_manager import (
+    BackendUnavailableError,
+    NetworkManager,
+    OpenVPN3,
+)
+from .context import ApplicationContext
+from .dialogs.confirm import confirm_action
 from .eovpn_base import Base, StorageItem
-from .connection_manager import NetworkManager, OpenVPN3
+from .secret_store import DEFAULT_SECRET_STORE
 
 logger = logging.getLogger(__name__)
+_ = gettext.gettext
 
 
 class SettingsWindow(Base, Gtk.Builder):
-    """
-    Controller for the settings modal dialog.
-    کنترلر پنجره تنظیمات برنامه.
-    """
+    """Professional modal preferences controller / کنترلر حرفه‌ای پنجره تنظیمات."""
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, context: ApplicationContext | None = None) -> None:
+        Base.__init__(self, context)
         Gtk.Builder.__init__(self)
-        self.signals = SettingsSignals()
+        self.signals = SettingsSignals(self, self.context)
+        self._is_setup = False
+        self._loading_credentials = False
+        self.original_username = self.get_setting(self.SETTING.AUTH_USER)
 
-        self.add_from_resource(self.EOVPN_GRESOURCE_PREFIX + "/ui/" + "settings.ui")
-        self.window = self.get_object("settings_window")
-        self.window.set_title(gettext.gettext("{} Settings").format(self.APP_NAME))
-
-        parent_win = self.retrieve(StorageItem.MAIN_WINDOW)
-        if parent_win and isinstance(parent_win, Gtk.Window):
-            self.window.set_transient_for(parent_win)
+        self.add_from_resource(self.EOVPN_GRESOURCE_PREFIX + "/ui/settings.ui")
+        self.window: Gtk.Window = self.get_object("settings_window")
+        self.window.set_title(_("{} Settings").format(self.APP_NAME))
+        self.window.set_default_size(620, 600)
+        parent = self.retrieve(StorageItem.MAIN_WINDOW)
+        if isinstance(parent, Gtk.Window):
+            self.window.set_transient_for(parent)
         self.window.set_modal(True)
         self.store(StorageItem.SETTINGS_WINDOW, self.window)
         self.store("settings_window_instance", self)
 
-    def generate_option_row(self, name: str, icon_name: str, switch_state: bool):
-        list_box_row = Gtk.ListBoxRow.new()
-        h_box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 0)
-        v_box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
-        v_box.set_hexpand(True)
+    @staticmethod
+    def _section_title(title: str, subtitle: str | None = None) -> Gtk.Box:
+        """Builds a consistent section heading / ساخت عنوان یکدست برای بخش تنظیمات."""
+        box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 2)
+        label = Gtk.Label.new(title)
+        label.set_halign(Gtk.Align.START)
+        label.add_css_class("title-4")
+        box.append(label)
+        if subtitle:
+            description = Gtk.Label.new(subtitle)
+            description.set_halign(Gtk.Align.START)
+            description.set_xalign(0.0)
+            description.set_wrap(True)
+            description.add_css_class("dim-label")
+            description.add_css_class("caption")
+            box.append(description)
+        return box
 
-        label = Gtk.Label.new(name)
-        v_box.set_valign(Gtk.Align.CENTER)
-        v_box.append(label)
+    @staticmethod
+    def _icon_row(icon_name: str, child: Gtk.Widget) -> Gtk.Box:
+        """Wraps a control with a symbolic icon / قراردادن کنترل کنار آیکون نمادین."""
+        row = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+        icon = Gtk.Image.new_from_icon_name(icon_name)
+        icon.set_pixel_size(18)
+        icon.add_css_class("dim-label")
+        row.append(icon)
+        child.set_hexpand(True)
+        row.append(child)
+        return row
 
-        img = Gtk.Image.new()
-        img.set_from_icon_name(icon_name)
-        h_box.append(img)
-        h_box.append(v_box)
+    @staticmethod
+    def _scroll_page(child: Gtk.Widget) -> Gtk.ScrolledWindow:
+        """Wraps a preference page for small screens / قراردادن صفحه در اسکرول برای نمایشگر کوچک."""
+        scroller = Gtk.ScrolledWindow.new()
+        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroller.set_child(child)
+        return scroller
+
+    @staticmethod
+    def _switch_row(
+        title: str,
+        subtitle: str,
+        icon_name: str,
+        state: bool,
+    ) -> tuple[Gtk.ListBoxRow, Gtk.Switch]:
+        """Builds an accessible preference switch / ساخت سوییچ دسترس‌پذیر تنظیمات."""
+        row = Gtk.ListBoxRow.new()
+        row.set_selectable(False)
+        content = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 12)
+        content.set_margin_top(10)
+        content.set_margin_bottom(10)
+        content.set_margin_start(12)
+        content.set_margin_end(12)
+
+        icon = Gtk.Image.new_from_icon_name(icon_name)
+        icon.set_pixel_size(20)
+        text = Gtk.Box.new(Gtk.Orientation.VERTICAL, 2)
+        text.set_hexpand(True)
+        title_label = Gtk.Label.new(title)
+        title_label.set_halign(Gtk.Align.START)
+        title_label.set_xalign(0.0)
+        title_label.add_css_class("bold")
+        subtitle_label = Gtk.Label.new(subtitle)
+        subtitle_label.set_halign(Gtk.Align.START)
+        subtitle_label.set_xalign(0.0)
+        subtitle_label.set_wrap(True)
+        subtitle_label.add_css_class("dim-label")
+        subtitle_label.add_css_class("caption")
+        text.append(title_label)
+        text.append(subtitle_label)
 
         switch = Gtk.Switch.new()
-        switch.set_halign(Gtk.Align.CENTER)
+        switch.set_active(state)
         switch.set_valign(Gtk.Align.CENTER)
-        switch.set_state(switch_state)
-        switch.set_active(switch_state)
+        content.append(icon)
+        content.append(text)
+        content.append(switch)
+        row.set_child(content)
+        return row, switch
 
-        h_box.append(switch)
-        list_box_row.set_child(h_box)
-        list_box_row.set_selectable(False)
+    def _set_status(self, label: Gtk.Label, message: str, success: bool | None) -> None:
+        """Updates an inline success/error status / به‌روزرسانی وضعیت موفق یا خطا."""
+        label.set_text(message)
+        label.set_visible(bool(message))
+        label.remove_css_class("status-success")
+        label.remove_css_class("status-error")
+        if success is True:
+            label.add_css_class("status-success")
+        elif success is False:
+            label.add_css_class("status-error")
 
-        return list_box_row, switch
+    def setup(self) -> None:
+        """Builds the settings UI once / ساخت یک‌باره رابط تنظیمات."""
+        if self._is_setup:
+            return
+        self._is_setup = True
 
-    def setup(self):
-        self.reset_btn = Gtk.Button.new_with_label(gettext.gettext("Reset"))
-        self.reset_btn.add_css_class("destructive-action")
-        self.header = self.get_object("settings_header_bar")
-        self.header.pack_start(self.reset_btn)
+        header: Gtk.HeaderBar = self.get_object("settings_header_bar")
+        self.reset_button = Gtk.Button.new_with_label(_("Reset"))
+        self.reset_button.add_css_class("destructive-action")
+        self.reset_button.set_tooltip_text(_("Reset settings and remove imported configurations"))
+        header.pack_start(self.reset_button)
+        self.spinner = Gtk.Spinner.new()
+        header.pack_end(self.spinner)
 
-        self.spinner = Gtk.Spinner()
-        self.tick_mark = Gtk.Image()
-        self.tick_mark.set_from_icon_name("object-select-symbolic")
-        self.tick_mark.hide()
-        self.store("settings_tick", self.tick_mark)
+        stack = Gtk.Stack.new()
+        stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT_RIGHT)
+        switcher = Gtk.StackSwitcher.new()
+        switcher.set_stack(stack)
+        header.set_title_widget(switcher)
+        self.window.set_child(stack)
 
-        self.header.pack_end(self.tick_mark)
-        self.header.pack_end(self.spinner)
+        setup_page = self._build_setup_page()
+        general_page = self._build_general_page()
+        backend_page = self._build_backend_page()
+        stack.add_titled(self._scroll_page(setup_page), "setup", _("Setup"))
+        stack.add_titled(self._scroll_page(general_page), "general", _("General"))
+        stack.add_titled(self._scroll_page(backend_page), "backend", _("Backend"))
 
-        self.stack = Gtk.Stack.new()
-        self.stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT)
-        self.stack_switcher = Gtk.StackSwitcher.new()
-        self.stack_switcher.set_stack(self.stack)
-        self.header.set_title_widget(self.stack_switcher)
+        self.reset_button.connect("clicked", self._confirm_reset)
 
-        self.main_box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 4)
-        self.main_box.set_valign(Gtk.Align.CENTER)
-        self.main_box.add_css_class("m-6")
+    def _build_setup_page(self) -> Gtk.Widget:
+        page = Gtk.Box.new(Gtk.Orientation.VERTICAL, 14)
+        page.set_margin_top(18)
+        page.set_margin_bottom(18)
+        page.set_margin_start(18)
+        page.set_margin_end(18)
 
-        self.pref_box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
-        self.backend_box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
-
-        self.stack.add_titled(self.main_box, "setup", gettext.gettext("Setup"))
-        self.stack.add_titled(self.pref_box, "general", gettext.gettext("General"))
-        self.stack.add_titled(self.backend_box, "Backend", gettext.gettext("Backend"))
-
-        # Setup Tab: Configuration Source
-        label = Gtk.Label.new(gettext.gettext("Configuration Source"))
-        label.set_halign(Gtk.Align.START)
-        label.add_css_class("bold")
-        self.main_box.append(label)
-
-        configuration_source_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 4)
-        entry = Gtk.Entry.new()
-        if (text := self.get_setting(self.SETTING.REMOTE)) is not None:
-            entry.set_text(text)
-        else:
-            entry.set_placeholder_text("https://example.com/vpn/configs.zip")
-
-        zip_chooser_btn = Gtk.Button.new_from_icon_name("media-zip-symbolic")
-        zip_chooser_btn.set_tooltip_text(gettext.gettext("Choose ZIP File"))
-        folder_chooser_btn = Gtk.Button.new_from_icon_name("folder-open-symbolic")
-        folder_chooser_btn.set_tooltip_text(gettext.gettext("Choose Local Folder"))
-        entry.set_hexpand(True)
-        configuration_source_hbox.append(entry)
-        configuration_source_hbox.append(zip_chooser_btn)
-        configuration_source_hbox.append(folder_chooser_btn)
-
-        zip_file_chooser_dialog = Gtk.FileChooserNative(action=Gtk.FileChooserAction.OPEN)
-        zip_file_chooser_dialog.set_transient_for(self.window)
-        zip_filter = Gtk.FileFilter()
-        zip_filter.set_name("ZIP")
-        zip_filter.add_mime_type("application/zip")
-        zip_file_chooser_dialog.add_filter(zip_filter)
-        default_path = Gio.File.new_for_path(GLib.get_home_dir())
-        zip_file_chooser_dialog.set_current_folder(default_path)
-        zip_chooser_btn.connect("clicked", lambda btn: zip_file_chooser_dialog.show())
-
-        folder_file_chooser_dialog = Gtk.FileChooserNative(action=Gtk.FileChooserAction.SELECT_FOLDER)
-        folder_file_chooser_dialog.set_transient_for(self.window)
-        folder_file_chooser_dialog.set_current_folder(default_path)
-        folder_chooser_btn.connect("clicked", lambda btn: folder_file_chooser_dialog.show())
-
-        self.main_box.append(configuration_source_hbox)
-
-        self.revealer = Gtk.Revealer.new()
-        self.validate_btn = Gtk.Button.new_with_label(gettext.gettext("Validate & Load"))
-        self.validate_btn.add_css_class("suggested-action")
-        self.revealer.set_child(self.validate_btn)
-        self.main_box.append(self.revealer)
-        self.revealer.set_reveal_child(False)
-
-        # Authentication Section
-        self.auth_box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
-        ask_auth_box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 4)
-        ask_auth_box.add_css_class("m-4")
-        label = Gtk.Label.new(gettext.gettext("Authentication"))
-        label.set_halign(Gtk.Align.START)
-        label.add_css_class("bold")
-        ask_auth_box.append(label)
-
-        self.ask_auth_switch = Gtk.Switch.new()
-        self.ask_auth_switch.set_halign(Gtk.Align.END)
-        ask_auth_box.append(self.ask_auth_switch)
-        self.auth_box.append(ask_auth_box)
-
-        # Username
-        username_box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 4)
-        button = Gtk.Button.new_from_icon_name("avatar-default-symbolic")
-        button.set_sensitive(False)
-        username_box.append(button)
-        self.username_entry = Gtk.Entry.new()
-        self.username_entry.set_placeholder_text(gettext.gettext("Username / Email"))
-        self.username_entry.set_hexpand(True)
-        username_box.append(self.username_entry)
-
-        # Password
-        password_box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 4)
-        button = Gtk.Button.new_from_icon_name("dialog-password-symbolic")
-        button.set_sensitive(False)
-        password_box.append(button)
-        self.password_entry = Gtk.PasswordEntry.new()
-        self.password_entry.set_property("placeholder-text", gettext.gettext("Password"))
-        self.password_entry.set_show_peek_icon(True)
-        self.password_entry.set_hexpand(True)
-        password_box.append(self.password_entry)
-
-        # CA
-        ca_box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 4)
-        ca_box.add_css_class("mb-4")
-        button = Gtk.Button.new_from_icon_name("application-certificate-symbolic")
-        button.set_sensitive(False)
-        ca_box.append(button)
-        self.ca_chooser_btn = Gtk.Button.new_with_label("(None)")
-        self.ca_chooser_btn.set_hexpand(True)
-
-        ca_file_chooser_dialog = Gtk.FileChooserNative(action=Gtk.FileChooserAction.OPEN)
-        ca_file_chooser_dialog.set_transient_for(self.window)
-        ca_filter = Gtk.FileFilter()
-        ca_filter.set_name("CA / CRT")
-        ca_filter.add_mime_type("application/pkix-cert")
-        ca_file_chooser_dialog.add_filter(ca_filter)
-        default_path = Gio.File.new_for_path(self.EOVPN_OVPN_CONFIG_DIR)
-        ca_file_chooser_dialog.set_current_folder(default_path)
-        self.ca_chooser_btn.connect("clicked", lambda btn: ca_file_chooser_dialog.show())
-        ca_box.append(self.ca_chooser_btn)
-
-        self.user_pass_ca_box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 4)
-        self.user_pass_ca_box.add_css_class("mt-4")
-        self.user_pass_ca_box.append(username_box)
-        self.user_pass_ca_box.append(password_box)
-        self.user_pass_ca_box.append(ca_box)
-        self.user_pass_ca_box.set_sensitive(False)
-        self.auth_box.append(self.user_pass_ca_box)
-        self.main_box.append(self.auth_box)
-
-        if (auth_status_opt := self.get_setting(self.SETTING.REQ_AUTH)) is not None:
-            self.ask_auth_switch.set_state(auth_status_opt)
-            self.ask_auth_switch.set_active(auth_status_opt)
-            self.user_pass_ca_box.set_sensitive(auth_status_opt)
-
-            if (username := self.get_setting(self.SETTING.AUTH_USER)) is not None:
-                self.username_entry.set_text(username)
-
-                def on_password_lookup(source, result):
-                    try:
-                        pwd = Secret.password_lookup_finish(result)
-                    except Exception:
-                        pwd = self.get_session_password()
-
-                    if pwd:
-                        self.password_entry.set_text(pwd)
-
-                Secret.password_lookup(
-                    self.EOVPN_SECRET_SCHEMA, {"username": username}, None, on_password_lookup
-                )
-
-            if (ca := self.get_setting(self.SETTING.CA)) is not None:
-                self.ca_chooser_btn.set_label(os.path.basename(ca))
-
-        # General Preferences Tab
-        frame = Gtk.Frame.new()
-        list_box = Gtk.ListBox.new()
-        frame.add_css_class("m-10")
-        list_box.add_css_class("rich-list")
-
-        self.switches = [self.ask_auth_switch]
-
-        row, switch = self.generate_option_row(
-            gettext.gettext("Notifications"), "user-available-symbolic",
-            bool(self.get_setting(self.SETTING.NOTIFICATIONS))
-        )
-        switch.connect("state-set", self.signals.notification_set)
-        self.switches.append(switch)
-        list_box.append(row)
-
-        row, switch = self.generate_option_row(
-            gettext.gettext("Flag"), "preferences-desktop-locale-symbolic",
-            bool(self.get_setting(self.SETTING.SHOW_FLAG))
-        )
-        switch.connect("state-set", self.signals.show_flag_set)
-        self.switches.append(switch)
-        list_box.append(row)
-
-        row, switch = self.generate_option_row(
-            gettext.gettext("Dark Theme"), "weather-clear-night-symbolic",
-            bool(self.get_setting(self.SETTING.DARK_THEME))
-        )
-        switch.connect("state-set", self.signals.dark_theme_set)
-        self.switches.append(switch)
-        list_box.append(row)
-
-        row, switch = self.generate_option_row(
-            gettext.gettext("Auto Reconnect"), "network-wired-symbolic",
-            bool(self.get_setting(self.SETTING.AUTO_RECONNECT))
-        )
-        switch.connect("state-set", self.signals.auto_reconnect_set)
-        self.switches.append(switch)
-        list_box.append(row)
-
-        frame.set_child(list_box)
-        self.pref_box.append(frame)
-
-        self.remove_all_vpn_btn = Gtk.Button.new_with_label(gettext.gettext("Delete All VPN Connections!"))
-        self.remove_all_vpn_btn.add_css_class("m-6")
-        self.remove_all_vpn_btn.add_css_class("destructive-action")
-        self.remove_all_vpn_btn.set_valign(Gtk.Align.END)
-        self.remove_all_vpn_btn.set_vexpand(True)
-        self.pref_box.append(self.remove_all_vpn_btn)
-        self.remove_all_vpn_btn.set_visible(self.get_setting(self.SETTING.MANAGER) == "networkmanager")
-        self.pref_box.set_vexpand(True)
-        self.window.set_child(self.stack)
-
-        # Backend Tab
-        backend_frame = Gtk.Frame.new()
-        backend_list_box = Gtk.ListBox.new()
-        backend_frame.add_css_class("m-10")
-        backend_list_box.add_css_class("rich-list")
-
-        # Row 1: Connection Backend selection
-        row1 = Gtk.ListBoxRow.new()
-        row1.set_selectable(False)
-        h_box1 = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 12)
-        h_box1.set_margin_top(8)
-        h_box1.set_margin_bottom(8)
-        h_box1.set_margin_start(10)
-        h_box1.set_margin_end(10)
-
-        icon1 = Gtk.Image.new_from_icon_name("network-wired-symbolic")
-        v_box1 = Gtk.Box.new(Gtk.Orientation.VERTICAL, 2)
-        v_box1.set_hexpand(True)
-        v_box1.set_valign(Gtk.Align.CENTER)
-        label1 = Gtk.Label.new(gettext.gettext("Connection Backend"))
-        label1.set_halign(Gtk.Align.START)
-        label1.add_css_class("bold")
-        v_box1.append(label1)
-
-        self.combobox = Gtk.ComboBoxText()
-        self.combobox.set_valign(Gtk.Align.CENTER)
-        version = NetworkManager(None).version()
-        if version:
-            self.combobox.append("networkmanager", gettext.gettext("{} (OpenVPN 2)").format(version))
-
-        try:
-            ovpn3_version = OpenVPN3(None).version()
-            if ovpn3_version:
-                self.combobox.append("openvpn3", gettext.gettext("OpenVPN 3 {}").format(ovpn3_version))
-        except Exception:
-            logger.debug("OpenVPN 3 module not loaded.")
-
-        if (manager := self.get_setting(self.SETTING.MANAGER)) is not None:
-            self.combobox.set_property("active-id", manager)
-
-        h_box1.append(icon1)
-        h_box1.append(v_box1)
-        h_box1.append(self.combobox)
-        row1.set_child(h_box1)
-        backend_list_box.append(row1)
-
-        # Row 2: OpenVPN 3 DCO
-        self.dco_row = Gtk.ListBoxRow.new()
-        self.dco_row.set_selectable(False)
-        h_box2 = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 12)
-        h_box2.set_margin_top(8)
-        h_box2.set_margin_bottom(8)
-        h_box2.set_margin_start(10)
-        h_box2.set_margin_end(10)
-
-        icon2 = Gtk.Image.new_from_icon_name("speedometer-symbolic")
-        v_box2 = Gtk.Box.new(Gtk.Orientation.VERTICAL, 2)
-        v_box2.set_hexpand(True)
-        v_box2.set_valign(Gtk.Align.CENTER)
-
-        label2 = Gtk.Label.new(gettext.gettext("Data Channel Offload (DCO)"))
-        label2.set_halign(Gtk.Align.START)
-        label2.add_css_class("bold")
-
-        sub_label2 = Gtk.Label.new(
-            gettext.gettext(
-                "Offloads VPN data processing directly to the Linux kernel "
-                "for maximum speed and lower CPU usage."
+        page.append(
+            self._section_title(
+                _("Configuration Source"),
+                _("Use a local folder/ZIP or a verified HTTPS URL. Plain HTTP is blocked."),
             )
         )
-        sub_label2.set_halign(Gtk.Align.START)
-        sub_label2.add_css_class("dim-label")
-        sub_label2.add_css_class("caption")
-        sub_label2.set_wrap(True)
-        sub_label2.set_max_width_chars(45)
+        source_controls = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 6)
+        self.source_entry = Gtk.Entry.new()
+        self.source_entry.set_placeholder_text("https://example.com/vpn/configs.zip")
+        self.source_entry.set_hexpand(True)
+        source = self.get_setting(self.SETTING.REMOTE)
+        if source:
+            self.source_entry.set_text(source)
+        zip_button = Gtk.Button.new_from_icon_name("package-x-generic-symbolic")
+        zip_button.set_tooltip_text(_("Choose ZIP File"))
+        folder_button = Gtk.Button.new_from_icon_name("folder-open-symbolic")
+        folder_button.set_tooltip_text(_("Choose Local Folder"))
+        source_controls.append(self.source_entry)
+        source_controls.append(zip_button)
+        source_controls.append(folder_button)
+        page.append(source_controls)
 
-        v_box2.append(label2)
-        v_box2.append(sub_label2)
+        self.validate_button = Gtk.Button.new_with_label(_("Validate & Import Securely"))
+        self.validate_button.add_css_class("suggested-action")
+        self.validate_button.set_sensitive(bool(self.source_entry.get_text().strip()))
+        page.append(self.validate_button)
+        self.import_status = Gtk.Label.new("")
+        self.import_status.set_halign(Gtk.Align.START)
+        self.import_status.set_wrap(True)
+        self.import_status.set_visible(False)
+        page.append(self.import_status)
 
-        self.dco_switch = Gtk.Switch.new()
-        self.dco_switch.set_halign(Gtk.Align.CENTER)
-        self.dco_switch.set_valign(Gtk.Align.CENTER)
-        dco_state = bool(self.get_setting(self.SETTING.OPENVPN3_DCO))
-        self.dco_switch.set_state(dco_state)
-        self.dco_switch.set_active(dco_state)
+        source_chooser = Gtk.FileChooserNative(action=Gtk.FileChooserAction.OPEN)
+        source_chooser.set_transient_for(self.window)
+        source_filter = Gtk.FileFilter()
+        source_filter.set_name(_("ZIP archives"))
+        source_filter.add_mime_type("application/zip")
+        source_chooser.add_filter(source_filter)
+        folder_chooser = Gtk.FileChooserNative(action=Gtk.FileChooserAction.SELECT_FOLDER)
+        folder_chooser.set_transient_for(self.window)
+        home = Gio.File.new_for_path(GLib.get_home_dir())
+        source_chooser.set_current_folder(home)
+        folder_chooser.set_current_folder(home)
+        zip_button.connect("clicked", lambda *_: source_chooser.show())
+        folder_button.connect("clicked", lambda *_: folder_chooser.show())
 
-        h_box2.append(icon2)
-        h_box2.append(v_box2)
-        h_box2.append(self.dco_switch)
-        self.dco_row.set_child(h_box2)
-        backend_list_box.append(self.dco_row)
-
-        backend_frame.set_child(backend_list_box)
-        self.backend_box.append(backend_frame)
-
-        self.dco_row.set_visible(manager == "openvpn3")
-        self.dco_switch.connect("state-set", self.signals.openvpn3_dco_set)
-
-        # Connect signals
-        self.reset_btn.connect(
-            "clicked",
-            self.signals.on_reset_btn_clicked,
-            [entry, self.username_entry, self.password_entry],
-            [self.ca_chooser_btn],
-            self.switches,
-            self.window
+        separator = Gtk.Separator.new(Gtk.Orientation.HORIZONTAL)
+        separator.set_margin_top(8)
+        page.append(separator)
+        page.append(
+            self._section_title(
+                _("Authentication"),
+                _("Passwords are saved only after you explicitly press Save Credentials."),
+            )
         )
-        entry.connect("changed", self.signals.process_config_entry, self.revealer)
-        zip_file_chooser_dialog.connect("response", self.signals.process_zip, entry, self.revealer)
-        folder_file_chooser_dialog.connect("response", self.signals.process_folder, entry, self.revealer)
-        self.validate_btn.connect(
-            "clicked", self.signals.on_validate_btn_click, entry, self.ca_chooser_btn, self.spinner
+
+        auth_header = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+        auth_label = Gtk.Label.new(_("Use username and password"))
+        auth_label.set_hexpand(True)
+        auth_label.set_halign(Gtk.Align.START)
+        self.auth_switch = Gtk.Switch.new()
+        self.auth_switch.set_active(bool(self.get_setting(self.SETTING.REQ_AUTH)))
+        auth_header.append(auth_label)
+        auth_header.append(self.auth_switch)
+        page.append(auth_header)
+
+        self.auth_fields = Gtk.Box.new(Gtk.Orientation.VERTICAL, 8)
+        self.auth_fields.set_sensitive(self.auth_switch.get_active())
+        self.username_entry = Gtk.Entry.new()
+        self.username_entry.set_placeholder_text(_("Username / Email"))
+        if self.original_username:
+            self.username_entry.set_text(self.original_username)
+        self.password_entry = Gtk.PasswordEntry.new()
+        self.password_entry.set_placeholder_text(_("Password"))
+        self.password_entry.set_show_peek_icon(True)
+        self.ca_button = Gtk.Button.new_with_label(_("Choose CA certificate (optional)"))
+        ca_path = self.get_setting(self.SETTING.CA)
+        if ca_path:
+            self.ca_button.set_label(Path(ca_path).name)
+        self.auth_fields.append(self._icon_row("avatar-default-symbolic", self.username_entry))
+        self.auth_fields.append(self._icon_row("dialog-password-symbolic", self.password_entry))
+        self.auth_fields.append(self._icon_row("application-certificate-symbolic", self.ca_button))
+
+        self.save_credentials_button = Gtk.Button.new_with_label(_("Save Credentials Securely"))
+        self.save_credentials_button.add_css_class("suggested-action")
+        self.auth_fields.append(self.save_credentials_button)
+        self.credential_status = Gtk.Label.new("")
+        self.credential_status.set_halign(Gtk.Align.START)
+        self.credential_status.set_wrap(True)
+        self.credential_status.set_visible(False)
+        self.auth_fields.append(self.credential_status)
+        page.append(self.auth_fields)
+
+        ca_chooser = Gtk.FileChooserNative(action=Gtk.FileChooserAction.OPEN)
+        ca_chooser.set_transient_for(self.window)
+        ca_filter = Gtk.FileFilter()
+        ca_filter.set_name(_("Certificates"))
+        ca_filter.add_pattern("*.crt")
+        ca_filter.add_pattern("*.pem")
+        ca_filter.add_pattern("*.ca")
+        ca_chooser.add_filter(ca_filter)
+        ca_chooser.set_current_folder(
+            Gio.File.new_for_path(self.EOVPN_OVPN_CONFIG_DIR)
         )
+        self.ca_button.connect("clicked", lambda *_: ca_chooser.show())
+
+        self.source_entry.connect("changed", self.signals.process_source)
+        source_chooser.connect("response", self.signals.process_file_chooser, self.source_entry)
+        folder_chooser.connect("response", self.signals.process_file_chooser, self.source_entry)
+        ca_chooser.connect("response", self.signals.process_ca)
+        self.validate_button.connect("clicked", self.signals.import_configurations)
+        self.auth_switch.connect("state-set", self.signals.set_auth_enabled)
         self.username_entry.connect("changed", self.signals.process_username)
         self.password_entry.connect("changed", self.signals.process_password)
-        ca_file_chooser_dialog.connect("response", self.signals.process_ca, self.ca_chooser_btn)
-        self.ask_auth_switch.connect("state-set", self.signals.req_auth, self.user_pass_ca_box)
-        self.remove_all_vpn_btn.connect("clicked", self.confirm_delete_all_connections)
-        self.combobox.connect("changed", self.signals.on_backend_selected)
+        self.save_credentials_button.connect("clicked", self.signals.save_credentials)
 
-    def confirm_delete_all_connections(self, button: Gtk.Button):
-        """
-        Asks for explicit confirmation before removing ALL VPN profiles from
-        NetworkManager, because profiles created by other applications would
-        also be deleted. This action cannot be undone.
-        درخواست تأیید صریح پیش از حذف تمام پروفایل‌های VPN از NetworkManager؛
-        زیرا پروفایل‌های ساخته‌شده توسط سایر برنامه‌ها نیز حذف می‌شوند و این
-        عمل قابل بازگشت نیست.
-        """
-        dialog = Gtk.AlertDialog.new(
-            gettext.gettext("Delete All VPN Connections?")
-        )
-        dialog.set_detail(
-            gettext.gettext(
-                "This will permanently remove ALL VPN profiles from NetworkManager, "
-                "including profiles created by other applications. "
-                "This action cannot be undone."
+        if self.original_username:
+            def apply_password(success: bool, password: str | None) -> None:
+                if not success:
+                    return
+                self._loading_credentials = True
+                self.password_entry.set_text(password or "")
+                self._loading_credentials = False
+
+            DEFAULT_SECRET_STORE.lookup_async(self.original_username, apply_password)
+        return page
+
+    def _build_general_page(self) -> Gtk.Widget:
+        page = Gtk.Box.new(Gtk.Orientation.VERTICAL, 14)
+        page.set_margin_top(18)
+        page.set_margin_bottom(18)
+        page.set_margin_start(18)
+        page.set_margin_end(18)
+        page.append(
+            self._section_title(
+                _("Experience & Privacy"),
+                _("Privacy-sensitive network lookups are opt-in and can be disabled at any time."),
             )
         )
-        dialog.set_buttons([
-            gettext.gettext("Cancel"),
-            gettext.gettext("Delete All"),
-        ])
-        dialog.set_cancel_button(0)
-        dialog.set_default_button(1)
-        dialog.choose(self.window, None, self._on_delete_all_confirmed, None)
 
-    def _on_delete_all_confirmed(self, dialog: Gtk.AlertDialog, result, *args):
-        """Deletes all VPN connections only if the destructive button was chosen."""
+        frame = Gtk.Frame.new()
+        list_box = Gtk.ListBox.new()
+        list_box.add_css_class("rich-list")
+        frame.set_child(list_box)
+        self.preference_switches: list[Gtk.Switch] = [self.auth_switch]
+
+        preferences = (
+            (
+                _("Notifications"),
+                _("Show connection and error notifications."),
+                "preferences-system-notifications-symbolic",
+                self.SETTING.NOTIFICATIONS,
+                self.signals.set_notifications,
+            ),
+            (
+                _("Country Indicator"),
+                _("Show a Unicode country flag after an approved IP lookup."),
+                "preferences-desktop-locale-symbolic",
+                self.SETTING.SHOW_FLAG,
+                self.signals.set_show_flag,
+            ),
+            (
+                _("Public IP Lookup"),
+                _("Contact documented HTTPS providers to display your public IP and country."),
+                "network-workgroup-symbolic",
+                self.SETTING.PUBLIC_IP_LOOKUP,
+                self.signals.set_public_ip_lookup,
+            ),
+            (
+                _("Dark Appearance"),
+                _("Prefer the dark GTK color scheme."),
+                "weather-clear-night-symbolic",
+                self.SETTING.DARK_THEME,
+                self.signals.set_dark_theme,
+            ),
+            (
+                _("Auto Reconnect"),
+                _("Retry after an unexpected drop; this is not a kill switch."),
+                "network-wired-symbolic",
+                self.SETTING.AUTO_RECONNECT,
+                self.signals.set_auto_reconnect,
+            ),
+        )
+        for title, subtitle, icon, key, handler in preferences:
+            row, switch = self._switch_row(
+                title, subtitle, icon, bool(self.get_setting(key))
+            )
+            switch.connect("state-set", handler)
+            self.preference_switches.append(switch)
+            list_box.append(row)
+        page.append(frame)
+
+        self.remove_profiles_button = Gtk.Button.new_with_label(
+            _("Remove eOVPN NetworkManager Profiles…")
+        )
+        self.remove_profiles_button.add_css_class("destructive-action")
+        self.remove_profiles_button.set_tooltip_text(
+            _("Only profiles whose UUID was created and recorded by eOVPN are removed.")
+        )
+        self.remove_profiles_button.connect("clicked", self._confirm_remove_profiles)
+        page.append(self.remove_profiles_button)
+        return page
+
+    def _build_backend_page(self) -> Gtk.Widget:
+        page = Gtk.Box.new(Gtk.Orientation.VERTICAL, 14)
+        page.set_margin_top(18)
+        page.set_margin_bottom(18)
+        page.set_margin_start(18)
+        page.set_margin_end(18)
+        page.append(
+            self._section_title(
+                _("Connection Backend"),
+                _(
+                    "NetworkManager is recommended. OpenVPN 3 appears only "
+                    "when its system service is available."
+                ),
+            )
+        )
+
+        self.backend_combo = Gtk.ComboBoxText.new()
         try:
-            if dialog.choose_finish(result) == 1:
-                NetworkManager(None).delete_all_connections()
-                logger.info("All VPN connections were deleted by user confirmation.")
-        except Exception as e:
-            logger.error("Delete-all confirmation failed: %s", e)
+            version = NetworkManager(None, context=self.context).version()
+            if version:
+                self.backend_combo.append(
+                    "networkmanager", _("NetworkManager {} (OpenVPN 2)").format(version)
+                )
+        except Exception as exc:
+            logger.error("NetworkManager backend discovery failed: %s", exc)
 
-    def show(self):
+        try:
+            version = OpenVPN3(None, context=self.context).version()
+            if version:
+                self.backend_combo.append("openvpn3", _("OpenVPN 3 {}").format(version))
+        except BackendUnavailableError:
+            logger.debug("Optional OpenVPN 3 backend is unavailable.")
+
+        manager_name = self.get_setting(self.SETTING.MANAGER) or "networkmanager"
+        self.backend_combo.set_active_id(manager_name)
+        page.append(self._icon_row("network-wired-symbolic", self.backend_combo))
+
+        self.dco_row, self.dco_switch = self._switch_row(
+            _("Data Channel Offload (DCO)"),
+            _("Use kernel data-channel acceleration when OpenVPN 3 and the host support it."),
+            "speedometer-symbolic",
+            bool(self.get_setting(self.SETTING.OPENVPN3_DCO)),
+        )
+        self.dco_row.set_visible(manager_name == "openvpn3")
+        page.append(self.dco_row)
+        self.backend_status = Gtk.Label.new("")
+        self.backend_status.set_halign(Gtk.Align.START)
+        self.backend_status.set_wrap(True)
+        self.backend_status.set_visible(False)
+        page.append(self.backend_status)
+
+        self.backend_combo.connect("changed", self.signals.select_backend)
+        self.dco_switch.connect("state-set", self.signals.set_openvpn3_dco)
+        return page
+
+    def _confirm_remove_profiles(self, _button: Gtk.Button) -> None:
+        confirm_action(
+            self.window,
+            title=_("Remove eOVPN profiles?"),
+            detail=_(
+                "Only NetworkManager profile UUIDs recorded by eOVPN will be removed. "
+                "Profiles created by other applications are never touched."
+            ),
+            confirm_label=_("Remove Profiles"),
+            cancel_label=_("Cancel"),
+            callback=self._remove_managed_profiles,
+        )
+
+    def _remove_managed_profiles(self, confirmed: bool) -> None:
+        if not confirmed:
+            return
+        try:
+            deleted, failed = NetworkManager(
+                None, context=self.context
+            ).delete_managed_connections()
+            message = _("Removed {} managed profile(s); {} could not be removed.").format(
+                deleted, failed
+            )
+            self._set_status(self.backend_status, message, failed == 0)
+        except Exception as exc:
+            self._set_status(self.backend_status, str(exc), False)
+
+    def _confirm_reset(self, _button: Gtk.Button) -> None:
+        confirm_action(
+            self.window,
+            title=_("Reset eOVPN settings?"),
+            detail=_(
+                "Imported configurations and local preferences will be removed. "
+                "Other applications and their VPN profiles are not affected."
+            ),
+            confirm_label=_("Reset eOVPN"),
+            cancel_label=_("Cancel"),
+            callback=self.signals.perform_reset,
+        )
+
+    def show(self) -> None:
         self.setup()
-        self.window.show()
+        self.window.present()
 
 
 class SettingsSignals(Base):
-    """
-    Signals handler for settings UI actions.
-    مدیریت سیگنال‌ها و رویدادهای پنجره تنظیمات.
-    """
+    """Side-effect handlers for one SettingsWindow / مدیریت رویدادهای یک پنجره تنظیمات."""
 
-    def __init__(self):
-        super().__init__()
+    def __init__(
+        self,
+        view: SettingsWindow,
+        context: ApplicationContext,
+    ) -> None:
+        super().__init__(context)
+        self.view = view
+        self._changing_backend = False
 
-    def process_config_entry(self, entry, revealer):
-        text = entry.get_text()
-        if text:
-            self.set_setting(self.SETTING.REMOTE, text)
-            revealer.set_reveal_child(True)
-        else:
-            self.set_setting(self.SETTING.REMOTE, None)
-            revealer.set_reveal_child(False)
+    def process_source(self, entry: Gtk.Entry) -> None:
+        text = entry.get_text().strip()
+        self.set_setting(self.SETTING.REMOTE, text or None)
+        self.view.validate_button.set_sensitive(bool(text))
+        self.view._set_status(self.view.import_status, "", None)
 
-    def process_zip(self, chooser, response, entry, revealer):
-        if response == Gtk.ResponseType.ACCEPT:
-            path = chooser.get_file().get_path()
-            eb = Gtk.EntryBuffer()
-            eb.set_text(path, len(path))
-            self.set_setting(self.SETTING.REMOTE, path)
-            entry.set_buffer(eb)
-            revealer.set_reveal_child(True)
+    def process_file_chooser(self, chooser, response, entry: Gtk.Entry) -> None:
+        if response != Gtk.ResponseType.ACCEPT:
+            return
+        selected = chooser.get_file()
+        path = selected.get_path() if selected else None
+        if path:
+            entry.set_text(path)
 
-    def process_folder(self, chooser, response, entry, revealer):
-        if response == Gtk.ResponseType.ACCEPT:
-            path = chooser.get_file().get_path()
-            eb = Gtk.EntryBuffer()
-            eb.set_text(path, len(path))
-            self.set_setting(self.SETTING.REMOTE, path)
-            entry.set_buffer(eb)
-            revealer.set_reveal_child(True)
+    def import_configurations(self, _button: Gtk.Button) -> None:
+        self.view.validate_button.set_sensitive(False)
+        self.view._set_status(
+            self.view.import_status,
+            _("Validating and importing into a private repository…"),
+            None,
+        )
 
-    def req_auth(self, switch, state, auth_box):
+        def completed(success: bool, message: str, _result) -> None:
+            self.view.validate_button.set_sensitive(True)
+            self.view._set_status(self.view.import_status, message, success)
+
+        self.validate_and_load(self.view.spinner, self.view.ca_button, completed)
+
+    def set_auth_enabled(self, _switch: Gtk.Switch, state: bool) -> None:
         self.set_setting(self.SETTING.REQ_AUTH, state)
-        auth_box.set_sensitive(state)
+        self.view.auth_fields.set_sensitive(state)
 
-    def process_username(self, entry):
-        text = entry.get_text()
-        self.set_setting(self.SETTING.AUTH_USER, text if text else None)
+    def process_username(self, entry: Gtk.Entry) -> None:
+        username = entry.get_text().strip()
+        self.set_setting(self.SETTING.AUTH_USER, username or None)
+        password = self.view.password_entry.get_text()
+        DEFAULT_SECRET_STORE.set_session(username or None, password or None)
 
-    def process_password(self, entry):
-        pwd = entry.get_text()
-        username = self.get_setting(self.SETTING.AUTH_USER)
+    def process_password(self, entry: Gtk.PasswordEntry) -> None:
+        username = self.view.username_entry.get_text().strip()
+        DEFAULT_SECRET_STORE.set_session(username or None, entry.get_text() or None)
+        if self.view._loading_credentials:
+            return
+        self.view._set_status(
+            self.view.credential_status,
+            _("Unsaved credential changes"),
+            None,
+        )
 
-        if pwd and username:
-            # Store in volatile RAM session cache
-            # ذخیره در حافظه موقت پروسس
-            self.set_session_password(pwd)
-
-            def on_password_stored(source, result):
-                try:
-                    Secret.password_store_finish(result)
-                    logger.debug("Password stored securely in Secret Service.")
-                except Exception as e:
-                    logger.info("Secret service unavailable, retained in memory session: %s", e)
-
-            attributes = {"username": username}
-            Secret.password_store(
-                self.EOVPN_SECRET_SCHEMA,
-                attributes,
-                Secret.COLLECTION_DEFAULT,
-                "eOVPN Password",
-                pwd,
-                None,
-                on_password_stored
+    def save_credentials(self, _button: Gtk.Button) -> None:
+        username = self.view.username_entry.get_text().strip()
+        password = self.view.password_entry.get_text()
+        if not username:
+            self.view._set_status(
+                self.view.credential_status,
+                _("Enter a username before saving credentials."),
+                False,
             )
-        else:
-            self.set_session_password(None)
+            return
+        self.view.save_credentials_button.set_sensitive(False)
+        old_username = self.view.original_username
+        clearing = not bool(password)
 
-    def process_ca(self, chooser, response, button):
-        if response == Gtk.ResponseType.ACCEPT:
-            ca_path = chooser.get_file().get_path()
-            self.set_setting(self.SETTING.CA, ca_path)
-            button.set_label(chooser.get_file().get_basename())
+        def saved(success: bool, error: str | None) -> None:
+            def update_ui() -> bool:
+                self.view.save_credentials_button.set_sensitive(True)
+                if success:
+                    message = (
+                        _("Saved password removed from Secret Service.")
+                        if clearing
+                        else _("Credentials saved in Secret Service.")
+                    )
+                else:
+                    message = _(
+                        "Secret Service was unavailable; the password is retained only for this session."
+                    )
+                    if error:
+                        logger.debug("Credential persistence failed: %s", error)
+                self.view._set_status(self.view.credential_status, message, success)
+                self.view.original_username = username
+                return False
 
-    def notification_set(self, switch, state):
+            GLib.idle_add(update_ui)
+            if old_username and old_username != username:
+                DEFAULT_SECRET_STORE.clear_async(old_username)
+
+        DEFAULT_SECRET_STORE.store_async(username, password, saved)
+
+    def process_ca(self, chooser, response) -> None:
+        if response != Gtk.ResponseType.ACCEPT:
+            return
+        selected = chooser.get_file()
+        path = selected.get_path() if selected else None
+        if path:
+            self.set_setting(self.SETTING.CA, path)
+            self.view.ca_button.set_label(Path(path).name)
+
+    def set_notifications(self, _switch, state: bool) -> None:
         self.set_setting(self.SETTING.NOTIFICATIONS, state)
 
-    def show_flag_set(self, switch, state):
+    def set_show_flag(self, _switch, state: bool) -> None:
         self.set_setting(self.SETTING.SHOW_FLAG, state)
-        flag_img = self.retrieve(StorageItem.FLAG)
-        if flag_img:
-            if state:
-                flag_img.show()
-            else:
-                flag_img.hide()
+        flag = self.retrieve(StorageItem.FLAG)
+        if flag is not None:
+            flag.set_visible(state)
 
-    def dark_theme_set(self, switch, state):
-        gtk_settings = Gtk.Settings().get_default()
+    def set_public_ip_lookup(self, _switch, state: bool) -> None:
+        self.set_setting(self.SETTING.PUBLIC_IP_LOOKUP, state)
+        main_window = self.retrieve("main_window_instance")
+        if main_window is not None:
+            main_window.update_ip_flag_async()
+
+    def set_dark_theme(self, _switch, state: bool) -> None:
         self.set_setting(self.SETTING.DARK_THEME, state)
-        if gtk_settings:
-            gtk_settings.set_property("gtk-application-prefer-dark-theme", state)
+        settings = Gtk.Settings.get_default()
+        if settings is not None:
+            settings.set_property("gtk-application-prefer-dark-theme", state)
 
-    def auto_reconnect_set(self, switch, state):
+    def set_auto_reconnect(self, _switch, state: bool) -> None:
         self.set_setting(self.SETTING.AUTO_RECONNECT, state)
+        if not state:
+            main_window = self.retrieve("main_window_instance")
+            if main_window is not None:
+                main_window.cancel_reconnect()
 
-    def on_reset_btn_clicked(self, button, entries, buttons, switches, window):
-        self.reset_all_settings()
-        self.set_session_password(None)
-
-        try:
-            shutil.rmtree(self.EOVPN_OVPN_CONFIG_DIR)
-        except Exception:
-            pass
-
-        for e in entries:
-            e.set_text('')
-        for b in buttons:
-            b.set_label('(None)')
-        for s in switches:
-            s.set_state(False)
-
-        GLib.idle_add(self.remove_only, True)
-        flag_img = self.retrieve(StorageItem.FLAG)
-        if flag_img:
-            flag_img.hide()
-
-    def openvpn3_dco_set(self, switch, state):
+    def set_openvpn3_dco(self, _switch, state: bool) -> None:
         self.set_setting(self.SETTING.OPENVPN3_DCO, state)
 
-    def on_backend_selected(self, box):
-        backend_id = box.get_property("active_id")
+    def select_backend(self, combo: Gtk.ComboBoxText) -> None:
+        if self._changing_backend:
+            return
+        backend_id = combo.get_active_id()
         if not backend_id:
             return
-        self.set_setting(self.SETTING.MANAGER, backend_id)
-        callback = self.retrieve("on_connection_event")
-        self.store("CM", {
-            "name": backend_id,
-            "instance": NetworkManager(callback) if backend_id == "networkmanager" else OpenVPN3(callback)
-        })
+        current_record = self.retrieve("CM") or {}
+        current = current_record.get("instance") if isinstance(current_record, dict) else None
+        current_name = current_record.get("name") if isinstance(current_record, dict) else None
+        if current_name == backend_id:
+            self.view.dco_row.set_visible(backend_id == "openvpn3")
+            return
         try:
-            sw = self.retrieve("settings_window_instance")
-            if hasattr(sw, "dco_row"):
-                sw.dco_row.set_visible(backend_id == "openvpn3")
-        except Exception as e:
-            logger.error("Error updating DCO visibility: %s", e)
+            if current is not None and current.status():
+                raise RuntimeError(_("Disconnect the current VPN before changing backends."))
+            if current is not None:
+                current.stop_watch()
+            callback = self.retrieve("on_connection_event")
+            manager = (
+                NetworkManager(callback, context=self.context)
+                if backend_id == "networkmanager"
+                else OpenVPN3(callback, context=self.context)
+            )
+            self.store("CM", {"name": backend_id, "instance": manager})
+            self.set_setting(self.SETTING.MANAGER, backend_id)
+            self.view.dco_row.set_visible(backend_id == "openvpn3")
+            self.view._set_status(
+                self.view.backend_status,
+                _("Backend changed successfully."),
+                True,
+            )
+        except Exception as exc:
+            self._changing_backend = True
+            combo.set_active_id(current_name or "networkmanager")
+            self._changing_backend = False
+            self.view._set_status(self.view.backend_status, str(exc), False)
 
-    def on_validate_btn_click(self, button, entry, ca_button, spinner):
-        self.validate_and_load(spinner, ca_button)
+    def perform_reset(self, confirmed: bool) -> None:
+        if not confirmed:
+            return
+        username = self.get_setting(self.SETTING.AUTH_USER)
+        if username:
+            DEFAULT_SECRET_STORE.clear_async(username)
+        DEFAULT_SECRET_STORE.clear_session()
+        try:
+            # Remove recorded eOVPN profiles before resetting their UUID list.
+            # پروفایل‌های ثبت‌شده پیش از پاک‌شدن فهرست UUID حذف می‌شوند.
+            NetworkManager(
+                None, context=self.context
+            ).delete_managed_connections()
+        except Exception as exc:
+            logger.warning("Could not remove every managed profile during reset: %s", exc)
+        self.reset_all_settings()
+        shutil.rmtree(self.EOVPN_OVPN_CONFIG_DIR, ignore_errors=True)
+        self.config_repository.ensure()
+        self.remove_only()
+        self.view.source_entry.set_text("")
+        self.view.username_entry.set_text("")
+        self.view.password_entry.set_text("")
+        self.view.ca_button.set_label(_("Choose CA certificate (optional)"))
+        self.view.auth_switch.set_active(False)
+        self.view._set_status(
+            self.view.import_status,
+            _("eOVPN settings and imported configurations were reset."),
+            True,
+        )

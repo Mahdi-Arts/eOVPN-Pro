@@ -1,3 +1,4 @@
+#
 msgid ""
 msgstr ""
 "Project-Id-Version: \n"
@@ -9,8 +10,8 @@ msgstr ""
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"X-Generator: Python Script\n"
 "Plural-Forms: nplurals=2; plural=(n > 1);\n"
+"X-Generator: Python Script\n"
 
 msgid "Edit"
 msgstr "ویرایش"
@@ -137,8 +138,12 @@ msgstr "اتصال به سریع‌ترین"
 msgid "Auto-select server with the lowest latency"
 msgstr "انتخاب خودکار سرور با کمترین تاخیر"
 
-msgid "Connect to the first server in the current sorted and filtered list. If the handshake times out or fails, automatically try the next one."
-msgstr "به اولین سرور در لیست مرتب و فیلترشده فعلی متصل می‌شود. اگر دست‌دهی زمان‌بندی شود یا شکست بخورد، به‌صورت خودکار سرور بعدی را امتحان می‌کند."
+msgid ""
+"Connect to the first server in the current sorted and filtered list. If the "
+"handshake times out or fails, automatically try the next one."
+msgstr ""
+"به اولین سرور در لیست مرتب و فیلترشده فعلی متصل می‌شود. اگر دست‌دهی "
+"زمان‌بندی شود یا شکست بخورد، به‌صورت خودکار سرور بعدی را امتحان می‌کند."
 
 msgid "All Protocols"
 msgstr "همه پروتکل‌ها"
@@ -215,7 +220,8 @@ msgstr "به هیچ سروری در لیست متصل نشد"
 msgid "{} attempt(s) failed"
 msgstr "{} تلاش ناموفق بود"
 
-msgid "Auto-connect failed — no server in the current list accepted the handshake."
+msgid ""
+"Auto-connect failed — no server in the current list accepted the handshake."
 msgstr "اتصال خودکار ناموفق بود — هیچ سروری در لیست فعلی دست‌دهی را نپذیرفت."
 
 msgid "Cancel auto-connect"
@@ -248,8 +254,12 @@ msgstr "بک‌اند اتصال"
 msgid "Data Channel Offload (DCO)"
 msgstr "برون‌سپاری کانال داده (DCO)"
 
-msgid "Offloads VPN data processing directly to the Linux kernel for maximum speed and lower CPU usage."
-msgstr "پردازش داده‌های VPN را مستقیماً به هسته لینوکس منتقل می‌کند تا به حداکثر سرعت و کمترین استفاده از CPU دست یابد."
+msgid ""
+"Offloads VPN data processing directly to the Linux kernel for maximum speed "
+"and lower CPU usage."
+msgstr ""
+"پردازش داده‌های VPN را مستقیماً به هسته لینوکس منتقل می‌کند تا به حداکثر "
+"سرعت و کمترین استفاده از CPU دست یابد."
 
 msgid "Search servers…"
 msgstr "جستجوی سرورها…"
@@ -290,11 +300,392 @@ msgstr "هیچ سروری مطابق فیلتر یافت نشد"
 msgid "Delete All VPN Connections?"
 msgstr "همه اتصالات VPN حذف شوند؟"
 
-msgid "This will permanently remove ALL VPN profiles from NetworkManager, including profiles created by other applications. This action cannot be undone."
-msgstr "این کار تمام پروفایل‌های VPN را برای همیشه از NetworkManager حذف می‌کند، از جمله پروفایل‌هایی که توسط برنامه‌های دیگر ساخته شده‌اند. این عمل قابل بازگشت نیست."
+msgid ""
+"This will permanently remove ALL VPN profiles from NetworkManager, including"
+" profiles created by other applications. This action cannot be undone."
+msgstr ""
+"این کار تمام پروفایل‌های VPN را برای همیشه از NetworkManager حذف می‌کند، از "
+"جمله پروفایل‌هایی که توسط برنامه‌های دیگر ساخته شده‌اند. این عمل قابل بازگشت"
+" نیست."
 
 msgid "Cancel"
 msgstr "انصراف"
 
 msgid "Delete All"
 msgstr "حذف همه"
+
+msgid "A configuration update is already in progress."
+msgstr "یک عملیات به‌روزرسانی کانفیگ از قبل در حال اجرا است."
+
+msgid "Additional verification is required"
+msgstr "تأیید هویت تکمیلی لازم است"
+
+msgid "Archive contains a non-regular file."
+msgstr "آرشیو دارای فایل غیرعادی یا پیوند ویژه است."
+
+msgid "Archive contains an invalid filename."
+msgstr "آرشیو دارای نام فایل نامعتبر است."
+
+msgid "Archive contains an unsafe file path."
+msgstr "آرشیو دارای مسیر فایل ناامن است."
+
+msgid "Archive contains duplicate filenames."
+msgstr "آرشیو دارای نام‌فایل‌های تکراری است."
+
+msgid "Authentication Challenge"
+msgstr "چالش احراز هویت"
+
+msgid "Backend changed successfully."
+msgstr "بک‌اند با موفقیت تغییر کرد."
+
+msgid "Certificates"
+msgstr "گواهی‌ها"
+
+msgid "Choose CA certificate (optional)"
+msgstr "انتخاب گواهی CA (اختیاری)"
+
+msgid "Configuration archive contains too many entries."
+msgstr "تعداد ورودی‌های آرشیو کانفیگ بیش از حد مجاز است."
+
+msgid "Configuration archive exceeds the download size limit."
+msgstr "حجم آرشیو کانفیگ از سقف مجاز دانلود بیشتر است."
+
+msgid "Configuration archive expands beyond the safe size limit."
+msgstr "حجم بازشده آرشیو کانفیگ از سقف امن بیشتر است."
+
+msgid "Configuration archive has an unsafe compression ratio."
+msgstr "نسبت فشرده‌سازی آرشیو کانفیگ ناامن است."
+
+msgid "Configuration archive is too large to download safely."
+msgstr "آرشیو کانفیگ برای دانلود امن بیش از حد بزرگ است."
+
+msgid "Configuration archive is too large to import safely."
+msgstr "آرشیو کانفیگ برای واردکردن امن بیش از حد بزرگ است."
+
+msgid "Configuration import failed."
+msgstr "واردکردن کانفیگ ناموفق بود."
+
+msgid "Configuration source exceeds the extracted size limit."
+msgstr "حجم بازشده منبع کانفیگ از سقف مجاز بیشتر است."
+
+msgid "Configuration source is empty."
+msgstr "منبع کانفیگ خالی است."
+
+msgid "Configuration source must be a valid ZIP archive or a local folder."
+msgstr "منبع کانفیگ باید یک آرشیو ZIP معتبر یا پوشه محلی باشد."
+
+msgid "Connected"
+msgstr "متصل"
+
+msgid "Connection Error"
+msgstr "خطای اتصال"
+
+msgid ""
+"Contact documented HTTPS providers to display your public IP and country."
+msgstr ""
+"برای نمایش IP عمومی و کشور، با سرویس‌دهندگان HTTPS مستندشده ارتباط برقرار "
+"شود."
+
+msgid "Copy IP Address"
+msgstr "کپی آدرس IP"
+
+msgid "Could not read the configuration source."
+msgstr "خواندن منبع کانفیگ ممکن نبود."
+
+msgid "Country Indicator"
+msgstr "نشان کشور"
+
+msgid "Credentials saved in Secret Service."
+msgstr "اطلاعات احراز هویت در Secret Service ذخیره شد."
+
+msgid "Dark Appearance"
+msgstr "ظاهر تیره"
+
+msgid "Disabled"
+msgstr "غیرفعال"
+
+msgid "Disconnect the current VPN before changing backends."
+msgstr "پیش از تغییر بک‌اند، اتصال VPN فعلی را قطع کنید."
+
+msgid "Disconnected"
+msgstr "قطع‌شده"
+
+msgid "Download"
+msgstr "دانلود"
+
+msgid "Edit Configuration"
+msgstr "ویرایش کانفیگ"
+
+msgid "Encrypted ZIP entries are not supported."
+msgstr "ورودی رمزگذاری‌شده ZIP پشتیبانی نمی‌شود."
+
+msgid "Enter a username before saving credentials."
+msgstr "پیش از ذخیره اطلاعات احراز هویت، نام کاربری را وارد کنید."
+
+msgid ""
+"Enter the one-time code or challenge response supplied by your VPN provider."
+msgstr ""
+"کد یک‌بارمصرف یا پاسخ چالش ارائه‌شده توسط سرویس‌دهنده VPN را وارد کنید."
+
+msgid "Exit"
+msgstr "خروج"
+
+msgid "Experience & Privacy"
+msgstr "تجربه کاربری و حریم خصوصی"
+
+msgid "Failed to extract configuration file: {}."
+msgstr "استخراج فایل کانفیگ {} ناموفق بود."
+
+msgid ""
+"Imported configurations and local preferences will be removed. Other "
+"applications and their VPN profiles are not affected."
+msgstr ""
+"کانفیگ‌های واردشده و تنظیمات محلی حذف می‌شوند. برنامه‌های دیگر و پروفایل‌های"
+" VPN آن‌ها تغییری نمی‌کنند."
+
+msgid "Live traffic statistics for the active VPN tunnel"
+msgstr "آمار زنده ترافیک تونل VPN فعال"
+
+msgid "Local source contains duplicate filenames."
+msgstr "منبع محلی دارای نام‌فایل‌های تکراری است."
+
+msgid ""
+"NetworkManager is recommended. OpenVPN 3 appears only when its system "
+"service is available."
+msgstr ""
+"NetworkManager پیشنهاد می‌شود. OpenVPN 3 فقط هنگام دسترسی به سرویس سیستمی آن"
+" نمایش داده می‌شود."
+
+msgid "NetworkManager {} (OpenVPN 2)"
+msgstr "NetworkManager {} (OpenVPN 2)"
+
+msgid "No usable OpenVPN configuration was found in the source."
+msgstr "هیچ کانفیگ قابل‌استفاده OpenVPN در منبع پیدا نشد."
+
+msgid ""
+"Only NetworkManager profile UUIDs recorded by eOVPN will be removed. "
+"Profiles created by other applications are never touched."
+msgstr ""
+"فقط UUID پروفایل‌های NetworkManager ثبت‌شده توسط eOVPN حذف می‌شوند. "
+"پروفایل‌های برنامه‌های دیگر هرگز تغییر نمی‌کنند."
+
+msgid ""
+"Only profiles whose UUID was created and recorded by eOVPN are removed."
+msgstr ""
+"فقط پروفایل‌هایی حذف می‌شوند که UUID آن‌ها توسط eOVPN ساخته و ثبت شده است."
+
+msgid "Open About"
+msgstr "بازکردن درباره برنامه"
+
+msgid "Open Keyboard Shortcuts"
+msgstr "بازکردن میان‌برهای صفحه‌کلید"
+
+msgid "Passwords are saved only after you explicitly press Save Credentials."
+msgstr "رمز فقط پس از فشردن صریح دکمه ذخیره اطلاعات احراز هویت ذخیره می‌شود."
+
+msgid "Prefer the dark GTK color scheme."
+msgstr "طرح رنگ تیره GTK ترجیح داده شود."
+
+msgid ""
+"Privacy-sensitive network lookups are opt-in and can be disabled at any "
+"time."
+msgstr ""
+"استعلام‌های حساس به حریم خصوصی اختیاری‌اند و هر زمان قابل غیرفعال‌سازی "
+"هستند."
+
+msgid "Public IP Lookup"
+msgstr "استعلام IP عمومی"
+
+msgid "Public IP country indicator"
+msgstr "نشان کشور IP عمومی"
+
+msgid "Remote configuration sources must use a valid HTTPS URL."
+msgstr "منبع راه‌دور کانفیگ باید از آدرس معتبر HTTPS استفاده کند."
+
+msgid "Remove Profiles"
+msgstr "حذف پروفایل‌ها"
+
+msgid "Remove eOVPN NetworkManager Profiles…"
+msgstr "حذف پروفایل‌های NetworkManager متعلق به eOVPN…"
+
+msgid "Remove eOVPN profiles?"
+msgstr "پروفایل‌های eOVPN حذف شوند؟"
+
+msgid "Removed {} managed profile(s); {} could not be removed."
+msgstr "{} پروفایل مدیریت‌شده حذف شد؛ حذف {} مورد ناموفق بود."
+
+msgid "Reset eOVPN"
+msgstr "بازنشانی eOVPN"
+
+msgid "Reset eOVPN settings?"
+msgstr "تنظیمات eOVPN بازنشانی شوند؟"
+
+msgid "Reset settings and remove imported configurations"
+msgstr "بازنشانی تنظیمات و حذف کانفیگ‌های واردشده"
+
+msgid "Retry after an unexpected drop; this is not a kill switch."
+msgstr "پس از قطعی ناخواسته دوباره تلاش شود؛ این قابلیت Kill Switch نیست."
+
+msgid "Save Credentials Securely"
+msgstr "ذخیره امن اطلاعات احراز هویت"
+
+msgid "Saved password removed from Secret Service."
+msgstr "رمز ذخیره‌شده از Secret Service حذف شد."
+
+msgid "Search Servers"
+msgstr "جست‌وجوی سرورها"
+
+msgid ""
+"Secret Service was unavailable; the password is retained only for this "
+"session."
+msgstr ""
+"Secret Service در دسترس نبود؛ رمز فقط برای نشست جاری در حافظه نگهداری "
+"می‌شود."
+
+msgid "Secure VPN connection established."
+msgstr "اتصال امن VPN برقرار شد."
+
+msgid "Select a VPN configuration first."
+msgstr "ابتدا یک کانفیگ VPN انتخاب کنید."
+
+msgid "Show a Unicode country flag after an approved IP lookup."
+msgstr "پس از استعلام مجاز IP، پرچم یونیکد کشور نمایش داده شود."
+
+msgid "Show connection and error notifications."
+msgstr "اعلان‌های اتصال و خطا نمایش داده شوند."
+
+msgid "System Language"
+msgstr "زبان سیستم"
+
+msgid "The imported source contains no usable configuration."
+msgstr "منبع واردشده هیچ کانفیگ قابل‌استفاده‌ای ندارد."
+
+msgid "Total"
+msgstr "مجموع"
+
+msgid "Unavailable"
+msgstr "در دسترس نیست"
+
+msgid "Unsafe redirect blocked: configuration downloads must remain on HTTPS."
+msgstr "ریدایرکت ناامن مسدود شد؛ دانلود کانفیگ باید روی HTTPS باقی بماند."
+
+msgid "Unsaved credential changes"
+msgstr "تغییرات اطلاعات احراز هویت ذخیره نشده است"
+
+msgid "Upload"
+msgstr "آپلود"
+
+msgid "Use a local folder/ZIP or a verified HTTPS URL. Plain HTTP is blocked."
+msgstr ""
+"از پوشه یا ZIP محلی یا آدرس تأییدشده HTTPS استفاده کنید. HTTP ساده مسدود "
+"است."
+
+msgid ""
+"Use kernel data-channel acceleration when OpenVPN 3 and the host support it."
+msgstr ""
+"در صورت پشتیبانی OpenVPN 3 و میزبان، شتاب‌دهی کانال داده هسته استفاده شود."
+
+msgid "Use username and password"
+msgstr "استفاده از نام کاربری و رمز عبور"
+
+msgid "VPN tunnel disconnected."
+msgstr "تونل VPN قطع شد."
+
+msgid "Validate & Import Securely"
+msgstr "اعتبارسنجی و واردکردن امن"
+
+msgid "Validating and importing into a private repository…"
+msgstr "در حال اعتبارسنجی و واردکردن به مخزن خصوصی…"
+
+msgid "Verification code"
+msgstr "کد تأیید"
+
+msgid "Verify"
+msgstr "تأیید"
+
+msgid "ZIP archives"
+msgstr "آرشیوهای ZIP"
+
+msgid "eOVPN contributors"
+msgstr "مشارکت‌کنندگان eOVPN"
+
+msgid "eOVPN settings and imported configurations were reset."
+msgstr "تنظیمات eOVPN و کانفیگ‌های واردشده بازنشانی شدند."
+
+msgid "offline"
+msgstr "آفلاین"
+
+msgid "unmeasured"
+msgstr "سنجیده‌نشده"
+
+msgid "{} Settings"
+msgstr "تنظیمات {}"
+
+msgid "{} configuration(s) imported securely."
+msgstr "{} کانفیگ به‌صورت امن وارد شد."
+
+msgid "An eOVPN NetworkManager connection is already active."
+msgstr "یک اتصال NetworkManager متعلق به eOVPN از قبل فعال است."
+
+msgid "Authentication challenge was cancelled."
+msgstr "چالش احراز هویت لغو شد."
+
+msgid "Configuration path is outside the managed repository."
+msgstr "مسیر کانفیگ خارج از مخزن مدیریت‌شده است."
+
+msgid "NetworkManager could not activate the VPN profile."
+msgstr "NetworkManager نتوانست پروفایل VPN را فعال کند."
+
+msgid "NetworkManager could not import the configuration."
+msgstr "NetworkManager نتوانست کانفیگ را وارد کند."
+
+msgid "NetworkManager disconnect failed."
+msgstr "قطع اتصال NetworkManager ناموفق بود."
+
+msgid "OpenVPN 3 D-Bus is unavailable."
+msgstr "D-Bus مربوط به OpenVPN 3 در دسترس نیست."
+
+msgid "OpenVPN 3 Python constants are unavailable."
+msgstr "ثابت‌های پایتون OpenVPN 3 در دسترس نیستند."
+
+msgid "OpenVPN 3 could not create a tunnel session."
+msgstr "OpenVPN 3 نتوانست نشست تونل را ایجاد کند."
+
+msgid "OpenVPN 3 could not import the configuration."
+msgstr "OpenVPN 3 نتوانست کانفیگ را وارد کند."
+
+msgid "OpenVPN 3 disconnect failed."
+msgstr "قطع اتصال OpenVPN 3 ناموفق بود."
+
+msgid "OpenVPN 3 rejected the Connect request."
+msgstr "OpenVPN 3 درخواست اتصال را رد کرد."
+
+msgid "OpenVPN 3 rejected the challenge response."
+msgstr "OpenVPN 3 پاسخ چالش را رد کرد."
+
+msgid "OpenVPN 3 rejected the password."
+msgstr "OpenVPN 3 رمز عبور را رد کرد."
+
+msgid "OpenVPN 3 rejected the username."
+msgstr "OpenVPN 3 نام کاربری را رد کرد."
+
+msgid "OpenVPN 3 session is not initialized."
+msgstr "نشست OpenVPN 3 مقداردهی نشده است."
+
+msgid "Selected OpenVPN configuration is not a safe regular file."
+msgstr "کانفیگ انتخاب‌شده OpenVPN یک فایل عادی و امن نیست."
+
+msgid "Selected OpenVPN configuration must not be a symbolic link."
+msgstr "کانفیگ انتخاب‌شده OpenVPN نباید پیوند نمادین باشد."
+
+msgid "The NetworkManager OpenVPN editor plugin is not installed."
+msgstr "افزونه ویرایشگر OpenVPN برای NetworkManager نصب نشده است."
+
+msgid "The NetworkManager native binding is unavailable."
+msgstr "بایندینگ بومی NetworkManager در دسترس نیست."
+
+msgid "The OpenVPN 3 backend is unavailable."
+msgstr "بک‌اند OpenVPN 3 در دسترس نیست."
+
+msgid "Unsupported OpenVPN 3 credential prompt: {}"
+msgstr "درخواست احراز هویت پشتیبانی‌نشده OpenVPN 3: {}"

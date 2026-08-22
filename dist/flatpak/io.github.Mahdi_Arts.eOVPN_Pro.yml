@@ -1,0 +1,129 @@
+---
+app-id: io.github.Mahdi_Arts.eOVPN_Pro
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+command: eovpn
+
+finish-args:
+  # Display and rendering / نمایش و رندر
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  - --device=dri
+  # Explicit network and service access / دسترسی صریح شبکه و سرویس‌ها
+  - --share=network
+  - --talk-name=org.freedesktop.Notifications
+  - --talk-name=org.freedesktop.secrets
+  - --system-talk-name=org.freedesktop.NetworkManager
+
+cleanup:
+  - /include
+  - /lib/pkgconfig
+  - /share/aclocal
+  - /share/doc
+  - /share/gtk-doc
+  - /share/man
+  - '*.a'
+  - '*.la'
+
+modules:
+  - name: intltool
+    cleanup:
+      - '*'
+    sources:
+      - type: archive
+        url: >-
+          https://launchpad.net/intltool/trunk/0.51.0/+download/intltool-0.51.0.tar.gz
+        sha256: 67c74d94196b153b774ab9f89b2fa6c6ba79352407037c8c14d5aeb334e959cd
+
+  - name: libndp
+    buildsystem: autotools
+    sources:
+      - type: git
+        url: https://github.com/jpirko/libndp.git
+        tag: v1.9
+        commit: 2730638bf88984b09531813974f9bd14e1a50165
+
+  # Only libnm and its introspection data are consumed at runtime. The host
+  # NetworkManager daemon remains authoritative.
+  # فقط libnm و داده introspection استفاده می‌شوند و Daemon میزبان مرجع است.
+  - name: NetworkManager
+    buildsystem: meson
+    config-opts:
+      - -Dlibaudit=no
+      - -Dpolkit=false
+      - -Dselinux=false
+      - -Dsystemd_journal=false
+      - -Dsession_tracking=no
+      - -Dsession_tracking_consolekit=false
+      - -Dudev_dir=no
+      - -Dwifi=false
+      - -Dppp=false
+      - -Dmodem_manager=false
+      - -Dovs=false
+      - -Dconcheck=false
+      - -Dnmcli=false
+      - -Dnmtui=false
+      - -Dnm_cloud_setup=false
+      - -Dnbft=false
+      - -Dclat=false
+      - -Dfirewalld_zone=false
+      - -Dlibpsl=false
+      - -Dreadline=none
+      - -Dcrypto=null
+      - -Dqt=false
+      - -Ddocs=false
+      - -Dman=false
+      - -Dtests=no
+      - -Dvapi=false
+      - -Dintrospection=true
+      - -Ddbus_conf_dir=/tmp/eovpn-dbus
+      - -Dsystemdsystemunitdir=/tmp/eovpn-systemd
+      - -Dsystemdsystemgeneratordir=/tmp/eovpn-systemd-generators
+    cleanup:
+      - /bin
+      - /etc
+      - /sbin
+      - /share/dbus-1
+      - /share/polkit-1
+      - /share/systemd
+    sources:
+      - type: git
+        url: https://github.com/NetworkManager/NetworkManager.git
+        tag: 1.58.1
+        commit: 7406dfbcc35beed79bf2734e3e7376ead320bd99
+
+  # The non-GUI import plugin parses .ovpn files inside the sandbox. Actual
+  # activation is delegated to the host NetworkManager OpenVPN plugin.
+  # افزونه بدون UI فایل را در Sandbox پارس می‌کند و فعال‌سازی با افزونه
+  # میزبان انجام می‌شود.
+  - name: NetworkManager-openvpn
+    buildsystem: autotools
+    config-opts:
+      - --without-gnome
+      - --without-gtk4
+      - --disable-static
+    cleanup:
+      - /libexec
+      - /share/dbus-1
+      - /share/locale
+    sources:
+      - type: git
+        url: https://github.com/NetworkManager/NetworkManager-openvpn.git
+        tag: 1.12.5
+        commit: d03d6a636866e9be9fbec7977ef377c191fb2988
+
+  - python3-cffi.json
+
+  - name: eovpn
+    buildsystem: meson
+    config-opts:
+      - -Dopenvpn3=false
+    sources:
+      # Upstream CI builds the current checkout. The Flathub submission
+      # replaces this with the signed release archive and SHA-256.
+      # CI بالادستی Checkout فعلی را می‌سازد؛ Flathub آن را با آرشیو
+      # امضاشده جایگزین می‌کند.
+      - type: dir
+        path: ../../

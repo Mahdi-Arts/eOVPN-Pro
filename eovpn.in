@@ -1,42 +1,54 @@
 #!/usr/bin/env python3
+"""Installed launcher for eOVPN-Pro / راه‌انداز نصب‌شده eOVPN-Pro."""
 
-import sys
-import os
-import locale
 import gettext
+import locale
+import logging
+import os
+import sys
 
-sys.path.insert(1, '@PYTHON_DIR@')
-pkgdatadir = '@PKG_DATADIR@'
-localedir = '@LOCALE_DIR@'
+sys.path.insert(1, "@PYTHON_DIR@")
+pkgdatadir = "@PKG_DATADIR@"
+localedir = "@LOCALE_DIR@"
 
 from gi.repository import Gio
 
-import logging
+APP_ID = "io.github.Mahdi_Arts.eOVPN_Pro"
+RESOURCE_NAME = APP_ID + ".gresource"
 
-from eovpn.application import launch_eovpn
 
-if os.getenv("EOVPN_DEBUG") is not None:
-    logging.basicConfig(level=os.getenv("EOVPN_DEBUG"), format='%(levelname)s:%(name)s.py:%(funcName)s:%(message)s')
+def configure_language() -> None:
+    """Applies an explicit language without overriding system mode / اعمال زبان صریح بدون تغییر حالت سیستم."""
+    try:
+        language = Gio.Settings.new(APP_ID).get_string("language")
+    except Exception:
+        language = "system"
+    if language and language != "system":
+        os.environ["LANGUAGE"] = language
+
+
+def main() -> int:
+    """Registers translations/resources and starts GTK / ثبت ترجمه و منابع و اجرای GTK."""
+    configure_language()
+    locale.bindtextdomain("eovpn", localedir)
+    locale.textdomain("eovpn")
+    gettext.bindtextdomain("eovpn", localedir)
+    gettext.textdomain("eovpn")
+
+    debug_level = os.getenv("EOVPN_DEBUG", "").upper()
+    if debug_level in {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"}:
+        logging.basicConfig(
+            level=debug_level,
+            format="%(levelname)s:%(name)s:%(funcName)s:%(message)s",
+        )
+
+    resource = Gio.resource_load(os.path.join(pkgdatadir, RESOURCE_NAME))
+    Gio.resources_register(resource)
+
+    from eovpn.application import launch_eovpn
+
+    return launch_eovpn()
 
 
 if __name__ == "__main__":
-
-    try:
-        settings = Gio.Settings.new("com.github.mahdi-arts.eovpn-pro")
-        lang = settings.get_string("language")
-    except Exception:
-        lang = "en"
-
-    if lang:
-        os.environ["LANGUAGE"] = lang
-
-    locale.bindtextdomain('eovpn', localedir)
-    locale.textdomain('eovpn')
-    gettext.bindtextdomain('eovpn', localedir)
-    gettext.textdomain('eovpn')
-
-    resource = Gio.resource_load(os.path.join(pkgdatadir, 'com.github.mahdi-arts.eovpn-pro.gresource'))
-    Gio.Resource._register(resource)
-    
-    exit_status = launch_eovpn()
-    sys.exit(exit_status)
+    sys.exit(main())

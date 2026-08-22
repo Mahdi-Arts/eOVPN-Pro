@@ -1,681 +1,385 @@
+// clang-format off
 /*
- * eOVPN-Pro OpenVPN 3 Linux Native C / D-Bus Binding
- * لایه بایندینگ بومی C جهت تعامل با D-Bus و سرویس OpenVPN 3 Linux در eOVPN-Pro
+ * eOVPN-Pro scoped OpenVPN 3 Linux binding.
+ * بایندینگ محدودشده OpenVPN 3 Linux برای eOVPN-Pro.
+ *
+ * The binding keeps exactly one explicit session proxy and uses finite D-Bus
+ * timeouts. It never enumerates or disconnects sessions owned by other tools.
+ * این بایندینگ فقط یک نشست صریح را نگه می‌دارد، تایم‌اوت محدود دارد و
+ * هرگز
+ * نشست‌های متعلق به ابزارهای دیگر را فهرست یا قطع
+ * نمی‌کند.
  */
+// clang-format on
 
 #define G_LOG_DOMAIN "eovpn"
+#define EOVPN_DBUS_TIMEOUT_MS 10000
 
-#include <stdio.h>
-#include <stdbool.h>
 #include <gio/gio.h>
 #include <glib.h>
-#include "openvpn3.h"
+#include <stdbool.h>
+
 #include "enums.h"
+#include "openvpn3.h"
 
-static GDBusProxy *UniqueSession = NULL;
+static GDBusProxy *unique_session = NULL;
 
-GDBusProxy *
-_get_session_proxy (void)
+static GDBusProxy *
+new_proxy (const char *bus_name,
+           const char *object_path,
+           const char *interface_name,
+           GError **error)
 {
-    return UniqueSession;
+    return g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SYSTEM,
+                                          G_DBUS_PROXY_FLAGS_NONE,
+                                          NULL,
+                                          bus_name,
+                                          object_path,
+                                          interface_name,
+                                          NULL,
+                                          error);
 }
 
-GVariantIter *
-_get_all_sessions (void)
+static GVariant *
+call_proxy (GDBusProxy *proxy,
+            const char *method,
+            GVariant *parameters,
+            GError **error)
 {
-    GError *error = NULL;
-    GDBusProxy *sessions_proxy = g_dbus_proxy_new_for_bus_sync (
-        G_BUS_TYPE_SYSTEM,
-        G_DBUS_PROXY_FLAGS_NONE,
-        NULL,
-        "net.openvpn.v3.sessions",
-        "/net/openvpn/v3/sessions",
-        "net.openvpn.v3.sessions",
-        NULL,
-        &error);
-
-    if (error != NULL)
-        {
-            g_warning ("%s:%d -> %s", __FUNCTION__, __LINE__, error->message);
-            g_error_free (error);
-            return NULL;
-        }
-
-    error = NULL;
-    GVariant *available_sessions = g_dbus_proxy_call_sync (
-        sessions_proxy,
-        "FetchAvailableSessions",
-        g_variant_new ("()"),
-        G_DBUS_CALL_FLAGS_NONE,
-        -1,
-        NULL,
-        &error);
-
-    g_object_unref (sessions_proxy);
-
-    if (error != NULL)
-        {
-            g_warning ("%s:%d -> %s", __FUNCTION__, __LINE__, error->message);
-            g_error_free (error);
-            return NULL;
-        }
-
-    GVariant *active_sessions = g_variant_get_child_value (available_sessions, 0);
-    GVariantIter *iter = g_variant_iter_new (active_sessions);
-    g_variant_unref (active_sessions);
-    g_variant_unref (available_sessions);
-    return iter;
+    if (proxy == NULL)
+        return NULL;
+    return g_dbus_proxy_call_sync (proxy,
+                                   method,
+                                   parameters,
+                                   G_DBUS_CALL_FLAGS_NONE,
+                                   EOVPN_DBUS_TIMEOUT_MS,
+                                   NULL,
+                                   error);
 }
 
-int
-get_connection_status (void)
+static gboolean
+log_error (const char *operation, GError *error)
 {
-    GVariantIter *iter = _get_all_sessions ();
-    gchar *path = NULL;
-
-    if (iter == NULL)
-        return -1;
-
-    while (g_variant_iter_next (iter, "o", &path))
-        {
-            GError *error = NULL;
-            GDBusProxy *sessions_proxy = g_dbus_proxy_new_for_bus_sync (
-                G_BUS_TYPE_SYSTEM,
-                G_DBUS_PROXY_FLAGS_NONE,
-                NULL,
-                "net.openvpn.v3.sessions",
-                path,
-                "org.freedesktop.DBus.Properties",
-                NULL,
-                &error);
-            g_free (path);
-
-            if (error != NULL)
-                {
-                    g_warning ("%s:%d -> %s", __FUNCTION__, __LINE__, error->message);
-                    g_error_free (error);
-                    continue;
-                }
-
-            error = NULL;
-            GVariant *status = g_dbus_proxy_call_sync (
-                sessions_proxy,
-                "Get",
-                g_variant_new ("(ss)", "net.openvpn.v3.sessions", "status"),
-                G_DBUS_CALL_FLAGS_NONE,
-                -1,
-                NULL,
-                &error);
-
-            g_object_unref (sessions_proxy);
-
-            if (error != NULL)
-                {
-                    g_warning ("%s:%d -> %s", __FUNCTION__, __LINE__, error->message);
-                    g_error_free (error);
-                    continue;
-                }
-
-            GVariant *v = NULL;
-            guint16 major = 0;
-            guint16 minor = 0;
-            gchar *status_str = NULL;
-
-            g_variant_get (status, "(v)", &v);
-            g_variant_get (v, "(uus)", &major, &minor, &status_str);
-            g_debug ("OpenVPN3 Status: %u %u %s", major, minor, status_str);
-
-            g_free (status_str);
-            g_variant_unref (v);
-            g_variant_unref (status);
-
-            if ((major == MAJOR_CONNECTION) &&
-                ((minor == MINOR_CONN_CONNECTED) || (minor == MINOR_CONN_PAUSED)))
-                {
-                    g_variant_iter_free (iter);
-                    return true;
-                }
-        }
-
-    g_variant_iter_free (iter);
-    return false;
-}
-
-void
-disconnect_all_sessions (void)
-{
-    GVariantIter *iter = _get_all_sessions ();
-    gchar *path = NULL;
-
-    if (iter == NULL)
-        return;
-
-    while (g_variant_iter_next (iter, "o", &path))
-        {
-            GError *error = NULL;
-            GDBusProxy *sessions_proxy = g_dbus_proxy_new_for_bus_sync (
-                G_BUS_TYPE_SYSTEM,
-                G_DBUS_PROXY_FLAGS_NONE,
-                NULL,
-                "net.openvpn.v3.sessions",
-                path,
-                "org.freedesktop.DBus.Properties",
-                NULL,
-                &error);
-
-            if (error != NULL)
-                {
-                    g_warning ("%s:%d -> %s", __FUNCTION__, __LINE__, error->message);
-                    g_error_free (error);
-                    g_free (path);
-                    continue;
-                }
-
-            error = NULL;
-            GVariant *status = g_dbus_proxy_call_sync (
-                sessions_proxy,
-                "Get",
-                g_variant_new ("(ss)", "net.openvpn.v3.sessions", "status"),
-                G_DBUS_CALL_FLAGS_NONE,
-                -1,
-                NULL,
-                &error);
-
-            g_object_unref (sessions_proxy);
-
-            if (error != NULL)
-                {
-                    g_warning ("%s:%d -> %s", __FUNCTION__, __LINE__, error->message);
-                    g_error_free (error);
-                    g_free (path);
-                    continue;
-                }
-
-            GVariant *v = NULL;
-            guint16 major = 0;
-            guint16 minor = 0;
-            gchar *status_str = NULL;
-
-            g_variant_get (status, "(v)", &v);
-            g_variant_get (v, "(uus)", &major, &minor, &status_str);
-
-            g_free (status_str);
-            g_variant_unref (v);
-            g_variant_unref (status);
-
-            if (major == MAJOR_CONNECTION)
-                {
-                    error = NULL;
-                    GDBusProxy *proxy = g_dbus_proxy_new_for_bus_sync (
-                        G_BUS_TYPE_SYSTEM,
-                        G_DBUS_PROXY_FLAGS_NONE,
-                        NULL,
-                        "net.openvpn.v3.sessions",
-                        path,
-                        "net.openvpn.v3.sessions",
-                        NULL,
-                        &error);
-
-                    if (proxy != NULL)
-                        {
-                            g_dbus_proxy_call_sync (
-                                proxy, "Disconnect", g_variant_new ("()"),
-                                G_DBUS_PROXY_FLAGS_NONE, -1, NULL, NULL);
-                            g_object_unref (proxy);
-                            g_debug ("%s disconnected!", path);
-                        }
-                }
-            g_free (path);
-        }
-
-    g_variant_iter_free (iter);
+    if (error == NULL)
+        return FALSE;
+    g_warning ("OpenVPN 3 %s failed: %s", operation, error->message);
+    g_error_free (error);
+    return TRUE;
 }
 
 int
 get_specific_connection_status (char *session_path)
 {
-    if (session_path == NULL)
-        return false;
-
+    GDBusProxy *proxy;
+    GVariant *reply;
+    GVariant *status_value = NULL;
     GError *error = NULL;
-    GDBusProxy *sessions_proxy = g_dbus_proxy_new_for_bus_sync (
-        G_BUS_TYPE_SYSTEM,
-        G_DBUS_PROXY_FLAGS_NONE,
-        NULL,
-        "net.openvpn.v3.sessions",
-        session_path,
-        "org.freedesktop.DBus.Properties",
-        NULL,
-        &error);
+    guint32 major = 0;
+    guint32 minor = 0;
+    char *status_text = NULL;
+    gboolean connected = FALSE;
 
-    if (error != NULL)
-        {
-            g_warning ("%s:%d -> %s", __FUNCTION__, __LINE__, error->message);
-            g_error_free (error);
-            return false;
-        }
+    if (session_path == NULL)
+        return FALSE;
 
-    GVariant *status = g_dbus_proxy_call_sync (
-        sessions_proxy,
-        "Get",
-        g_variant_new ("(ss)", "net.openvpn.v3.sessions", "status"),
-        G_DBUS_CALL_FLAGS_NONE,
-        -1,
-        NULL,
-        NULL);
-    g_object_unref (sessions_proxy);
+    proxy = new_proxy ("net.openvpn.v3.sessions",
+                       session_path,
+                       "org.freedesktop.DBus.Properties",
+                       &error);
+    if (log_error ("status proxy", error))
+        return FALSE;
 
-    if (status == NULL)
-        return false;
+    reply =
+        call_proxy (proxy,
+                    "Get",
+                    g_variant_new ("(ss)", "net.openvpn.v3.sessions", "status"),
+                    &error);
+    g_object_unref (proxy);
+    if (log_error ("status lookup", error) || reply == NULL)
+        return FALSE;
 
-    GVariant *v = NULL;
-    guint16 major = 0;
-    guint16 minor = 0;
-    gchar *status_str = NULL;
+    g_variant_get (reply, "(v)", &status_value);
+    g_variant_get (status_value, "(uus)", &major, &minor, &status_text);
+    connected = major == MAJOR_CONNECTION &&
+                (minor == MINOR_CONN_CONNECTED || minor == MINOR_CONN_PAUSED);
 
-    g_variant_get (status, "(v)", &v);
-    g_variant_get (v, "(uus)", &major, &minor, &status_str);
-
-    bool is_connected = (major == MAJOR_CONNECTION && minor == MINOR_CONN_CONNECTED);
-    g_free (status_str);
-    g_variant_unref (v);
-    g_variant_unref (status);
-
-    return is_connected;
+    g_free (status_text);
+    g_variant_unref (status_value);
+    g_variant_unref (reply);
+    return connected;
 }
 
 char *
 get_version (void)
 {
+    GDBusProxy *proxy;
+    GVariant *reply;
+    GVariant *version_value = NULL;
+    const char *version_text = NULL;
     GError *error = NULL;
-    GDBusProxy *proxy = g_dbus_proxy_new_for_bus_sync (
-        G_BUS_TYPE_SYSTEM,
-        G_DBUS_PROXY_FLAGS_NONE,
-        NULL,
-        "net.openvpn.v3.configuration",
-        "/net/openvpn/v3/configuration",
-        "org.freedesktop.DBus.Properties",
-        NULL,
-        &error);
+    char *result = NULL;
 
-    if (error != NULL)
-        {
-            g_warning ("%s:%d -> %s", __FUNCTION__, __LINE__, error->message);
-            g_error_free (error);
-            return NULL;
-        }
+    proxy = new_proxy ("net.openvpn.v3.configuration",
+                       "/net/openvpn/v3/configuration",
+                       "org.freedesktop.DBus.Properties",
+                       &error);
+    if (log_error ("version proxy", error))
+        return NULL;
 
-    error = NULL;
-    GVariant *version = g_dbus_proxy_call_sync (
+    reply = call_proxy (
         proxy,
         "Get",
         g_variant_new ("(ss)", "net.openvpn.v3.configuration", "version"),
-        G_DBUS_PROXY_FLAGS_NONE,
-        -1,
-        NULL,
         &error);
     g_object_unref (proxy);
+    if (log_error ("version lookup", error) || reply == NULL)
+        return NULL;
 
-    if (error != NULL)
-        {
-            g_warning ("%s:%d -> %s", __FUNCTION__, __LINE__, error->message);
-            g_error_free (error);
-            return NULL;
-        }
-
-    GVariant *version_v = NULL;
-    const gchar *version_str = NULL;
-    g_variant_get (version, "(v)", &version_v);
-    g_variant_get (version_v, "s", &version_str);
-    char *result = g_strdup (version_str);
-    g_variant_unref (version_v);
-    g_variant_unref (version);
+    g_variant_get (reply, "(v)", &version_value);
+    g_variant_get (version_value, "&s", &version_text);
+    result = version_text != NULL ? g_strdup (version_text) : NULL;
+    g_variant_unref (version_value);
+    g_variant_unref (reply);
     return result;
 }
 
 char *
 import_config (char *name, char *config_str)
 {
+    GDBusProxy *proxy;
+    GVariant *reply;
+    GError *error = NULL;
+    const char *object_path = NULL;
+    char *result = NULL;
+
     if (name == NULL || config_str == NULL)
         return NULL;
 
-    GError *error = NULL;
-    GDBusProxy *import_proxy = g_dbus_proxy_new_for_bus_sync (
-        G_BUS_TYPE_SYSTEM,
-        G_DBUS_PROXY_FLAGS_NONE,
-        NULL,
-        "net.openvpn.v3.configuration",
-        "/net/openvpn/v3/configuration",
-        "net.openvpn.v3.configuration",
-        NULL,
-        &error);
+    proxy = new_proxy ("net.openvpn.v3.configuration",
+                       "/net/openvpn/v3/configuration",
+                       "net.openvpn.v3.configuration",
+                       &error);
+    if (log_error ("configuration proxy", error))
+        return NULL;
 
-    if (error != NULL)
-        {
-            g_warning ("%s:%d -> %s", __FUNCTION__, __LINE__, error->message);
-            g_error_free (error);
-            return NULL;
-        }
+    /* single_use=true and persistent=false keep the profile memory-only.
+     * single_use=true و persistent=false پروفایل را فقط در حافظه نگه
+     * می‌دارند. */
+    reply = call_proxy (proxy,
+                        "net.openvpn.v3.configuration.Import",
+                        g_variant_new ("(ssbb)", name, config_str, TRUE, FALSE),
+                        &error);
+    g_object_unref (proxy);
+    if (log_error ("configuration import", error) || reply == NULL)
+        return NULL;
 
-    GVariant *params = g_variant_new ("(ssbb)", name, config_str, TRUE, FALSE);
-    error = NULL;
-    GVariant *result = g_dbus_proxy_call_sync (
-        import_proxy,
-        "net.openvpn.v3.configuration.Import",
-        params,
-        G_DBUS_PROXY_FLAGS_NONE,
-        -1,
-        NULL,
-        &error);
-    g_object_unref (import_proxy);
-
-    if (error != NULL)
-        {
-            g_warning ("%s:%d -> %s", __FUNCTION__, __LINE__, error->message);
-            g_error_free (error);
-            return NULL;
-        }
-
-    const gchar *config_object = NULL;
-    g_variant_get (result, "(o)", &config_object);
-    char *ret = g_strdup (config_object);
-    g_variant_unref (result);
-    return ret;
+    g_variant_get (reply, "(&o)", &object_path);
+    result = object_path != NULL ? g_strdup (object_path) : NULL;
+    g_variant_unref (reply);
+    return result;
 }
 
 char *
 prepare_tunnel (char *config_object)
 {
+    GDBusProxy *proxy;
+    GVariant *reply;
+    GError *error = NULL;
+    const char *object_path = NULL;
+    char *result = NULL;
+
     if (config_object == NULL)
         return NULL;
 
-    GError *error = NULL;
-    GDBusProxy *sessions_proxy = g_dbus_proxy_new_for_bus_sync (
-        G_BUS_TYPE_SYSTEM,
-        G_DBUS_PROXY_FLAGS_NONE,
-        NULL,
-        "net.openvpn.v3.sessions",
-        "/net/openvpn/v3/sessions",
-        "net.openvpn.v3.sessions",
-        NULL,
-        &error);
+    proxy = new_proxy ("net.openvpn.v3.sessions",
+                       "/net/openvpn/v3/sessions",
+                       "net.openvpn.v3.sessions",
+                       &error);
+    if (log_error ("session manager proxy", error))
+        return NULL;
 
-    if (error != NULL)
-        {
-            g_warning ("%s:%d -> %s", __FUNCTION__, __LINE__, error->message);
-            g_error_free (error);
-            return NULL;
-        }
+    reply = call_proxy (proxy,
+                        "net.openvpn.v3.sessions.NewTunnel",
+                        g_variant_new ("(o)", config_object),
+                        &error);
+    g_object_unref (proxy);
+    if (log_error ("tunnel preparation", error) || reply == NULL)
+        return NULL;
 
-    GVariant *params = g_variant_new ("(o)", (gchar *) config_object);
-    error = NULL;
-    GVariant *result = g_dbus_proxy_call_sync (
-        sessions_proxy,
-        "net.openvpn.v3.sessions.NewTunnel",
-        params,
-        G_DBUS_PROXY_FLAGS_NONE,
-        -1,
-        NULL,
-        &error);
-    g_object_unref (sessions_proxy);
-
-    if (error != NULL)
-        {
-            g_warning ("%s:%d -> %s", __FUNCTION__, __LINE__, error->message);
-            g_error_free (error);
-            return NULL;
-        }
-
-    const gchar *session_object = NULL;
-    g_variant_get (result, "(o)", &session_object);
-    char *ret = g_strdup (session_object);
-    g_variant_unref (result);
-    return ret;
+    g_variant_get (reply, "(&o)", &object_path);
+    result = object_path != NULL ? g_strdup (object_path) : NULL;
+    g_variant_unref (reply);
+    return result;
 }
 
 void
 init_unique_session (char *session_object)
 {
+    GDBusProxy *proxy;
+    GError *error = NULL;
+
     if (session_object == NULL)
         return;
-
-    GError *error = NULL;
-    GDBusProxy *unique_session = g_dbus_proxy_new_for_bus_sync (
-        G_BUS_TYPE_SYSTEM,
-        G_DBUS_PROXY_FLAGS_NONE,
-        NULL,
-        "net.openvpn.v3.sessions",
-        (gchar *) session_object,
-        "net.openvpn.v3.sessions",
-        NULL,
-        &error);
-
-    if (error != NULL)
-        {
-            g_warning ("%s:%d -> %s", __FUNCTION__, __LINE__, error->message);
-            g_error_free (error);
-            return;
-        }
-
-    if (UniqueSession != NULL)
-        g_object_unref (UniqueSession);
-
-    UniqueSession = unique_session;
+    proxy = new_proxy ("net.openvpn.v3.sessions",
+                       session_object,
+                       "net.openvpn.v3.sessions",
+                       &error);
+    if (log_error ("session proxy", error))
+        return;
+    g_clear_object (&unique_session);
+    unique_session = proxy;
 }
 
-void
+int
 set_dco (char *session_object, int state)
 {
+    GDBusProxy *proxy;
+    GVariant *reply;
+    GError *error = NULL;
+
     if (session_object == NULL)
-        return;
+        return FALSE;
+    proxy = new_proxy ("net.openvpn.v3.sessions",
+                       session_object,
+                       "org.freedesktop.DBus.Properties",
+                       &error);
+    if (log_error ("DCO proxy", error))
+        return FALSE;
 
-    GError *error = NULL;
-    GVariant *params = g_variant_new (
-        "(ssv)", "net.openvpn.v3.sessions", "dco", g_variant_new ("b", state));
-
-    GDBusProxy *sessions_proxy = g_dbus_proxy_new_for_bus_sync (
-        G_BUS_TYPE_SYSTEM,
-        G_DBUS_PROXY_FLAGS_NONE,
-        NULL,
-        "net.openvpn.v3.sessions",
-        (gchar *) session_object,
-        "org.freedesktop.DBus.Properties",
-        NULL,
-        &error);
-
-    if (error != NULL)
-        {
-            g_warning ("%s:%d -> %s", __FUNCTION__, __LINE__, error->message);
-            g_error_free (error);
-            return;
-        }
-
-    g_dbus_proxy_call_sync (
-        sessions_proxy, "Set", params, G_DBUS_PROXY_FLAGS_NONE, -1, NULL, NULL);
-    g_object_unref (sessions_proxy);
-}
-
-void
-set_receive_log_events (char *session_object, int set_to)
-{
-    if (session_object == NULL)
-        return;
-
-    GError *error = NULL;
-    GVariant *params = g_variant_new (
-        "(ssv)", "net.openvpn.v3.sessions", "receive_log_events", g_variant_new ("b", set_to));
-
-    GDBusProxy *sessions_proxy = g_dbus_proxy_new_for_bus_sync (
-        G_BUS_TYPE_SYSTEM,
-        G_DBUS_PROXY_FLAGS_NONE,
-        NULL,
-        "net.openvpn.v3.sessions",
-        (gchar *) session_object,
-        "org.freedesktop.DBus.Properties",
-        NULL,
-        &error);
-
-    if (error != NULL)
-        {
-            g_warning ("%s:%d -> %s", __FUNCTION__, __LINE__, error->message);
-            g_error_free (error);
-            return;
-        }
-
-    g_dbus_proxy_call_sync (
-        sessions_proxy, "Set", params, G_DBUS_PROXY_FLAGS_NONE, -1, NULL, NULL);
-    g_object_unref (sessions_proxy);
-}
-
-void
-set_log_forward (void)
-{
-    if (UniqueSession == NULL)
-        return;
-
-    GError *error = NULL;
-    g_dbus_proxy_call_sync (
-        UniqueSession,
-        "net.openvpn.v3.sessions.LogForward",
-        g_variant_new ("(b)", true),
-        G_DBUS_PROXY_FLAGS_NONE,
-        -1,
-        NULL,
-        &error);
-
-    if (error != NULL)
-        {
-            g_warning ("%s:%d -> %s", __FUNCTION__, __LINE__, error->message);
-            g_error_free (error);
-        }
+    reply = call_proxy (proxy,
+                        "Set",
+                        g_variant_new ("(ssv)",
+                                       "net.openvpn.v3.sessions",
+                                       "dco",
+                                       g_variant_new_boolean (state != 0)),
+                        &error);
+    g_object_unref (proxy);
+    if (log_error ("DCO update", error) || reply == NULL)
+        return FALSE;
+    g_variant_unref (reply);
+    return TRUE;
 }
 
 char *
 is_ready_to_connect (void)
 {
-    if (UniqueSession == NULL)
-        return g_strdup ("Session not initialized");
-
+    GVariant *reply;
     GError *error = NULL;
-    g_dbus_proxy_call_sync (
-        UniqueSession,
-        "net.openvpn.v3.sessions.Ready",
-        NULL,
-        G_DBUS_PROXY_FLAGS_NONE,
-        -1,
-        NULL,
-        &error);
+    char *message;
 
+    if (unique_session == NULL)
+        return g_strdup ("Session is not initialized");
+    reply = call_proxy (unique_session,
+                        "net.openvpn.v3.sessions.Ready",
+                        g_variant_new ("()"),
+                        &error);
     if (error != NULL)
         {
-            char *error_msg = g_strdup (error->message);
+            message = g_strdup (error->message);
             g_error_free (error);
-            return error_msg;
+            return message;
         }
-
+    if (reply != NULL)
+        g_variant_unref (reply);
     return NULL;
 }
 
-void
+int
 send_auth (char *session_object, int type, int group, int id, char *value)
 {
-    if (session_object == NULL || value == NULL)
-        return;
-
+    GVariant *reply;
     GError *error = NULL;
-    GDBusProxy *unique_session = g_dbus_proxy_new_for_bus_sync (
-        G_BUS_TYPE_SYSTEM,
-        G_DBUS_PROXY_FLAGS_NONE,
-        NULL,
-        "net.openvpn.v3.sessions",
-        (gchar *) session_object,
-        "net.openvpn.v3.sessions",
-        NULL,
-        &error);
 
-    if (error != NULL)
-        {
-            g_warning ("%s:%d -> %s", __FUNCTION__, __LINE__, error->message);
-            g_error_free (error);
-            return;
-        }
+    if (session_object == NULL || value == NULL)
+        return FALSE;
+    init_unique_session (session_object);
+    if (unique_session == NULL)
+        return FALSE;
 
-    if (UniqueSession != NULL)
-        g_object_unref (UniqueSession);
-
-    UniqueSession = unique_session;
-
-    GVariant *params = g_variant_new ("(uuus)", type, group, id, value);
-    g_dbus_proxy_call_sync (
-        UniqueSession, "UserInputProvide", params, G_DBUS_PROXY_FLAGS_NONE, -1, NULL, NULL);
+    reply = call_proxy (unique_session,
+                        "UserInputProvide",
+                        g_variant_new ("(uuus)", type, group, id, value),
+                        &error);
+    if (log_error ("credential submission", error) || reply == NULL)
+        return FALSE;
+    g_variant_unref (reply);
+    return TRUE;
 }
 
-void
+int
 connect_vpn (void)
 {
-    if (UniqueSession == NULL)
-        return;
+    GVariant *reply;
+    GError *error = NULL;
 
-    g_dbus_proxy_call_sync (
-        UniqueSession, "Connect", g_variant_new ("()"), G_DBUS_PROXY_FLAGS_NONE, -1, NULL, NULL);
+    if (unique_session == NULL)
+        return FALSE;
+    reply =
+        call_proxy (unique_session, "Connect", g_variant_new ("()"), &error);
+    if (log_error ("connect", error) || reply == NULL)
+        return FALSE;
+    g_variant_unref (reply);
+    return TRUE;
 }
 
-void
+int
 disconnect_vpn (void)
 {
-    if (UniqueSession == NULL)
-        return;
+    GVariant *reply;
+    GError *error = NULL;
+    gboolean success;
 
-    g_dbus_proxy_call (
-        UniqueSession, "Disconnect", g_variant_new ("()"), G_DBUS_PROXY_FLAGS_NONE, -1, NULL, NULL, NULL);
-    g_object_unref (UniqueSession);
-    UniqueSession = NULL;
+    if (unique_session == NULL)
+        return FALSE;
+    reply =
+        call_proxy (unique_session, "Disconnect", g_variant_new ("()"), &error);
+    success = error == NULL && reply != NULL;
+    log_error ("disconnect", error);
+    if (reply != NULL)
+        g_variant_unref (reply);
+    g_clear_object (&unique_session);
+    return success;
 }
 
-void
+int
 pause_vpn (char *reason)
 {
-    if (UniqueSession == NULL || reason == NULL)
-        return;
+    GVariant *reply;
+    GError *error = NULL;
 
-    g_dbus_proxy_call_sync (
-        UniqueSession, "Pause", g_variant_new ("(s)", reason), G_DBUS_PROXY_FLAGS_NONE, -1, NULL, NULL);
+    if (unique_session == NULL || reason == NULL)
+        return FALSE;
+    reply = call_proxy (
+        unique_session, "Pause", g_variant_new ("(s)", reason), &error);
+    if (log_error ("pause", error) || reply == NULL)
+        return FALSE;
+    g_variant_unref (reply);
+    return TRUE;
 }
 
-void
+int
 resume_vpn (void)
 {
-    if (UniqueSession == NULL)
-        return;
+    GVariant *reply;
+    GError *error = NULL;
 
-    g_dbus_proxy_call_sync (
-        UniqueSession, "Resume", g_variant_new ("()"), G_DBUS_PROXY_FLAGS_NONE, -1, NULL, NULL);
+    if (unique_session == NULL)
+        return FALSE;
+    reply = call_proxy (unique_session, "Resume", g_variant_new ("()"), &error);
+    if (log_error ("resume", error) || reply == NULL)
+        return FALSE;
+    g_variant_unref (reply);
+    return TRUE;
 }
 
 char *
 p_get_version (void)
 {
-    int max_tries = 6;
-    while (max_tries != 0)
-        {
-            char *ver = get_version ();
-            if (ver != NULL)
-                return ver;
-            max_tries--;
-        }
-    return NULL;
+    return get_version ();
 }
 
-int
-p_get_connection_status (void)
+void
+eovpn_free (char *value)
 {
-    int max_tries = 6;
-    while (max_tries != 0)
-        {
-            int status = get_connection_status ();
-            if (status != -1)
-                return status;
-            max_tries--;
-        }
-    return false;
+    g_free (value);
 }

@@ -1,33 +1,38 @@
-app_resources = gnome.compile_resources(project_id,
-    'eovpn.gresource.xml',
-    gresource_bundle: true,
-    install: true,
-    install_dir: pkg_datadir
+# Compiled application resources / منابع کامپایل‌شده برنامه
+app_resources = gnome.compile_resources(
+  project_id,
+  'eovpn.gresource.xml',
+  gresource_bundle: true,
+  install: true,
+  install_dir: pkg_datadir,
 )
-
 
 install_data(
-    'icons/'+project_id+'.svg',
-    install_dir: join_paths(icondir, 'scalable/apps')
+  'icons/' + project_id + '.svg',
+  install_dir: icondir / 'scalable/apps',
 )
 
 i18n.merge_file(
-    input: project_id + '.desktop',
-    output: project_id + '.desktop',
-    po_dir: '../po',
-    type: 'desktop',
-    install: true,
-    install_dir: join_paths(datadir, 'applications')
+  input: project_id + '.desktop',
+  output: project_id + '.desktop',
+  po_dir: '../po',
+  type: 'desktop',
+  install: true,
+  install_dir: datadir / 'applications',
 )
-
 
 i18n.merge_file(
-    input: project_id + '.metainfo.xml',
-    output: project_id + '.metainfo.xml',
-    po_dir: '../po',
-    install: true,
-    install_dir: join_paths(datadir, 'metainfo')
+  input: project_id + '.metainfo.xml',
+  output: project_id + '.metainfo.xml',
+  po_dir: '../po',
+  install: true,
+  install_dir: datadir / 'metainfo',
 )
 
-settings_schemas = [ project_id + '.gschema.xml' ]
+# Current schema plus read-only migration schemas / اسکیمای فعلی همراه اسکیماهای مهاجرت
+settings_schemas = [
+  project_id + '.gschema.xml',
+  'com.github.mahdi-arts.eovpn-pro.gschema.xml',
+  'com.github.jkotra.eovpn.gschema.xml',
+]
 install_data(settings_schemas, install_dir: schemas_dir)

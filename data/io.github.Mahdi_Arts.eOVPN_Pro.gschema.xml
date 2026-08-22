@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  eOVPN-Pro GSettings schema / اسکیمای GSettings برنامه eOVPN-Pro
+  Keep user-resettable keys aligned with eovpn.eovpn_base.Settings.
+  کلیدهای قابل بازنشانی باید با کلاس Settings هماهنگ بمانند.
+-->
+<schemalist>
+  <schema path="/io/github/Mahdi_Arts/eOVPN_Pro/" id="io.github.Mahdi_Arts.eOVPN_Pro">
+    <key type="b" name="notifications">
+      <default>true</default>
+      <summary>Desktop notifications / اعلان‌های دسکتاپ</summary>
+    </key>
+    <key type="s" name="manager">
+      <default>"networkmanager"</default>
+      <summary>Selected connection backend / بک‌اند اتصال انتخاب‌شده</summary>
+    </key>
+    <key type="b" name="req-auth">
+      <default>false</default>
+      <summary>Use saved authentication / استفاده از احراز هویت ذخیره‌شده</summary>
+    </key>
+    <key type="s" name="ca">
+      <default>"null"</default>
+      <summary>Optional CA path / مسیر اختیاری گواهی CA</summary>
+    </key>
+    <key type="s" name="remote">
+      <default>"null"</default>
+      <summary>HTTPS or local configuration source / منبع HTTPS یا محلی کانفیگ</summary>
+    </key>
+    <key type="s" name="auth-user">
+      <default>"null"</default>
+      <summary>Authentication username / نام کاربری احراز هویت</summary>
+    </key>
+    <key type="s" name="nm-active-uuid">
+      <default>"null"</default>
+      <summary>Active managed NetworkManager UUID / شناسه اتصال فعال مدیریت‌شده</summary>
+    </key>
+    <key type="as" name="nm-owned-uuids">
+      <default>[]</default>
+      <summary>NetworkManager profiles owned by eOVPN / پروفایل‌های متعلق به eOVPN</summary>
+    </key>
+    <key type="s" name="openvpn3-session-path">
+      <default>"null"</default>
+      <summary>Owned OpenVPN 3 session path / مسیر نشست متعلق به OpenVPN 3</summary>
+    </key>
+    <key type="s" name="openvpn3-config-path">
+      <default>"null"</default>
+      <summary>Owned OpenVPN 3 configuration path / مسیر کانفیگ متعلق به OpenVPN 3</summary>
+    </key>
+    <key type="s" name="last-connected">
+      <default>"null"</default>
+      <summary>Last selected configuration / آخرین کانفیگ انتخاب‌شده</summary>
+    </key>
+    <key type="i" name="last-connected-cursor">
+      <default>-1</default>
+      <summary>Last selected list position / موقعیت آخرین انتخاب</summary>
+    </key>
+    <key type="b" name="show-flag">
+      <default>true</default>
+      <summary>Show country indicator / نمایش نشان کشور</summary>
+    </key>
+    <key type="b" name="public-ip-lookup">
+      <default>false</default>
+      <summary>Allow third-party public IP lookup / اجازه استعلام IP از سرویس ثالث</summary>
+    </key>
+    <key type="d" name="listbox-v-adjust">
+      <default>0</default>
+      <summary>Server list scroll position / موقعیت پیمایش فهرست سرورها</summary>
+    </key>
+    <key type="s" name="layout">
+      <default>"card-h"</default>
+      <summary>Main window layout / چیدمان پنجره اصلی</summary>
+    </key>
+    <key type="b" name="dark-theme">
+      <default>false</default>
+      <summary>Prefer dark appearance / ترجیح پوسته تیره</summary>
+    </key>
+    <key type="b" name="openvpn3-dco">
+      <default>true</default>
+      <summary>Enable OpenVPN 3 DCO / فعال‌سازی DCO در OpenVPN 3</summary>
+    </key>
+    <key type="b" name="auto-reconnect">
+      <default>false</default>
+      <summary>Reconnect after an unexpected drop / اتصال مجدد پس از قطعی ناخواسته</summary>
+    </key>
+    <key type="as" name="favorite-configs">
+      <default>[]</default>
+      <summary>Favorite configuration names / نام کانفیگ‌های محبوب</summary>
+    </key>
+    <key type="s" name="language">
+      <default>"system"</default>
+      <summary>Application language / زبان برنامه</summary>
+    </key>
+    <key type="b" name="migration-complete">
+      <default>false</default>
+      <summary>Legacy settings migration marker / نشانگر مهاجرت تنظیمات قدیمی</summary>
+    </key>
+  </schema>
+</schemalist>

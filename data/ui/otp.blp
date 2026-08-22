@@ -1,86 +1,47 @@
 using Gtk 4.0;
 
-Window OTpMainWindow {
-  Box MainBox {
+// Editable Blueprint source for otp.ui.
+// منبع قابل‌ویرایش Blueprint برای otp.ui.
+Window otp_window {
+  title: _("Authentication Challenge");
+  default-width: 440;
+  resizable: false;
+  modal: true;
+
+  Box {
     orientation: vertical;
-    valign: center;
-    halign: center;
-    margin-top: 36;
-    margin-start: 12;
-    margin-end: 12;
+    spacing: 12;
+    margin-top: 24;
+    margin-bottom: 24;
+    margin-start: 24;
+    margin-end: 24;
 
+    Image {
+      icon-name: "dialog-password-symbolic";
+      pixel-size: 40;
+      styles ["challenge-icon"]
+    }
     Label {
-      label: _("Please enter your 2FA / TOTP.");
-      margin-bottom: 12;
+      label: _("Additional verification is required");
+      styles ["title-3"]
     }
-
-    Box OTPBox {
-      orientation: horizontal;
-      vexpand: true;
-
-      Image {
-        icon-name: "security-high-symbolic";
-        margin-end: 12;
-        icon-size: large;
-      }
-
-      Separator {
-        margin-end: 8;
-      }
-
-      Entry O1 {
-        styles [
-          "otp-entry"
-        ]
-
-        xalign: 0.5;
-      }
-
-      Entry O2 {
-        styles [
-          "otp-entry"
-        ]
-
-        xalign: 0.5;
-      }
-
-      Entry O3 {
-        styles [
-          "otp-entry"
-        ]
-
-        xalign: 0.5;
-      }
-
-      Entry O4 {
-        styles [
-          "otp-entry"
-        ]
-
-        xalign: 0.5;
-      }
-
-      Entry O5 {
-        styles [
-          "otp-entry"
-        ]
-
-        xalign: 0.5;
-      }
-
-      Entry O6 {
-        styles [
-          "otp-entry"
-        ]
-
-        xalign: 0.5;
-      }
+    Label prompt_label {
+      label: _("Enter the one-time code or challenge response supplied by your VPN provider.");
+      wrap: true;
+      justify: center;
+      styles ["dim-label"]
     }
-
+    PasswordEntry otp_entry {
+      placeholder-text: _("Verification code");
+      show-peek-icon: true;
+      max-length: 64;
+      activates-default: true;
+    }
     Button submit {
-      margin-top: 24;
-      margin-bottom: 16;
-      label: 'Submit';
+      label: _("Verify");
+      sensitive: false;
+      receives-default: true;
+      styles ["suggested-action"]
     }
   }
 }

@@ -1,0 +1,22 @@
+---
+version: 2
+updates:
+  # Python QA/build dependencies / وابستگی‌های ساخت و کنترل کیفیت پایتون
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - security
+
+  # Pinned GitHub Actions / اکشن‌های Pinشده گیت‌هاب
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - ci

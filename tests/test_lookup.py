@@ -1,65 +1,67 @@
-"""
-eOVPN-Pro IP Lookup Unit Tests
-تست‌های واحد ماژول استعلام IP و موقعیت مکانی در eOVPN-Pro
-"""
+"""Privacy-preserving public IP lookup tests / تست استعلام IP با حفظ حریم خصوصی."""
 
 import unittest
-from unittest.mock import patch, MagicMock
-from eovpn.ip_lookup.lookup import Lookup
+from unittest.mock import patch
+
+from eovpn.ip_lookup.lookup import Lookup, _validated_country_code, _validated_ip
 
 
 class TestLookup(unittest.TestCase):
-    """
-    Unit tests for the Lookup class with mocked network responses.
-    تست‌های واحد برای اعتبارسنجی استعلام آدرس IP با پاسخ‌های شبیه‌سازی‌شده شبکه.
-    """
+    def test_value_validation(self):
+        self.assertEqual(_validated_ip("198.51.100.42"), "198.51.100.42")
+        self.assertEqual(_validated_ip("2001:db8::1"), "2001:db8::1")
+        self.assertIsNone(_validated_ip("not-an-ip"))
+        self.assertEqual(_validated_country_code("DE"), "de")
+        self.assertIsNone(_validated_country_code("DEU"))
+        self.assertIsNone(_validated_country_code("۱۲"))
 
-    @patch('urllib.request.urlopen')
-    def test_cloudflare_https_success(self, mock_urlopen):
-        mock_response = MagicMock()
-        mock_response.read.return_value = b"ip=198.51.100.42\nts=1600000000\nloc=DE\n"
-        mock_response.__enter__.return_value = mock_response
-        mock_urlopen.return_value = mock_response
-
+    def test_cloudflare_success(self):
         lookup = Lookup()
-        success = lookup.cloudflare_https()
-        self.assertTrue(success)
+        with patch.object(
+            lookup,
+            "_read",
+            return_value=b"ip=198.51.100.42\nts=1600000000\nloc=DE\n",
+        ):
+            self.assertTrue(lookup.cloudflare_https())
         self.assertEqual(lookup.ip, "198.51.100.42")
         self.assertEqual(lookup.country_code, "de")
 
-    @patch('urllib.request.urlopen')
-    def test_ipapi_co_success(self, mock_urlopen):
-        mock_response = MagicMock()
-        mock_response.read.return_value = (
-            b'{"ip": "203.0.113.10", "country_code": "FR", "country_name": "France"}'
-        )
-        mock_response.__enter__.return_value = mock_response
-        mock_urlopen.return_value = mock_response
-
+    def test_cloudflare_rejects_invalid_ip(self):
         lookup = Lookup()
-        success = lookup.ipapi_co()
-        self.assertTrue(success)
-        self.assertEqual(lookup.ip, "203.0.113.10")
+        with patch.object(lookup, "_read", return_value=b"ip=invalid\nloc=DE\n"):
+            self.assertFalse(lookup.cloudflare_https())
+
+    def test_ipapi_success_and_bounded_country_name(self):
+        lookup = Lookup()
+        payload = (
+            b'{"ip":"203.0.113.10","country_code":"FR","country_name":"France"}'
+        )
+        with patch.object(lookup, "_read", return_value=payload):
+            self.assertTrue(lookup.ipapi_co())
         self.assertEqual(lookup.country_code, "fr")
         self.assertEqual(lookup.country, "France")
 
-    @patch('urllib.request.urlopen')
-    def test_update_fallback(self, mock_urlopen):
-        # First call fails, second succeeds
-        fail_resp = MagicMock()
-        fail_resp.read.side_effect = Exception("Connection Timeout")
-
-        success_resp = MagicMock()
-        success_resp.read.return_value = b'{"ip": "1.2.3.4", "country_code": "SE", "country_name": "Sweden"}'
-        success_resp.__enter__.return_value = success_resp
-
-        mock_urlopen.side_effect = [Exception("Network error"), success_resp]
-
+    def test_ipify_clears_stale_country(self):
         lookup = Lookup()
-        result = lookup.update()
-        self.assertTrue(result)
-        self.assertEqual(lookup.ip, "1.2.3.4")
+        lookup.country_code = "de"
+        with patch.object(lookup, "_read", return_value=b'{"ip":"1.2.3.4"}'):
+            self.assertTrue(lookup.ipify_https())
+        self.assertIsNone(lookup.country_code)
+
+    def test_provider_fallback(self):
+        lookup = Lookup()
+        lookup.providers = (lambda: False, lambda: True)
+        self.assertTrue(lookup.update())
+
+    def test_all_providers_fail(self):
+        lookup = Lookup()
+
+        def fail():
+            raise OSError("offline")
+
+        lookup.providers = (fail, fail)
+        self.assertFalse(lookup.update())
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

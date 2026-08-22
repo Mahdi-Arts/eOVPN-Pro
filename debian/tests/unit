@@ -1,0 +1,4 @@
+#!/bin/sh
+# Debian autopkgtest entry point / نقطه ورود تست خودکار Debian
+set -eu
+python3 -m unittest discover -s tests -v

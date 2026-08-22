@@ -10,6 +10,7 @@ concurrent speed tests, latency-based sorting, and connection orchestration.
 import os
 import sys
 import time
+import math
 import logging
 import gettext
 import webbrowser
@@ -18,7 +19,13 @@ import threading
 from gi.repository import Gtk, Gio, GLib, Gdk, Adw, Pango
 
 from .settings_window import SettingsWindow
-from .connection_manager import NetworkManager, OpenVPN3
+from .context import ApplicationContext
+from .connection_manager import (
+    BackendUnavailableError,
+    ConnectionError as VPNConnectionError,
+    NetworkManager,
+    OpenVPN3,
+)
 from .ip_lookup.lookup import Lookup
 from .utils import matches_server_filter, ovpn_is_auth_required
 from .eovpn_base import Base, StorageItem, ConfigRow
@@ -45,13 +52,17 @@ class MainWindow(Base, Gtk.Builder):
     Main application window combining configuration selector and traffic monitor.
     پنجره اصلی برنامه شامل لیست کانفیگ‌ها، کارت آمار مصرف ترافیک و گزینه‌های اتصال.
     """
-    def __init__(self, app: Gtk.Application):
-        super().__init__()
+    def __init__(
+        self,
+        app: Gtk.Application,
+        context: ApplicationContext | None = None,
+    ):
+        Base.__init__(self, context)
         Gtk.Builder.__init__(self)
         self.app = app
 
         if self.get_setting(self.SETTING.DARK_THEME) is True:
-            gtk_settings = Gtk.Settings().get_default()
+            gtk_settings = Gtk.Settings.get_default()
             if gtk_settings:
                 gtk_settings.set_property("gtk-application-prefer-dark-theme", True)
 
@@ -68,11 +79,13 @@ class MainWindow(Base, Gtk.Builder):
 
         self.selected_row: ConfigRow | None = None
         self.manual_disconnect = False
-        self.selected_config = None
-        self.connected_cursor = None
-        self.signals = MainWindowSignals()
+        self.signals = MainWindowSignals(self.context)
         self.latencies: dict[str, float | None] = {}
         self.sort_by_speed_active = False
+        self._reconnect_source_id: int | None = None
+        self._lookup_in_progress = False
+        self._lookup_pending = False
+        self._closing = False
 
         # Search / Filter state / وضعیت جستجو و فیلتر لیست
         self.search_text: str = ""
@@ -98,17 +111,22 @@ class MainWindow(Base, Gtk.Builder):
         # Initialize and setup Connection Manager (CM)
         # مقداردهی اولیه مدیریت‌کننده اتصالات
         ###########################################################
-        preferred = self.get_setting(self.SETTING.MANAGER)
-        self.store("CM", {
-            "name": preferred,
-            "instance": NetworkManager(self.on_connection_event)
-            if preferred == "networkmanager"
-            else OpenVPN3(self.on_connection_event)
-        })
+        preferred = self.get_setting(self.SETTING.MANAGER) or "networkmanager"
+        try:
+            manager = (
+                NetworkManager(self.on_connection_event, context=self.context)
+                if preferred == "networkmanager"
+                else OpenVPN3(self.on_connection_event, context=self.context)
+            )
+        except BackendUnavailableError as exc:
+            logger.warning("Preferred backend is unavailable; using NetworkManager: %s", exc)
+            preferred = "networkmanager"
+            self.set_setting(self.SETTING.MANAGER, preferred)
+            manager = NetworkManager(self.on_connection_event, context=self.context)
+        self.store("CM", {"name": preferred, "instance": manager})
         self.store("on_connection_event", self.on_connection_event)
         self.CM = lambda: self.retrieve("CM")["instance"]
-
-        self.lookup = Lookup()
+        self.window.connect("close-request", self._on_close_request)
 
     def get_selected_config(self) -> str | None:
         """
@@ -230,7 +248,9 @@ class MainWindow(Base, Gtk.Builder):
         self.empty_btn.add_css_class("suggested-action")
         self.empty_btn.set_valign(Gtk.Align.START)
         self.empty_btn.set_halign(Gtk.Align.CENTER)
-        self.empty_btn.connect("clicked", lambda x: SettingsWindow().show())
+        self.empty_btn.connect(
+            "clicked", lambda _button: SettingsWindow(self.context).show()
+        )
         v_box.append(self.empty_label)
         v_box.append(self.empty_btn)
         self.list_box.set_placeholder(v_box)
@@ -372,14 +392,16 @@ class MainWindow(Base, Gtk.Builder):
         # Right Panel (Status, IP, Traffic Card, and Connect Button)
         # پنل سمت راست (وضعیت، آدرس آی‌پی، کارت مانیتورینگ و دکمه اتصال)
         # ---------------------------------------------------------
-        img = Gtk.Picture.new()
-        img.set_halign(Gtk.Align.CENTER)
-        img.set_valign(Gtk.Align.CENTER)
-        img.add_css_class("rounded")
-        self.store(StorageItem.FLAG, img)
-        if self.get_setting(self.SETTING.SHOW_FLAG) is False:
-            img.hide()
-        self.inner_right.append(img)
+        # Unicode flags remove third-party artwork and scale crisply on HiDPI.
+        # پرچم یونیکد وابستگی به آثار جانبی را حذف کرده و در HiDPI شفاف است.
+        self.country_indicator = Gtk.Label.new("🌐")
+        self.country_indicator.set_halign(Gtk.Align.CENTER)
+        self.country_indicator.set_valign(Gtk.Align.CENTER)
+        self.country_indicator.add_css_class("country-indicator")
+        self.country_indicator.set_tooltip_text(gettext.gettext("Public IP country indicator"))
+        self.store(StorageItem.FLAG, self.country_indicator)
+        self.country_indicator.set_visible(bool(self.get_setting(self.SETTING.SHOW_FLAG)))
+        self.inner_right.append(self.country_indicator)
 
         # IP Address & Geolocation info / اطلاعات آی‌پی
         h_box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 6)
@@ -501,9 +523,13 @@ class MainWindow(Base, Gtk.Builder):
             about = Gtk.AboutDialog.new()
             about.set_logo_icon_name(self.APP_ID)
             about.set_program_name(self.APP_NAME)
-            about.set_authors([self.AUTHOR])
+            about.set_authors([
+                self.AUTHOR,
+                "Jagadeesh Kotra (original eOVPN author)",
+                gettext.gettext("eOVPN contributors"),
+            ])
             about.set_artists([self.AUTHOR])
-            about.set_copyright(self.AUTHOR)
+            about.set_copyright("2021–2026 eOVPN contributors")
             about.set_license_type(Gtk.License.GPL_3_0)
             about.set_version(self.APP_VERSION)
             website = self.AUTHOR_WEBSITE
@@ -540,23 +566,27 @@ class MainWindow(Base, Gtk.Builder):
 
         def on_language_update(action, value):
             new_lang = str(value).replace("'", "")
-            logger.info("Changing language to: %s", new_lang)
+            logger.info("Changing language preference to: %s", new_lang)
             action.set_state(value)
             self.set_setting(self.SETTING.LANGUAGE, new_lang)
-            # Restart the process so gettext picks up the new language
-            # راه‌اندازی مجدد برنامه تا زبان جدید توسط gettext اعمال شود
+            # Restart so gettext can rebuild its catalogue for the selection.
+            # راه‌اندازی مجدد برای بارگذاری دوباره کاتالوگ gettext انجام می‌شود.
+            if new_lang == "system":
+                os.environ.pop("LANGUAGE", None)
+            else:
+                os.environ["LANGUAGE"] = new_lang
             os.execv(sys.executable, [sys.executable] + sys.argv)
 
         action_lang = Gio.SimpleAction.new_stateful(
             "language",
             GLib.VariantType.new("s"),
-            GLib.Variant("s", self.get_setting(self.SETTING.LANGUAGE) or "en")
+            GLib.Variant("s", self.get_setting(self.SETTING.LANGUAGE) or "system")
         )
         action_lang.connect("activate", on_language_update)
         self.app.add_action(action_lang)
 
         action = Gio.SimpleAction.new("update", None)
-        action.connect("activate", lambda x, d: self.validate_and_load(self.spinner))
+        action.connect("activate", self.on_update_action)
         self.app.add_action(action)
 
         action = Gio.SimpleAction.new("about", None)
@@ -572,7 +602,9 @@ class MainWindow(Base, Gtk.Builder):
         self.app.add_action(action)
 
         action = Gio.SimpleAction.new("settings", None)
-        action.connect("activate", lambda x, d: SettingsWindow().show())
+        action.connect(
+            "activate", lambda _action, _data: SettingsWindow(self.context).show()
+        )
         self.app.add_action(action)
 
         # Shortcuts / کلیدهای میانبر
@@ -615,6 +647,10 @@ class MainWindow(Base, Gtk.Builder):
         layout_menu.append_item(item)
 
         lang_menu = Gio.Menu()
+        item = Gio.MenuItem.new(gettext.gettext("System Language"), "system")
+        item.set_action_and_target_value("app.language", GLib.Variant.new_string("system"))
+        lang_menu.append_item(item)
+
         item = Gio.MenuItem.new("English", "en")
         item.set_action_and_target_value("app.language", GLib.Variant.new_string("en"))
         lang_menu.append_item(item)
@@ -676,6 +712,27 @@ class MainWindow(Base, Gtk.Builder):
 
         cpy_btn.connect("clicked", copy_ip)
 
+    def on_update_action(self, *_args) -> None:
+        """Refreshes configurations with visible success/error feedback / به‌روزرسانی با بازخورد روشن."""
+        def completed(success: bool, message: str, _result) -> None:
+            self._toast(message, timeout=4 if not success else 2)
+
+        self.validate_and_load(self.spinner, completion=completed)
+
+    def _on_close_request(self, _window: Gtk.Window) -> bool:
+        """Stops local timers and subscriptions without killing the VPN / توقف منابع محلی بدون قطع VPN."""
+        self._closing = True
+        self.cancel_reconnect()
+        self._cascade_gen += 1
+        self._cascade_active = False
+        self._disarm_cascade_timers()
+        self.stop_network_monitor()
+        try:
+            self.CM().stop_watch()
+        except Exception as exc:
+            logger.debug("Backend watcher cleanup failed: %s", exc)
+        return False
+
     def list_box_sort_func(self, row1: Gtk.ListBoxRow, row2: Gtk.ListBoxRow, *args) -> int:
         """
         Sorts the configuration list alphabetically or by measured latency.
@@ -686,25 +743,21 @@ class MainWindow(Base, Gtk.Builder):
         if not file1 or not file2:
             return 0
 
+        def compare(left, right) -> int:
+            return (left > right) - (left < right)
+
         if not getattr(self, "sort_by_speed_active", False):
-            return 1 if file1 > file2 else -1
+            return compare(file1.casefold(), file2.casefold())
 
-        rtt1 = self.latencies.get(file1, None)
-        rtt2 = self.latencies.get(file2, None)
+        def sort_key(filename: str):
+            rtt = self.latencies.get(filename)
+            if rtt is None:
+                return (1, 0.0, filename.casefold())  # UDP/unmeasured / UDP یا اندازه‌گیری‌نشده
+            if not math.isfinite(rtt):
+                return (2, 0.0, filename.casefold())  # Unreachable / دسترس‌ناپذیر
+            return (0, rtt, filename.casefold())
 
-        if rtt1 is None and rtt2 is None:
-            return 1 if file1 > file2 else -1
-        if rtt1 is None:
-            return 1
-        if rtt2 is None:
-            return -1
-
-        if rtt1 < rtt2:
-            return -1
-        elif rtt1 > rtt2:
-            return 1
-        else:
-            return 1 if file1 > file2 else -1
+        return compare(sort_key(file1), sort_key(file2))
 
     # ------------------------------------------------------------------
     # Search, Filter & Favorites / جستجو، فیلتر و کانفیگ‌های مورد علاقه
@@ -833,18 +886,31 @@ class MainWindow(Base, Gtk.Builder):
         self.latencies = latencies
         latency_labels = self.retrieve("latency_labels")
 
+        if not isinstance(latency_labels, dict):
+            latency_labels = {}
         for file, rtt in latencies.items():
             if file in latency_labels:
                 label_widget = latency_labels[file]
-                if rtt is not None:
-                    if rtt < 100:
-                        label_widget.set_markup(f"<span foreground='#2ec27e' weight='bold'>{rtt} ms</span>")
-                    elif rtt < 250:
-                        label_widget.set_markup(f"<span foreground='#e5a50a' weight='bold'>{rtt} ms</span>")
-                    else:
-                        label_widget.set_markup(f"<span foreground='#e01b24' weight='bold'>{rtt} ms</span>")
+                if rtt is None:
+                    label_widget.set_markup(
+                        "<span alpha='65%'>UDP · not measured</span>"
+                    )
+                elif not math.isfinite(rtt):
+                    label_widget.set_markup(
+                        "<span foreground='#e01b24' alpha='70%'>Offline</span>"
+                    )
+                elif rtt < 100:
+                    label_widget.set_markup(
+                        f"<span foreground='#2ec27e' weight='bold'>{rtt} ms</span>"
+                    )
+                elif rtt < 250:
+                    label_widget.set_markup(
+                        f"<span foreground='#e5a50a' weight='bold'>{rtt} ms</span>"
+                    )
                 else:
-                    label_widget.set_markup("<span foreground='#e01b24' alpha='60%'>Error</span>")
+                    label_widget.set_markup(
+                        f"<span foreground='#e01b24' weight='bold'>{rtt} ms</span>"
+                    )
 
         if self.sort_by_speed_active:
             self.list_box.invalidate_sort()
@@ -862,9 +928,6 @@ class MainWindow(Base, Gtk.Builder):
             if self._cascade_active and self._cascade_phase == CascadePhase.PREPARING:
                 self._start_cascade_from_visible_list()
                 return
-        if getattr(self, "auto_select_after_test", False):
-            self.auto_select_after_test = False
-            self.select_fastest(None)
 
     def on_sort_toggled(self, button: Gtk.ToggleButton):
         """
@@ -879,19 +942,6 @@ class MainWindow(Base, Gtk.Builder):
         else:
             button.remove_css_class("suggested-action")
         self.list_box.invalidate_sort()
-
-    def select_fastest(self, button: Gtk.Button | None):
-        """
-        Selects (does not connect) the lowest-latency visible server.
-        انتخاب (بدون اتصال) سرور با کمترین تأخیر در لیست نمایان.
-        """
-        valid_latencies = {k: v for k, v in self.latencies.items() if v is not None}
-        if not valid_latencies:
-            return None
-        fastest_file = min(valid_latencies, key=valid_latencies.get)
-        if self._select_server_by_name(fastest_file):
-            return fastest_file
-        return None
 
     # ------------------------------------------------------------------
     # Cascading connect-to-fastest / اتصال آبشاری به سریع‌ترین سرور
@@ -988,6 +1038,7 @@ class MainWindow(Base, Gtk.Builder):
         self._set_fastest_button_cancel(True)
 
     def _begin_cascade(self, queue: list[str]):
+        self.cancel_reconnect()
         self._cascade_gen += 1
         self._cascade_active = True
         self._cascade_queue = list(queue)
@@ -1107,7 +1158,12 @@ class MainWindow(Base, Gtk.Builder):
         if status:
             self.cascade_title.set_text(status)
         else:
-            extras = [part for part in (proto, f"{rtt} ms" if rtt is not None else "") if part]
+            rtt_text = (
+                f"{rtt} ms"
+                if rtt is not None and math.isfinite(rtt)
+                else gettext.gettext("unmeasured") if rtt is None else gettext.gettext("offline")
+            )
+            extras = [part for part in (proto, rtt_text) if part]
             suffix = f"  ·  {' · '.join(extras)}" if extras else ""
             self.cascade_title.set_text(
                 gettext.gettext("Trying {}{}").format(name, suffix)
@@ -1165,8 +1221,9 @@ class MainWindow(Base, Gtk.Builder):
             return False
         try:
             if self.CM().status():
-                # Handshake landed in the same tick as the timeout
-                # دست‌دهی درست همزمان با اتمام تایم‌اوت موفق شده است
+                # Recover from a status signal that landed before subscription.
+                # بازیابی حالت موفق وقتی سیگنال پیش از اشتراک دریافت شده است.
+                self.on_connection_event(True)
                 return False
         except Exception:
             pass
@@ -1224,13 +1281,11 @@ class MainWindow(Base, Gtk.Builder):
         self.manual_disconnect = True
 
         try:
-            if self.CM().status():
-                self.CM().disconnect()
-                self._arm_settle(self._try_current_server)
-                return
+            # disconnect() also removes an inactive profile left by a failed handshake.
+            # disconnect() پروفایل غیرفعال باقی‌مانده از دست‌دهی ناموفق را نیز حذف می‌کند.
+            self.CM().disconnect()
         except Exception as exc:
-            logger.debug("Cascade disconnect on advance: %s", exc)
-
+            logger.debug("Cascade cleanup on advance failed: %s", exc)
         self._arm_settle(self._try_current_server)
 
     def _cascade_reason_label(self, reason: str) -> str:
@@ -1290,7 +1345,7 @@ class MainWindow(Base, Gtk.Builder):
         if phase == CascadePhase.SUCCEEDED:
             name = self._cascade_current or self.get_selected_config() or ""
             rtt = (self.latencies or {}).get(name)
-            if rtt is not None:
+            if rtt is not None and math.isfinite(rtt):
                 msg = gettext.gettext("Connected to {} ({} ms)").format(name, rtt)
             else:
                 msg = gettext.gettext("Connected to {}").format(name)
@@ -1394,125 +1449,153 @@ class MainWindow(Base, Gtk.Builder):
         self.toast_overlay.add_toast(toast)
 
     def start_network_monitor(self):
-        """Starts real-time bandwidth monitoring."""
+        """Starts session-scoped tunnel bandwidth monitoring / شروع پایش پهنای باند همان نشست."""
         self.stop_network_monitor()
-        self.last_rx = 0
-        self.last_tx = 0
-        self.last_time = time.time()
+        self.last_rx: int | None = None
+        self.last_tx: int | None = None
+        self.session_traffic_baseline: int | None = None
+        self.last_time = time.monotonic()
         self.network_monitor_id = GLib.timeout_add_seconds(1, self.update_network_speed)
 
     def stop_network_monitor(self):
-        """Stops real-time bandwidth monitoring."""
+        """Stops real-time bandwidth monitoring / توقف پایش زنده پهنای باند."""
         if hasattr(self, "network_monitor_id") and self.network_monitor_id:
             GLib.source_remove(self.network_monitor_id)
             self.network_monitor_id = None
 
+    @staticmethod
+    def _format_speed(bytes_per_second: float) -> str:
+        value = max(0.0, bytes_per_second)
+        if value < 1024:
+            return f"{value:.1f} B/s"
+        if value < 1024 * 1024:
+            return f"{value / 1024:.1f} KiB/s"
+        return f"{value / (1024 * 1024):.1f} MiB/s"
+
+    @staticmethod
+    def _format_size(total_bytes: float) -> str:
+        value = max(0.0, total_bytes)
+        if value < 1024:
+            return f"{value:.0f} B"
+        if value < 1024 * 1024:
+            return f"{value / 1024:.1f} KiB"
+        if value < 1024 * 1024 * 1024:
+            return f"{value / (1024 * 1024):.1f} MiB"
+        return f"{value / (1024 * 1024 * 1024):.1f} GiB"
+
     def update_network_speed(self) -> bool:
         """
-        Reads kernel network statistics from /proc/net/dev and calculates live throughput.
-        محاسبه نرخ لحظه‌ای دانلود و آپلود از شمارنده‌های هسته لینوکس.
+        Reads only tunnel-like interfaces and reports traffic since connection.
+        خواندن فقط رابط‌های تونلی و نمایش ترافیک از ابتدای اتصال.
         """
         try:
-            rx, tx = 0, 0
-            if os.path.exists("/proc/net/dev"):
-                with open("/proc/net/dev", "r") as f:
-                    for line in f:
-                        if ":" in line:
-                            parts = line.split(":")
-                            if len(parts) == 2:
-                                if any(x in parts[0] for x in ["tun", "tap", "ovpn", "ppp", "wg"]):
-                                    stats = parts[1].split()
-                                    rx += int(stats[0])
-                                    tx += int(stats[8])
+            rx = tx = 0
+            tunnel_found = False
+            with open("/proc/net/dev", "r", encoding="utf-8") as proc_file:
+                for raw_line in proc_file:
+                    if ":" not in raw_line:
+                        continue
+                    interface, values = raw_line.split(":", 1)
+                    interface = interface.strip()
+                    if not interface.startswith(("tun", "tap", "ovpn", "ppp", "wg")):
+                        continue
+                    fields = values.split()
+                    if len(fields) < 9:
+                        continue
+                    tunnel_found = True
+                    rx += int(fields[0])
+                    tx += int(fields[8])
 
-            if rx == 0 and tx == 0:
-                if os.path.exists("/proc/net/dev"):
-                    with open("/proc/net/dev", "r") as f:
-                        for line in f:
-                            if ":" in line:
-                                parts = line.split(":")
-                                if len(parts) == 2:
-                                    if "lo" not in parts[0]:
-                                        stats = parts[1].split()
-                                        rx += int(stats[0])
-                                        tx += int(stats[8])
+            if not tunnel_found:
+                self.dl_speed_label.set_text("0.0 B/s")
+                self.ul_speed_label.set_text("0.0 B/s")
+                self.total_traffic_label.set_text("0 B")
+                self.last_rx = self.last_tx = None
+                self.session_traffic_baseline = None
+                self.last_time = time.monotonic()
+                return True
 
-            now = time.time()
-            dt = now - getattr(self, "last_time", now - 1.0)
-            if dt <= 0:
-                dt = 1.0
-
-            last_rx = getattr(self, "last_rx", 0)
-            last_tx = getattr(self, "last_tx", 0)
-
-            if last_rx > 0 and last_tx > 0:
-                dl_speed = (rx - last_rx) / dt
-                ul_speed = (tx - last_tx) / dt
-
-                def format_speed(bytes_per_sec: float) -> str:
-                    if bytes_per_sec < 1024:
-                        return f"{bytes_per_sec:.1f} B/s"
-                    elif bytes_per_sec < 1024 * 1024:
-                        return f"{bytes_per_sec / 1024:.1f} KB/s"
-                    else:
-                        return f"{bytes_per_sec / (1024 * 1024):.1f} MB/s"
-
-                def format_size(bytes_total: float) -> str:
-                    if bytes_total < 1024:
-                        return f"{bytes_total} B"
-                    elif bytes_total < 1024 * 1024:
-                        return f"{bytes_total / 1024:.1f} KB"
-                    elif bytes_total < 1024 * 1024 * 1024:
-                        return f"{bytes_total / (1024 * 1024):.1f} MB"
-                    else:
-                        return f"{bytes_total / (1024 * 1024 * 1024):.1f} GB"
-
-                self.dl_speed_label.set_text(format_speed(dl_speed))
-                self.ul_speed_label.set_text(format_speed(ul_speed))
-                self.total_traffic_label.set_text(format_size(rx + tx))
-
-            self.last_rx = rx
-            self.last_tx = tx
-            self.last_time = now
-        except Exception as e:
-            logger.error("Error in network monitor: %s", e)
-
+            now = time.monotonic()
+            current_total = rx + tx
+            if self.session_traffic_baseline is None:
+                self.session_traffic_baseline = current_total
+            if self.last_rx is not None and self.last_tx is not None:
+                elapsed = max(0.001, now - self.last_time)
+                self.dl_speed_label.set_text(
+                    self._format_speed((rx - self.last_rx) / elapsed)
+                )
+                self.ul_speed_label.set_text(
+                    self._format_speed((tx - self.last_tx) / elapsed)
+                )
+                self.total_traffic_label.set_text(
+                    self._format_size(current_total - self.session_traffic_baseline)
+                )
+            self.last_rx, self.last_tx, self.last_time = rx, tx, now
+        except (OSError, ValueError, IndexError) as exc:
+            logger.error("Tunnel network monitor failed: %s", exc)
         return True
 
+    def cancel_reconnect(self) -> None:
+        """Cancels a pending reconnect timer / لغو زمان‌سنج اتصال مجدد."""
+        if self._reconnect_source_id:
+            try:
+                GLib.source_remove(self._reconnect_source_id)
+            except Exception as exc:
+                logger.debug("Could not remove reconnect timer: %s", exc)
+            self._reconnect_source_id = None
+
+    def schedule_reconnect(self) -> None:
+        """Schedules at most one reconnect attempt / زمان‌بندی حداکثر یک تلاش اتصال مجدد."""
+        self.cancel_reconnect()
+        self._reconnect_source_id = GLib.timeout_add_seconds(3, self.trigger_reconnect)
+
     def trigger_reconnect(self) -> bool:
-        """Schedules automated reconnection."""
+        """Reconnects only when no newer user connection exists / اتصال فقط در نبود نشست جدید کاربر."""
+        self._reconnect_source_id = None
+        if self._closing or self.manual_disconnect or not self.get_setting(self.SETTING.AUTO_RECONNECT):
+            return False
+        try:
+            if self.CM().status():
+                return False
+        except Exception as exc:
+            logger.debug("Reconnect status check failed: %s", exc)
         selected = self.get_selected_config()
         if selected:
-            logger.info("Auto-reconnecting to %s", selected)
+            logger.info("Auto-reconnecting to the selected configuration")
             self.signals.connect(None, self.get_selected_config)
         return False
 
     def update_set_ip_flag(self):
         """
-        Worker: performs the network lookup off the main thread.
-        GTK widgets must never be touched from worker threads; the UI update
-        is therefore scheduled back onto the main loop via GLib.idle_add.
-        نخ کارگر: استعلام شبکه خارج از نخ اصلی انجام می‌شود. ویجت‌های GTK هرگز
-        نباید از نخ‌های فرعی دستکاری شوند؛ به‌روزرسانی رابط از طریق GLib.idle_add
-        به نخ اصلی بازگردانده می‌شود.
+        Performs one isolated lookup and returns its immutable result to GTK.
+        اجرای یک استعلام ایزوله و بازگرداندن نتیجه به نخ GTK.
         """
+        lookup = Lookup()
+        success = False
         try:
-            if os.environ.get("FLATPAK_ID") is not None:
-                time.sleep(1.25)
-            self.lookup.update()
-        finally:
-            GLib.idle_add(self._apply_ip_lookup)
+            success = lookup.update()
+        except Exception as exc:
+            logger.debug("Public IP lookup worker failed: %s", exc)
+        GLib.idle_add(self._apply_ip_lookup, lookup, success)
 
-    def _apply_ip_lookup(self) -> bool:
-        """Applies the lookup result on the GTK main thread."""
-        try:
-            flag = self.retrieve(StorageItem.FLAG)
-            if flag is not None:
-                flag.set_pixbuf(self.get_country_pixbuf(self.lookup.country_code))
-            self.ip_addr.set_label(self.lookup.ip or "0.0.0.0")
-        except Exception as e:
-            logger.debug("Failed to apply IP lookup result: %s", e)
+    def _apply_ip_lookup(self, lookup: Lookup | None, success: bool) -> bool:
+        """Applies a lookup result on the GTK thread / اعمال نتیجه استعلام روی نخ GTK."""
+        self._lookup_in_progress = False
+        if self._closing:
+            return False
+        if lookup is None:
+            self.country_indicator.set_text("🌐")
+            self.ip_addr.set_label(gettext.gettext("Disabled"))
+        elif success:
+            self.country_indicator.set_text(self.get_country_flag_emoji(lookup.country_code))
+            self.ip_addr.set_label(lookup.ip or gettext.gettext("Unavailable"))
+        else:
+            self.country_indicator.set_text("🌐")
+            self.ip_addr.set_label(gettext.gettext("Unavailable"))
         self.spinner.stop()
+        if self._lookup_pending:
+            self._lookup_pending = False
+            self.update_ip_flag_async()
         return False
 
     def swap_pause_btn_signal_pause_to_resume(self):
@@ -1520,7 +1603,6 @@ class MainWindow(Base, Gtk.Builder):
         if self.psh is not None:
             self.pause_resume_btn.disconnect(self.psh)
         self.psh = self.pause_resume_btn.connect("clicked", self.signals.resume, self.CM())
-        self.update_ip_flag_async()
 
     def swap_pause_btn_signal_resume_to_pause(self):
         self.pause_resume_btn.set_property("icon-name", "media-playback-pause-symbolic")
@@ -1537,11 +1619,12 @@ class MainWindow(Base, Gtk.Builder):
             if self._cascade_on_connection_event(result, error):
                 return
 
+        had_error = error is not None
         if error is not None:
             logger.error("Connection error: %s", error)
-            self.send_error_notification(error)
-            self.progress_bar.set_fraction(0)
-            return
+            self.send_error_notification(str(error))
+            self._toast(str(error), timeout=4)
+            result = False
 
         if type(result) is list:
             if len(result) == 1:
@@ -1565,6 +1648,7 @@ class MainWindow(Base, Gtk.Builder):
             return
 
         if result:
+            self.cancel_reconnect()
             self.start_network_monitor()
             self.was_connected = True
             self.update_ip_flag_async()
@@ -1609,6 +1693,8 @@ class MainWindow(Base, Gtk.Builder):
             )
             self.was_connected = False
             self.manual_disconnect = False
+            if not should_reconnect:
+                self.cancel_reconnect()
 
             self.update_ip_flag_async()
             self.connect_btn.set_label(gettext.gettext("Connect"))
@@ -1616,7 +1702,8 @@ class MainWindow(Base, Gtk.Builder):
             self.progress_bar.remove_css_class("progress-full-green")
             self.progress_bar.add_css_class("progress-yellow")
             self.progress_bar.set_fraction(0)
-            self.send_disconnected_notification()
+            if not had_error:
+                self.send_disconnected_notification()
 
             self.swap_pause_btn_signal_pause_to_resume()
             self.pause_resume_btn.set_visible(False)
@@ -1625,7 +1712,7 @@ class MainWindow(Base, Gtk.Builder):
                 logger.info("Connection lost. Auto-reconnecting in 3 seconds...")
                 toast = Adw.Toast.new(gettext.gettext("Connection lost. Reconnecting in 3 seconds..."))
                 self.toast_overlay.add_toast(toast)
-                GLib.timeout_add_seconds(3, self.trigger_reconnect)
+                self.schedule_reconnect()
 
     def show(self):
         """Displays main application window."""
@@ -1636,11 +1723,21 @@ class MainWindow(Base, Gtk.Builder):
         self.window.show()
 
     def update_ip_flag_async(self):
-        """Runs IP and geolocation lookup asynchronously."""
+        """Runs an opt-in IP lookup with request coalescing / اجرای استعلام اختیاری با ادغام درخواست‌ها."""
+        if not self.get_setting(self.SETTING.PUBLIC_IP_LOOKUP):
+            self._lookup_pending = False
+            self._apply_ip_lookup(None, False)
+            return
+        if self._lookup_in_progress:
+            self._lookup_pending = True
+            return
+        self._lookup_in_progress = True
         self.spinner.start()
-        th = threading.Thread(target=self.update_set_ip_flag)
-        th.daemon = True
-        th.start()
+        threading.Thread(
+            target=self.update_set_ip_flag,
+            name="eovpn-public-ip-lookup",
+            daemon=True,
+        ).start()
 
 
 class MainWindowSignals(Base):
@@ -1649,36 +1746,52 @@ class MainWindowSignals(Base):
     سیستم مدیریت سیگنال‌ها و اکشن‌های پنجره اصلی.
     """
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, context: ApplicationContext):
+        super().__init__(context)
 
     def connect(self, button, config_callable):
         manager = self.retrieve("CM")["instance"]
-        manager.start_watch()
-        if manager.status():
-            self.disconnect(None, manager)
-            return
+        main_window = self.retrieve("main_window_instance")
+        if main_window:
+            main_window.cancel_reconnect()
         try:
-            mw = self.retrieve("main_window_instance")
-            if mw:
-                mw.manual_disconnect = False
-        except Exception:
-            pass
-        config = config_callable() if callable(config_callable) else config_callable
-        if config:
+            manager.start_watch()
+            if manager.status():
+                self.disconnect(None, manager)
+                return
+            if main_window:
+                main_window.manual_disconnect = False
+            config = config_callable() if callable(config_callable) else config_callable
+            if not config:
+                if main_window:
+                    main_window._toast(gettext.gettext("Select a VPN configuration first."))
+                return
             manager.connect(os.path.join(self.EOVPN_CONFIG_DIR, "CONFIGS", config))
+        except (BackendUnavailableError, VPNConnectionError, OSError, RuntimeError) as exc:
+            logger.error("VPN connection request failed: %s", exc)
+            if main_window:
+                main_window.on_connection_event(False, str(exc))
+        except Exception as exc:
+            # UI boundary: native/CFFI failures must not terminate the application.
+            # مرز UI: خطای بومی/CFFI نباید برنامه را خاتمه دهد.
+            logger.exception("Unexpected VPN backend failure")
+            if main_window:
+                main_window.on_connection_event(False, str(exc))
 
     def connect_via_ks(self, action, _args, config_callable):
         self.connect(None, config_callable)
 
     def disconnect(self, button, manager):
+        main_window = self.retrieve("main_window_instance")
+        if main_window:
+            main_window.manual_disconnect = True
+            main_window.cancel_reconnect()
         try:
-            mw = self.retrieve("main_window_instance")
-            if mw:
-                mw.manual_disconnect = True
-        except Exception:
-            pass
-        manager.disconnect()
+            manager.disconnect()
+        except Exception as exc:
+            logger.error("VPN disconnect request failed: %s", exc)
+            if main_window:
+                main_window.on_connection_event(False, str(exc))
 
     def pause(self, button, manager):
         if hasattr(manager, "pause"):

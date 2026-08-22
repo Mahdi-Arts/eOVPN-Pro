@@ -1,0 +1,18 @@
+[run]
+branch = True
+source =
+    eovpn.auto_connect
+    eovpn.config_import
+    eovpn.config_repository
+    eovpn.context
+    eovpn.ip_lookup.lookup
+    eovpn.speed_test
+    eovpn.utils
+
+[report]
+show_missing = True
+skip_covered = False
+precision = 1
+exclude_lines =
+    pragma: no cover
+    if __name__ == .__main__.:

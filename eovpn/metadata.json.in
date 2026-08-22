@@ -1,11 +1,11 @@
 {
   "APP_NAME": "eOVPN Pro",
-  "APP_ID": "com.github.mahdi-arts.eovpn-pro",
+  "APP_ID": "io.github.Mahdi_Arts.eOVPN_Pro",
   "APP_VERSION": "@VERSION@",
   "COMMIT": "@COMMIT@",
   "AUTHOR": "Mahdi Bagheban",
   "AUTHOR_MAIL": "info@MahdiArts.ir",
   "AUTHOR_MAIL_SECONDARY": "mehdi.bagheban@gmail.com",
-  "AUTHOR_WEBSITE": "www.MahdiArts.ir",
+  "AUTHOR_WEBSITE": "https://www.MahdiArts.ir",
   "AUTHOR_DONATE": "https://www.MahdiArts.ir/donate"
 }

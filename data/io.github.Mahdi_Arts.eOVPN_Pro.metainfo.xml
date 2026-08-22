@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.Mahdi_Arts.eOVPN_Pro</id>
+  <metadata_license>FSFAP</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <developer id="io.github.Mahdi_Arts">
+    <name>Mahdi Bagheban and eOVPN contributors</name>
+    <name xml:lang="fa">مهدی باغبان و مشارکت‌کنندگان eOVPN</name>
+  </developer>
+
+  <name>eOVPN Pro</name>
+  <summary>Secure OpenVPN configuration manager and latency tester</summary>
+  <summary xml:lang="fa">مدیریت امن کانفیگ‌های OpenVPN و سنجش تأخیر</summary>
+
+  <description>
+    <p>
+      eOVPN Pro imports OpenVPN profiles from local folders, local ZIP files,
+      or verified HTTPS sources. It provides search, favorites, protocol
+      filters, honest TCP latency measurements, cascading connection attempts,
+      and session-scoped traffic statistics.
+    </p>
+    <p xml:lang="fa">
+      eOVPN Pro کانفیگ‌های OpenVPN را از پوشه محلی، فایل ZIP محلی یا منبع
+      اعتبارسنجی‌شده HTTPS وارد می‌کند و امکانات جست‌وجو، علاقه‌مندی، فیلتر
+      پروتکل، سنجش واقعی تأخیر TCP، اتصال آبشاری و آمار ترافیک همان نشست را
+      ارائه می‌دهد.
+    </p>
+    <p>
+      NetworkManager is the recommended backend and requires the host
+      NetworkManager OpenVPN plugin. OpenVPN 3 is optional and requires its
+      host system service. Public IP lookup is disabled by default and can be
+      enabled explicitly in Privacy settings.
+    </p>
+    <p xml:lang="fa">
+      بک‌اند پیشنهادی NetworkManager است و به افزونه OpenVPN روی میزبان نیاز
+      دارد. OpenVPN 3 اختیاری و وابسته به سرویس سیستمی میزبان است. استعلام IP
+      عمومی به‌صورت پیش‌فرض غیرفعال است و از تنظیمات حریم خصوصی فعال می‌شود.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">io.github.Mahdi_Arts.eOVPN_Pro.desktop</launchable>
+  <provides>
+    <binary>eovpn</binary>
+  </provides>
+
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/Mahdi-Arts/eOVPN-Pro/master/static/window.png</image>
+      <caption>Server list, connection controls, and live tunnel statistics</caption>
+      <caption xml:lang="fa">فهرست سرورها، کنترل اتصال و آمار زنده تونل</caption>
+    </screenshot>
+  </screenshots>
+
+  <url type="homepage">https://www.MahdiArts.ir</url>
+  <url type="bugtracker">https://github.com/Mahdi-Arts/eOVPN-Pro/issues</url>
+  <url type="donation">https://www.MahdiArts.ir/donate</url>
+  <url type="vcs-browser">https://github.com/Mahdi-Arts/eOVPN-Pro</url>
+
+  <releases>
+    <release version="1.5.0" date="2026-08-22">
+      <description>
+        <ul>
+          <li>Scoped NetworkManager UUIDs and OpenVPN 3 object paths so unrelated VPN sessions are never modified.</li>
+          <li>Added private 0700/0600 configuration storage, HTTPS-only downloads, bounded ZIP extraction, and transactional rollback.</li>
+          <li>Added explicit Secret Service credential saving and opt-in public IP lookup.</li>
+          <li>Improved backend error propagation, UDP-aware latency semantics, accessibility, and release automation.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.4.0" date="2025-10-15">
+      <description>
+        <p>Introduced concurrent latency testing, sorting, and the Pro interface.</p>
+      </description>
+    </release>
+  </releases>
+
+  <content_rating type="oars-1.1">
+    <content_attribute id="social-info">mild</content_attribute>
+  </content_rating>
+  <keywords>
+    <keyword>OpenVPN</keyword>
+    <keyword>VPN</keyword>
+    <keyword>network</keyword>
+    <keyword>privacy</keyword>
+    <keyword>security</keyword>
+  </keywords>
+  <update_contact>info@mahdiarts.ir</update_contact>
+</component>

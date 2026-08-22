@@ -1,79 +1,85 @@
 """
-eOVPN-Pro 2FA / OTP Verification Dialog
-پنجره ورود رمز یکبار مصرف دو مرحله‌ای (2FA OTP) در eOVPN-Pro
+OpenVPN authentication challenge dialog.
+پنجره پاسخ به چالش احراز هویت OpenVPN.
+
+A single secure entry supports both common numeric TOTPs and provider-specific
+static challenge responses. The value is cleared before the window is closed.
+یک ورودی امن هم کدهای عددی TOTP و هم پاسخ‌های ایستای سرویس‌دهنده را پشتیبانی
+می‌کند و مقدار آن پیش از بستن پنجره پاک می‌شود.
 """
 
+from __future__ import annotations
+
+from collections.abc import Callable
+
 import gi
-gi.require_version('Gtk', '4.0')
+
+gi.require_version("Gtk", "4.0")
 from gi.repository import Gtk
+
+from eovpn.context import ApplicationContext
 from eovpn.eovpn_base import Base, StorageItem
 
 
 class OTPInputWindow(Base):
-    """
-    Two-Factor Authentication (OTP) entry dialog for static/dynamic challenge.
-    پنجره ورود کد احراز هویت دومرحله‌ای برای سناریوهای چالش پویا و ایستا.
-    """
+    """Modal authentication challenge window / پنجره مودال چالش احراز هویت."""
 
-    def __init__(self, input_callback: callable, error_callback: callable) -> None:
-        super().__init__()
-        self.callback = input_callback
+    def __init__(
+        self,
+        input_callback: Callable[[str], None],
+        error_callback: Callable[[], None],
+        *,
+        prompt: str | None = None,
+        context: ApplicationContext | None = None,
+    ) -> None:
+        super().__init__(context)
+        self.input_callback = input_callback
         self.error_callback = error_callback
+        self._completed = False
 
         self.builder = Gtk.Builder()
-        self.builder.add_from_resource(self.EOVPN_GRESOURCE_PREFIX + "/ui/" + "otp.ui")
-
-        self.window = self.builder.get_object("OTpMainWindow")
-        self.window.connect("close-request", self.manual_close)
-        self.window.set_title("2FA OTP Verification")
-        self.window.set_default_size(600, 200)
-        self.window.set_resizable(False)
+        self.builder.add_from_resource(self.EOVPN_GRESOURCE_PREFIX + "/ui/otp.ui")
+        self.window = self.builder.get_object("otp_window")
+        self.entry: Gtk.PasswordEntry = self.builder.get_object("otp_entry")
+        self.submit_button: Gtk.Button = self.builder.get_object("submit")
+        prompt_label: Gtk.Label = self.builder.get_object("prompt_label")
 
         parent = self.retrieve(StorageItem.MAIN_WINDOW)
-        if parent and isinstance(parent, Gtk.Window):
+        if isinstance(parent, Gtk.Window):
             self.window.set_transient_for(parent)
-        self.window.set_modal(True)
+        if prompt:
+            prompt_label.set_text(prompt)
 
-        self.submit_btn = self.builder.get_object("submit")
-        self.submit_btn.set_sensitive(False)
-        self.submit_btn.connect("clicked", lambda _: self.return_and_destroy())
+        self.window.connect("close-request", self._on_close)
+        self.entry.connect("changed", self._on_changed)
+        self.entry.connect("activate", lambda *_: self._submit())
+        self.submit_button.connect("clicked", lambda *_: self._submit())
 
-        for i in range(1, 7):
-            entry = self.builder.get_object(f"O{i}")
-            entry.set_max_length(1)
-            next_entry = self.builder.get_object(f"O{i+1}") if i < 6 else None
-            entry.connect("changed", self.on_entry_changed, next_entry)
+    def _on_changed(self, entry: Gtk.PasswordEntry) -> None:
+        """Enables Verify for a non-empty response / فعال‌سازی تأیید برای پاسخ غیرخالی."""
+        self.submit_button.set_sensitive(bool(entry.get_text().strip()))
 
-    def on_entry_changed(self, entry, next_entry):
-        text: str = entry.get_text()
-        if not text.isnumeric():
-            entry.set_text("")
-            return False
-        if len(text) == 1 and next_entry is not None:
-            next_entry.grab_focus()
-
-        # Enable submit button when all 6 digits are populated
-        # فعال‌سازی دکمه تأیید با تکمیل هر ۶ رقم کد
-        if len(self.gather_otp()) == 6:
-            self.submit_btn.set_sensitive(True)
-        else:
-            self.submit_btn.set_sensitive(False)
-
-    def gather_otp(self) -> list[str]:
-        otp = []
-        for i in range(1, 7):
-            entry = self.builder.get_object(f"O{i}")
-            text = entry.get_text()
-            if len(text) == 1:
-                otp.append(text)
-        return otp
-
-    def return_and_destroy(self):
+    def _submit(self) -> None:
+        """Copies, clears, closes, then submits / کپی، پاک‌سازی، بستن و سپس ارسال پاسخ."""
+        if self._completed:
+            return
+        value = self.entry.get_text().strip()
+        if not value:
+            return
+        self._completed = True
+        self.entry.set_text("")
         self.window.destroy()
-        self.callback(self.gather_otp())
+        self.input_callback(value)
 
-    def manual_close(self, window):
-        self.error_callback()
+    def _on_close(self, _window: Gtk.Window) -> bool:
+        """Reports cancellation once / گزارش یک‌باره لغو چالش."""
+        if not self._completed:
+            self._completed = True
+            self.entry.set_text("")
+            self.error_callback()
+        return False
 
-    def show(self):
-        self.window.show()
+    def show(self) -> None:
+        """Presents and focuses the secure entry / نمایش پنجره و تمرکز روی ورودی امن."""
+        self.window.present()
+        self.entry.grab_focus()

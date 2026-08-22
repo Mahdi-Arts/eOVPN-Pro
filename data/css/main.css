@@ -1,140 +1,87 @@
-.badge_proto {
-    background-color: green;
-    padding-top: 2px;
-    padding-bottom: 2px;
-    padding-left: 4px;
-    padding-right: 4px;
-    color: white;
-}
-
-.badge_status {
-    border-radius: 10px;
-    padding-top: 6px;
-    padding-bottom: 6px;
-    padding-left: 10px;
-    padding-right: 10px;
-    color: white;
-}
-
-.badge {
-    background-color: #1a5fb4;
-    border-radius: 100px;
-    padding: 2px 6px 2px 6px;
-    color: white;
-}
-
-.reset_button {
-    background: rgb(121, 21, 21);
-}
-
+/* Core typography and spacing / تایپوگرافی و فاصله‌گذاری اصلی */
 .ip_text {
-    font-size: large;
-    font-weight: bold;
+    font-family: monospace;
+    font-size: 1.05rem;
+    font-weight: 700;
 }
 
 .bold {
-    font-weight: bold;
+    font-weight: 700;
 }
-
-.progress-yellow trough progress {
-    background-color: #fdd804;
-    border-bottom-color: #fdd804;
-}
-
-.progress-full-green trough progress {
-    background-color: #3E8914;
-    border-bottom-color: #3E8914;
-}
-
-.progress-orange trough progress {
-    background-color: #fd9206;
-    border-bottom-color: #fd9206;
-}
-
 
 .m-10 {
     margin: 10px;
 }
 
-.m-6 {
-    margin: 6px;
+.btn-no-dec {
+    border-style: none;
+    background: transparent;
 }
 
-.m-4 {
-    margin: 4px;
+/* Connection progress states / وضعیت‌های نوار پیشرفت اتصال */
+.progress-yellow trough progress {
+    background-color: @warning_color;
 }
 
-.mt-4 {
-    margin-top: 4px;
+.progress-full-green trough progress {
+    background-color: @success_color;
 }
 
-.mb-4 {
+.progress-orange trough progress {
+    background-color: #fd9206;
+}
+
+/* Country and challenge indicators / نشان کشور و چالش احراز هویت */
+.country-indicator {
+    font-size: 3rem;
+    min-height: 64px;
+    margin-top: 8px;
+}
+
+.challenge-icon {
+    color: @accent_color;
     margin-bottom: 4px;
 }
 
-.mlr-4 {
-    margin-left: 4px;
-    margin-right: 4px;
+/* Inline operation feedback / بازخورد درون‌صفحه‌ای عملیات */
+.status-success {
+    color: @success_color;
+    font-weight: 600;
 }
 
-.mlr-6 {
-    margin-left: 6px;
-    margin-right: 6px;
+.status-error {
+    color: @error_color;
+    font-weight: 600;
 }
 
-.mlr-10 {
-    margin-left: 10px;
-    margin-right: 10px;
-}
-
-.btn-no-dec {
-    border-style: none;
-    background-color: transparent;
-}
-
-.otp-entry {
-    margin: 0.8rem;
-    min-height: 2rem;
-    font-size: 1.3rem;
-    font-weight: bold;
-}
-
-.rounded {
-  border-radius: 16px;
-}
-
+/* Toast presentation / نمایش پیام‌های گذرا */
 toastoverlay > toast {
-  background-color: rgba(20, 20, 20, 0.85);
-  margin: 12px;
-  border-radius: 24px;
-  padding: 6px 8px;
+    background-color: alpha(#141414, 0.92);
+    border-radius: 24px;
+    margin: 12px;
+    padding: 6px 10px;
 }
 
-toastoverlay > * > widget {
-margin: 6px;
-}
-
-
-/* Traffic Card & Details (Redesigned - v1.5) */
+/* Traffic card and session statistics / کارت ترافیک و آمار نشست */
 .traffic-card {
     background-color: @card_bg_color;
-    border: 1px solid @card_border_color;
-    border-radius: 14px;
-    padding: 8px 4px;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+    border: 1px solid alpha(@card_fg_color, 0.12);
+    border-radius: 16px;
+    padding: 10px 6px;
+    box-shadow: 0 2px 8px alpha(#000000, 0.10);
 }
 
 .traffic-card separator {
-    min-height: 30px;
+    min-height: 32px;
     margin-top: 8px;
     margin-bottom: 8px;
     background-color: alpha(@card_fg_color, 0.12);
 }
 
 .traffic-value {
-    font-family: monospace, Courier, monospace;
+    font-family: monospace;
     font-size: 0.95rem;
-    font-weight: bold;
+    font-weight: 700;
     letter-spacing: -0.2px;
 }
 
@@ -143,7 +90,6 @@ margin: 6px;
     margin-top: 1px;
 }
 
-/* Colored circular icon badges for each traffic stat */
 .traffic-icon-badge {
     min-width: 26px;
     min-height: 26px;
@@ -166,7 +112,7 @@ margin: 6px;
     color: @warning_color;
 }
 
-/* Favorite (star) button / دکمه ستاره کانفیگ‌های مورد علاقه */
+/* Favorite control / کنترل علاقه‌مندی */
 .server-fav-btn {
     min-width: 22px;
     min-height: 22px;
@@ -178,14 +124,14 @@ margin: 6px;
     color: #f2c200;
 }
 
-/* Protocol badges on each server row / نشان پروتکل روی ردیف سرور */
+/* Protocol badges / نشان‌های پروتکل */
 .proto-badge {
+    min-width: 34px;
+    border-radius: 999px;
+    padding: 1px 7px;
     font-size: 0.68rem;
     font-weight: 700;
     letter-spacing: 0.4px;
-    border-radius: 999px;
-    padding: 1px 7px;
-    min-width: 34px;
 }
 
 .proto-tcp {
@@ -206,28 +152,28 @@ margin: 6px;
 /* Cascading auto-connect banner / بنر اتصال آبشاری */
 .cascade-banner {
     background-color: alpha(@accent_bg_color, 0.12);
-    border: 1px solid alpha(@accent_bg_color, 0.22);
-    border-radius: 12px;
-    padding: 8px 10px;
+    border: 1px solid alpha(@accent_bg_color, 0.24);
+    border-radius: 14px;
+    padding: 9px 11px;
 }
 
 .cascade-banner.cascade-success {
     background-color: alpha(@success_color, 0.14);
-    border-color: alpha(@success_color, 0.28);
+    border-color: alpha(@success_color, 0.30);
 }
 
 .cascade-banner.cascade-fail {
     background-color: alpha(@error_color, 0.12);
-    border-color: alpha(@error_color, 0.26);
+    border-color: alpha(@error_color, 0.28);
 }
 
 .cascade-title {
-    font-weight: 600;
     font-size: 0.88rem;
+    font-weight: 600;
 }
 
 .cascade-meta {
-    font-family: monospace, Courier, monospace;
+    font-family: monospace;
     font-size: 0.78rem;
 }
 

@@ -1,1 +1,2 @@
-cffi
+# Local CFFI build dependency / وابستگی محلی ساخت CFFI
+cffi==2.0.0

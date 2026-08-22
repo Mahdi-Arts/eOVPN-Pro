@@ -1,112 +1,114 @@
 """
-eOVPN-Pro Application Lifecycle & Startup Module
-ماژول چرخه حیات و نقطه ورود اجرای برنامه در eOVPN-Pro
-
-Initializes GTK4/Adwaita runtime, command-line arguments, internationalization (i18n),
-and Right-to-Left (RTL) layout direction.
-راه‌اندازی محیط GTK4/Adwaita، پارامترهای خط فرمان، چندزبانه بودن و تنظیم چیدمان راست‌به‌چپ (RTL).
+eOVPN-Pro GTK application lifecycle and command-line entry point.
+چرخه عمر برنامه GTK و نقطه ورود خط فرمان eOVPN-Pro.
 """
 
-import sys
+from __future__ import annotations
+
+import locale
 import logging
+import sys
 
 import gi
-gi.require_version("Gtk", "4.0")
-gi.require_version("Adw", "1")
-from gi.repository import Gtk, GLib, Gio, Gdk
 
+gi.require_version("Adw", "1")
+gi.require_version("Gtk", "4.0")
+from gi.repository import Gdk, Gio, GLib, Gtk
+
+from .constants import APP_ID
+from .context import ApplicationContext
 from .eovpn_base import Base
 from .main_window import MainWindow
 
 logger = logging.getLogger(__name__)
 
 
-class eovpn(Base):
-    """
-    Main application wrapper controlling initialization and UI display.
-    کلاس مدیریت اصلی جهت بارگذاری رابط کاربری و تنظیمات زبان.
-    """
+class EOVPNApplicationController(Base):
+    """Creates the single main window / ساخت پنجره اصلی تک‌نمونه‌ای."""
 
-    def __init__(self, app: Gtk.Application):
-        super(eovpn, self).__init__()
+    def __init__(
+        self,
+        app: Gtk.Application,
+        context: ApplicationContext,
+    ) -> None:
+        super().__init__(context)
         self.app = app
 
-    def start(self):
-        """
-        Configures text direction (RTL/LTR), custom CSS styles, and initializes MainWindow.
-        تنظیم جهت متن (راست‌به‌چپ برای فارسی)، بارگذاری استایل‌های CSS و نمایش پنجره اصلی.
-        """
-        lang = self.get_setting(self.SETTING.LANGUAGE) or "en"
-        if lang == "fa":
-            Gtk.Widget.set_default_direction(Gtk.TextDirection.RTL)
-        else:
-            Gtk.Widget.set_default_direction(Gtk.TextDirection.LTR)
+    def start(self) -> None:
+        """Applies direction, CSS, and presents the main window / اعمال جهت، CSS و نمایش پنجره."""
+        language = self.get_setting(self.SETTING.LANGUAGE) or "system"
+        system_locale = locale.getlocale()[0] or ""
+        is_rtl = language == "fa" or (language == "system" and system_locale.startswith("fa"))
+        Gtk.Widget.set_default_direction(
+            Gtk.TextDirection.RTL if is_rtl else Gtk.TextDirection.LTR
+        )
 
-        css_provider = Gtk.CssProvider()
+        provider = Gtk.CssProvider()
         try:
-            css_provider.load_from_resource(self.EOVPN_GRESOURCE_PREFIX + "/css/main.css")
+            provider.load_from_resource(self.EOVPN_CSS)
             display = Gdk.Display.get_default()
-            if display:
+            if display is not None:
                 Gtk.StyleContext.add_provider_for_display(
-                    display, css_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+                    display,
+                    provider,
+                    Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
                 )
-        except Exception as e:
-            logger.warning("Failed to load embedded CSS resource: %s", e)
+        except Exception as exc:
+            logger.warning("Could not load application CSS: %s", exc)
 
-        main_window = MainWindow(self.app)
-        main_window.show()
+        MainWindow(self.app, self.context).show()
 
 
-def on_activate(app: Gtk.Application):
-    main = eovpn(app)
-    main.start()
+def on_activate(app: Gtk.Application) -> None:
+    """Presents the existing window or creates one / نمایش پنجره موجود یا ساخت نمونه جدید."""
+    windows = app.get_windows()
+    if windows:
+        windows[0].present()
+        return
+    EOVPNApplicationController(app, ApplicationContext()).start()
+
+
+def _configure_logging(level_name: str) -> None:
+    """Enables a validated logging level / فعال‌سازی سطح معتبر لاگ."""
+    allowed = {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"}
+    normalized = level_name.upper()
+    if normalized not in allowed:
+        logger.warning("Ignored unsupported debug level: %s", level_name)
+        return
+    logging.basicConfig(
+        level=normalized,
+        format="%(levelname)s:%(name)s:%(funcName)s:%(message)s",
+    )
+
+
+def do_command_line(
+    app: Gtk.Application,
+    command_line: Gio.ApplicationCommandLine,
+) -> int:
+    """Processes supported options and activates the app / پردازش گزینه‌ها و فعال‌سازی برنامه."""
+    options = command_line.get_options_dict()
+    if options.contains("debug"):
+        value = options.lookup_value("debug", None)
+        if value:
+            _configure_logging(value.get_string())
+    app.activate()
+    return 0
 
 
 def launch_eovpn() -> int:
-    """
-    Primary entry point invoked by the executable binary.
-    نقطه ورود اصلی فراخوانی‌شده توسط فایل اجرایی برنامه.
-    """
+    """Runs the single-instance GTK application / اجرای برنامه تک‌نمونه‌ای GTK."""
     app = Gtk.Application(
-        application_id='com.github.mahdi-arts.eovpn-pro',
-        flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE
+        application_id=APP_ID,
+        flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE,
     )
-
     app.add_main_option(
-        "debug", ord("d"), GLib.OptionFlags.NONE,
-        GLib.OptionArg.STRING, "Show Debug Messages.", "[CRITICAL|ERROR|WARNING|INFO|DEBUG]"
+        "debug",
+        ord("d"),
+        GLib.OptionFlags.NONE,
+        GLib.OptionArg.STRING,
+        "Show debug messages.",
+        "[CRITICAL|ERROR|WARNING|INFO|DEBUG]",
     )
-
-    app.connect('activate', on_activate)
-    app.connect('command-line', do_command_line)
-
-    # Strip legacy command-line flags that GLib option parsing does not
-    # understand, so they cannot cause a startup failure.
-    # حذف آرگومان‌های قدیمی که پارسر GLib آن‌ها را نمی‌شناسد تا باعث خطای راه‌اندازی نشوند
-    for legacy_flag in ("-c", "--config"):
-        if legacy_flag in sys.argv:
-            sys.argv.remove(legacy_flag)
-
+    app.connect("activate", on_activate)
+    app.connect("command-line", do_command_line)
     return app.run(sys.argv)
-
-
-def do_command_line(app: Gtk.Application, args: Gio.ApplicationCommandLine) -> bool:
-    options_dict = args.get_options_dict()
-
-    if options_dict.contains("debug"):
-        debug_val = options_dict.lookup_value("debug", None)
-        if debug_val:
-            debug_lvl = debug_val.get_string()
-            if debug_lvl.isnumeric():
-                lvl_int = int(debug_lvl)
-                if lvl_int <= 50:
-                    logging.basicConfig(
-                        level=lvl_int, format='%(levelname)s:%(name)s.py:%(funcName)s:%(message)s'
-                    )
-            elif debug_lvl in ["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"]:
-                logging.basicConfig(
-                    level=debug_lvl, format='%(levelname)s:%(name)s.py:%(funcName)s:%(message)s'
-                )
-
-    app.activate()
-    return True

@@ -1,16 +1,20 @@
 eovpn-pro (1.5.0-1) unstable; urgency=medium
 
   * Release version 1.5.0.
-  * Added full Persian (Farsi) RTL localization and dynamic switching.
-  * Added concurrent multi-threaded TCP latency test & dynamic sorting.
-  * Redesigned connection statistics card with live /proc/net/dev bandwidth monitoring.
-  * Added OpenVPN 3 Data Channel Offload (DCO) toggle.
-  * Added live server search, smart filtering (All/Favorites/Online/Offline) and star-marked favorite servers.
-  * Security hardening: removed OTP logging, added delete-all confirmation dialog, safe ZIP size caps,
-    staging download (no config loss on failed updates), safe redirects and zip-bomb protection.
-  * Updated application ID to com.github.mahdi-arts.eovpn-pro to match the repository.
-  * Fixed off-by-one in last-connected cursor restore and thread-safety of IP lookup UI updates.
-  * Added linting (flake8), unit tests for the server filter, and an active CI/CD workflow (.deb + Flatpak).
-  * Added bilingual CONTRIBUTING.md, SECURITY.md, docs/ARCHITECTURE.md and docs/RELEASE_CHECKLIST.md.
+  * Scope NetworkManager operations to eOVPN-owned UUIDs and OpenVPN 3
+    operations to one persisted session object path.
+  * Add HTTPS-only, bounded configuration imports with private 0700/0600
+    storage, duplicate/path/symlink checks, and transactional rollback.
+  * Add explicit Secret Service credential save/clear controls and opt-in
+    public IP lookup with bounded, validated responses.
+  * Distinguish TCP-offline endpoints from unmeasured UDP endpoints.
+  * Add GTK 4.6-compatible destructive confirmations and improved settings,
+    challenge, status, accessibility, and privacy UX.
+  * Migrate to the Flathub-compatible application ID
+    io.github.Mahdi_Arts.eOVPN_Pro with legacy GSettings/keyring migration.
+  * Add active CI quality gates, Debian package builds, Flatpak staging,
+    security checks, and release checksums.
+  * Correct upstream/contributor attribution and remove third-party flag/icon
+    assets in favor of original artwork and Unicode country indicators.
 
  -- Mahdi Bagheban <info@MahdiArts.ir>  Sat, 22 Aug 2026 12:00:00 +0330

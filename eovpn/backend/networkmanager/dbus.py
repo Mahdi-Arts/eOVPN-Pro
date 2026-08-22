@@ -1,80 +1,100 @@
 """
-eOVPN-Pro NetworkManager D-Bus Listener
-شنودکننده رویدادهای وضعیت اتصالات NetworkManager از طریق D-Bus در eOVPN-Pro
+Scoped NetworkManager D-Bus signal listener.
+شنونده محدودشده سیگنال‌های D-Bus در NetworkManager.
+
+The listener subscribes to one active-connection object path. Signals emitted
+for VPNs created by other applications are never forwarded to the UI.
+شنونده فقط به مسیر شیء یک اتصال فعال متصل می‌شود و سیگنال VPNهای متعلق به
+برنامه‌های دیگر را به رابط کاربری منتقل نمی‌کند.
 """
 
-import gi
-gi.require_version("NM", "1.0")
-from gi.repository import GLib, Gio, NM
+from __future__ import annotations
+
 import logging
+from collections.abc import Callable
+
+import gi
+
+gi.require_version("NM", "1.0")
+from gi.repository import Gio, NM
 
 logger = logging.getLogger(__name__)
 
-error_reasons = [
+ERROR_REASONS = (
     "The reason for the VPN connection state change is unknown.",
     "No reason was given for the VPN connection state change.",
     "The VPN connection changed state because the user disconnected it.",
-    "The VPN connection changed state because the device it was using was disconnected.",
+    "The VPN connection changed state because its device was disconnected.",
     "The service providing the VPN connection was stopped.",
-    "The IP config of the VPN connection was invalid.",
+    "The IP configuration of the VPN connection was invalid.",
     "The connection attempt to the VPN service timed out.",
-    "A timeout occurred while starting the service providing the VPN connection.",
-    "Starting the service providing the VPN connection failed.",
+    "A timeout occurred while starting the VPN service.",
+    "Starting the VPN service failed.",
     "Necessary secrets for the VPN connection were not provided.",
     "Authentication to the VPN server failed.",
-    "The connection was deleted from settings."
-]
+    "The connection was deleted from settings.",
+)
 
 
 class NMDbus:
-    """
-    Subscribes to NetworkManager VPN connection state signals over System D-Bus.
-    اشتراک در سیگنال‌های تغییر وضعیت VPN در سرویس NetworkManager.
-    """
+    """Watches one eOVPN-owned active connection / پایش یک اتصال متعلق به eOVPN."""
 
-    def __init__(self):
-        self.conn = None
-        self.conn_id = None
+    def __init__(self) -> None:
+        self.connection: Gio.DBusConnection | None = None
+        self.subscription_id: int | None = None
+        self.object_path: str | None = None
 
-    def watch(self, callback):
-        self.conn = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
-        logger.debug("NetworkManager D-Bus connection: %s", self.conn)
-
-        self.conn_id = self.conn.signal_subscribe(
+    def watch(self, callback: Callable, object_path: str) -> None:
+        """Subscribes to exactly one object path / اشتراک دقیق در یک مسیر شیء."""
+        if not object_path or not object_path.startswith("/"):
+            raise ValueError("A valid NetworkManager active-connection path is required.")
+        self.remove_watch()
+        self.connection = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+        self.object_path = object_path
+        self.subscription_id = self.connection.signal_subscribe(
             "org.freedesktop.NetworkManager",
             "org.freedesktop.NetworkManager.VPN.Connection",
             "VpnStateChanged",
-            None,
+            object_path,
             None,
             Gio.DBusSignalFlags.NONE,
-            self.sub_callback,
-            callback
+            self._on_state_changed,
+            callback,
         )
+        logger.debug("Watching eOVPN NetworkManager object %s", object_path)
 
-    def remove_watch(self):
-        if self.conn and self.conn_id:
-            self.conn.signal_unsubscribe(self.conn_id)
-            self.conn_id = None
+    def remove_watch(self) -> None:
+        """Removes the active subscription / حذف اشتراک فعال."""
+        if self.connection is not None and self.subscription_id is not None:
+            self.connection.signal_unsubscribe(self.subscription_id)
+        self.subscription_id = None
+        self.object_path = None
+        self.connection = None
 
-    def sub_callback(
-        self, connection, sender_name, object_path, interface_name,
-        signal_name, parameters, update_callback,
-    ):
-        logger.debug("NM Signal: %s %s", signal_name, parameters)
+    def _on_state_changed(
+        self,
+        _connection,
+        _sender_name,
+        object_path,
+        _interface_name,
+        _signal_name,
+        parameters,
+        update_callback,
+    ) -> None:
+        """Forwards a validated state transition / ارسال تغییر وضعیت اعتبارسنجی‌شده."""
+        if object_path != self.object_path:
+            logger.warning("Ignored NetworkManager signal from an unrelated object: %s", object_path)
+            return
 
-        x = GLib.Variant("(uu)", parameters)
-        status = x.get_child_value(0).get_uint32()
-        reason = x.get_child_value(1).get_uint32()
-
+        status, reason = parameters.unpack()
         if status == NM.VpnConnectionState.ACTIVATED:
-            logger.debug("NetworkManager VPN connected.")
             update_callback(True)
-        elif status in (NM.VpnConnectionState.DISCONNECTED, NM.VpnConnectionState.FAILED):
-            logger.debug("NetworkManager VPN disconnected (reason: %d).", reason)
-            is_connection_deletion_required = reason in [5, 6, 7, 8, 9, 10]
-            reason_msg = None
-            if is_connection_deletion_required and reason < len(error_reasons):
-                reason_msg = error_reasons[reason]
-            GLib.timeout_add_seconds(1, update_callback, False, reason_msg)
-        else:
-            update_callback([status, reason])
+            return
+        if status in (NM.VpnConnectionState.DISCONNECTED, NM.VpnConnectionState.FAILED):
+            reason_message = None
+            if status == NM.VpnConnectionState.FAILED and 0 <= reason < len(ERROR_REASONS):
+                reason_message = ERROR_REASONS[reason]
+
+            update_callback(False, reason_message)
+            return
+        update_callback([status, reason])

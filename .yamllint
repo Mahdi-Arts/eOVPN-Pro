@@ -1,0 +1,13 @@
+---
+extends: default
+
+rules:
+  document-start: enable
+  line-length:
+    max: 120
+    level: error
+  truthy:
+    allowed-values: ['true', 'false', 'on']
+    check-keys: false
+  comments:
+    min-spaces-from-content: 1
