@@ -13,11 +13,15 @@ import logging
 import urllib.error
 import urllib.request
 
+from .._meta import app_version
+
 logger = logging.getLogger(__name__)
 
-# Standard browser User-Agent for reliable API access
-# هدر استاندارد کاربری جهت جلوگیری از مسدودسازی توسط سرویس‌دهنده‌ها
-USER_AGENT = "eOVPN-Pro/1.5 (Linux; GTK4 Client)"
+# Standard browser User-Agent for reliable API access; the version is taken
+# from the generated metadata so it never drifts out of sync.
+# هدر استاندارد کاربری جهت جلوگیری از مسدودسازی توسط سرویس‌دهنده‌ها؛ نسخه از
+# متادیتای تولیدشده خوانده می‌شود تا هرگز از هماهنگی خارج نشود.
+USER_AGENT = f"eOVPN-Pro/{app_version()} (Linux; GTK4 Client)"
 REQUEST_TIMEOUT = 3.5  # seconds / ثانیه
 
 
@@ -66,8 +70,7 @@ class Lookup:
         دریافت اطلاعات IP و کشور از سرویس کلودفلر بر بستر HTTPS.
         """
         req = urllib.request.Request(
-            "https://www.cloudflare.com/cdn-cgi/trace",
-            headers={"User-Agent": USER_AGENT}
+            "https://www.cloudflare.com/cdn-cgi/trace", headers={"User-Agent": USER_AGENT}
         )
         with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as response:
             data = response.read().decode("utf-8", errors="ignore")
@@ -94,10 +97,7 @@ class Lookup:
         Fetches IP and country from ipapi.co over HTTPS.
         دریافت اطلاعات IP و کشور از سرویس ipapi.co بر بستر HTTPS.
         """
-        req = urllib.request.Request(
-            "https://ipapi.co/json/",
-            headers={"User-Agent": USER_AGENT}
-        )
+        req = urllib.request.Request("https://ipapi.co/json/", headers={"User-Agent": USER_AGENT})
         with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as response:
             data = json.loads(response.read().decode("utf-8"))
             if "ip" in data:
@@ -112,10 +112,7 @@ class Lookup:
         Fetches IP and country from ip-api.com (or json fallback) over HTTPS / JSON.
         دریافت اطلاعات IP و کشور به عنوان گره پشتیبان.
         """
-        req = urllib.request.Request(
-            "https://api.ipify.org?format=json",
-            headers={"User-Agent": USER_AGENT}
-        )
+        req = urllib.request.Request("https://api.ipify.org?format=json", headers={"User-Agent": USER_AGENT})
         with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as response:
             data = json.loads(response.read().decode("utf-8"))
             if "ip" in data:

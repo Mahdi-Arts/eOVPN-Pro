@@ -26,6 +26,28 @@ with `.deb` and Flatpak artifacts.
 - [ ] New changelog entry added to `metainfo.xml` `<releases>` and `CHANGELOG.md`
 - [ ] `docs/REVIEW_SENIOR_2026-08.md` re-checked for unresolved P0/P1 items
   بررسی مجدد موارد حل‌نشدهٔ P0/P1 در آخرین گزارش ممیزی
+- [ ] `.github/workflows/` present with `ci.yml`, `codeql.yml` and `release.yml`
+  وجود ورک‌فلوهای `ci.yml`، `codeql.yml` و `release.yml` در `.github/workflows/`
+- [ ] CI is green on the release commit (lint, tests, coverage, pip-audit, CodeQL, smoke builds)
+  سبز بودن CI روی کامیت انتشار (لینت، تست، پوشش، pip-audit، CodeQL و ساخت‌های آزمایشی)
+
+## 🚀 Publish via CI / انتشار از طریق CI
+
+```bash
+# The release workflow verifies version parity, builds all five formats,
+# generates SHA256SUMS and publishes the GitHub Release.
+# ورک‌فلوی انتشار، تطابق نسخه را بررسی و هر پنج قالب را می‌سازد، SHA256SUMS را
+# تولید و نسخه GitHub را منتشر می‌کند.
+git tag -a v1.5.0 -m "eOVPN-Pro 1.5.0"
+git push origin v1.5.0
+```
+
+- [ ] Wait for the `Release` workflow to finish green
+  منتظر سبز شدن ورک‌فلوی `Release` بمانید
+- [ ] Verify `SHA256SUMS` is attached and matches the artifacts locally
+  بررسی پیوست بودن `SHA256SUMS` و تطابق آن با خروجی‌ها به‌صورت محلی
+- [ ] Smoke-install each package on a clean VM before announcing
+  پیش از اعلام، هر بسته را روی یک ماشین مجازی تمیز نصب و آزمایش کنید
 
 ## 📦 Build .deb Locally / ساخت بسته دبیان به‌صورت محلی
 

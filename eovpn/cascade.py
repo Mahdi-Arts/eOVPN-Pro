@@ -61,9 +61,7 @@ def cascade_banner_meta(index: int, total: int, remaining_seconds: int) -> str:
     خط فرعی فشرده بنر آبشار، مانند ``3/10 · 7s left``.
     """
     total = max(1, int(total))
-    return gettext.gettext("{}/{}  ·  {}s left").format(
-        min(index + 1, total), total, remaining_seconds
-    )
+    return gettext.gettext("{}/{}  ·  {}s left").format(min(index + 1, total), total, remaining_seconds)
 
 
 # ---------------------------------------------------------------------------

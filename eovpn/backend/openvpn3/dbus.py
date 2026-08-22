@@ -48,9 +48,7 @@ class OVPN3Dbus(Base):
     @staticmethod
     def _constants():
         if OVPN3Constants is None:
-            raise RuntimeError(
-                "openvpn3 Python constants are unavailable. Install openvpn3-linux."
-            )
+            raise RuntimeError("openvpn3 Python constants are unavailable. Install openvpn3-linux.")
         return OVPN3Constants
 
     def get_auth_password(self) -> str | None:
@@ -163,7 +161,7 @@ class OVPN3Dbus(Base):
                 self.module.callback,
                 self.module.get_session_path().decode("utf-8"),
             )
-            self.module.ovpn3.connect_vpn()
+            self.module.ovpn3.connect_vpn(self.module.get_session_path())
 
     def get_attention(self) -> list[tuple[Any, Any, int, Any]]:
         if not self.module:
@@ -314,38 +312,20 @@ class OVPN3Dbus(Base):
             reason,
         )
 
-        if (
-            major == constants.StatusMajor.CONNECTION
-            and minor == constants.StatusMinor.CONN_AUTH_FAILED
-        ):
+        if major == constants.StatusMajor.CONNECTION and minor == constants.StatusMinor.CONN_AUTH_FAILED:
             logger.error(reason)
             update_callback(False, reason)
             self.unsubscribe_all()
             if self.module:
                 self.module.disconnect()
-        elif (
-            major == constants.StatusMajor.CONNECTION
-            and minor == constants.StatusMinor.CONN_CONNECTING
-        ):
+        elif major == constants.StatusMajor.CONNECTION and minor == constants.StatusMinor.CONN_CONNECTING:
             update_callback([])
-        elif (
-            major == constants.StatusMajor.CONNECTION
-            and minor == constants.StatusMinor.CONN_CONNECTED
-        ):
+        elif major == constants.StatusMajor.CONNECTION and minor == constants.StatusMinor.CONN_CONNECTED:
             update_callback(True)
-        elif (
-            major == constants.StatusMajor.CONNECTION
-            and minor == constants.StatusMinor.CONN_DISCONNECTED
-        ):
+        elif major == constants.StatusMajor.CONNECTION and minor == constants.StatusMinor.CONN_DISCONNECTED:
             self.unsubscribe_all()
             update_callback(False)
-        elif (
-            major == constants.StatusMajor.CONNECTION
-            and minor == constants.StatusMinor.CONN_PAUSED
-        ):
+        elif major == constants.StatusMajor.CONNECTION and minor == constants.StatusMinor.CONN_PAUSED:
             update_callback(["pause"])
-        elif (
-            major == constants.StatusMajor.CONNECTION
-            and minor == constants.StatusMinor.CONN_RESUMING
-        ):
+        elif major == constants.StatusMajor.CONNECTION and minor == constants.StatusMinor.CONN_RESUMING:
             update_callback(["resume"])

@@ -179,9 +179,10 @@ class TestFolderImportCap(unittest.TestCase):
             os.makedirs(source)
             with open(os.path.join(source, "big.ovpn"), "w") as f:
                 f.write("remote x 1194\n" + ("A" * 4096))
-            with unittest.mock.patch(
-                "eovpn.utils.MAX_FOLDER_IMPORT_TOTAL_BYTES", 64
-            ), self.assertRaises(ValueError):
+            with (
+                unittest.mock.patch("eovpn.utils.MAX_FOLDER_IMPORT_TOTAL_BYTES", 64),
+                self.assertRaises(ValueError),
+            ):
                 download_remote_to_destination(source, dest)
 
     def test_cap_constant_is_sane(self):
@@ -240,5 +241,5 @@ class TestServerFilter(unittest.TestCase):
         )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

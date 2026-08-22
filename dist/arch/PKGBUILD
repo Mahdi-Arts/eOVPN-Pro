@@ -86,6 +86,10 @@ else
   # حالت انتشار: آرشیو همین تگ نسخه از GitHub دریافت می‌شود.
   _treeroot=""
   source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz")
+  # NOTE: fill in the real checksum here once the v${pkgver} tag exists on
+  # GitHub; CI builds the tree directly (in-tree mode) so it is unaffected.
+  # توجه: پس از ایجاد تگ v${pkgver} در گیت‌هاب، جمع‌چک واقعی را اینجا وارد کنید؛
+  # CI مستقیماً درخت را می‌سازد (حالت درون‌مخزنی) و تحت تأثیر نیست.
   sha256sums=('SKIP')
 fi
 

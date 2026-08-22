@@ -70,26 +70,35 @@ def launch_eovpn() -> int:
     نقطه ورود اصلی فراخوانی‌شده توسط فایل اجرایی برنامه.
     """
     app = Gtk.Application(
-        application_id='com.github.mahdi-arts.eovpn-pro',
-        flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE
+        application_id="com.github.mahdi-arts.eovpn-pro", flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE
     )
 
     app.add_main_option(
-        "debug", ord("d"), GLib.OptionFlags.NONE,
+        "debug",
+        ord("d"),
+        GLib.OptionFlags.NONE,
         GLib.OptionArg.STRING,
         "Show Debug Messages. / نمایش پیام‌های دیباگ.",
-        "[CRITICAL|ERROR|WARNING|INFO|DEBUG]"
+        "[CRITICAL|ERROR|WARNING|INFO|DEBUG]",
     )
 
-    app.connect('activate', on_activate)
-    app.connect('command-line', do_command_line)
+    # Legacy flags are registered as official (ignored) options instead of
+    # being stripped from sys.argv by hand: GLib parsing stays authoritative,
+    # old launcher lines keep working, and no argument is silently lost.
+    # پرچم‌های قدیمی به‌عنوان گزینه رسمی (نادیده‌گرفته‌شده) ثبت می‌شوند به‌جای
+    # حذف دستی از sys.argv؛ پارسر GLib مرجع باقی می‌ماند، خطوط اجرای قدیمی کار
+    # می‌کنند و هیچ آرگومانی بی‌صدا از بین نمی‌رود.
+    app.add_main_option(
+        "config",
+        ord("c"),
+        GLib.OptionFlags.NONE,
+        GLib.OptionArg.STRING,
+        "Deprecated legacy option (ignored). / گزینه قدیمی منسوخ (نادیده گرفته می‌شود).",
+        None,
+    )
 
-    # Strip legacy command-line flags that GLib option parsing does not
-    # understand, so they cannot cause a startup failure. The list is rebuilt
-    # instead of mutated while iterating (safer and avoids index skips).
-    # حذف آرگومان‌های قدیمی که پارسر GLib آن‌ها را نمی‌شناسد تا باعث خطای
-    # راه‌اندازی نشوند. فهرست بازسازی می‌شود (به‌جای تغییر حین پیمایش).
-    sys.argv[:] = [arg for arg in sys.argv if arg not in ("-c", "--config")]
+    app.connect("activate", on_activate)
+    app.connect("command-line", do_command_line)
 
     return app.run(sys.argv)
 
@@ -109,13 +118,11 @@ def do_command_line(app: Gtk.Application, args: Gio.ApplicationCommandLine) -> b
                 lvl_int = int(debug_lvl)
                 if lvl_int <= 50:
                     logging.basicConfig(
-                        level=lvl_int,
-                        format='%(levelname)s:%(name)s.py:%(funcName)s:%(message)s'
+                        level=lvl_int, format="%(levelname)s:%(name)s.py:%(funcName)s:%(message)s"
                     )
             elif debug_lvl in {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"}:
                 logging.basicConfig(
-                    level=debug_lvl,
-                    format='%(levelname)s:%(name)s.py:%(funcName)s:%(message)s'
+                    level=debug_lvl, format="%(levelname)s:%(name)s.py:%(funcName)s:%(message)s"
                 )
 
     app.activate()

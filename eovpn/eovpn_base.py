@@ -9,7 +9,6 @@ custom UI list widgets, and secure in-memory session stores.
 
 import contextlib
 import gettext
-import json
 import logging
 import os
 import shutil
@@ -19,25 +18,45 @@ from typing import Any
 
 import gi
 
-gi.require_version('Notify', '0.7')
-gi.require_version('Secret', '1')
-gi.require_version('Gtk', '4.0')
+gi.require_version("Notify", "0.7")
+gi.require_version("Secret", "1")
+gi.require_version("Gtk", "4.0")
 from gi.repository import GdkPixbuf, Gio, GLib, GObject, Gtk, Notify, Secret
 
+from ._meta import load_metadata
 from .auto_connect import format_proto_badge, parse_ovpn_protocols, proto_badge_css
 from .utils import audit_ovpn_content, download_remote_to_destination
 
 _builder_record: dict[str, Gtk.Builder] = {}
 _storage_record: dict[str, object] = {}
-_session_secrets: dict[str, str] = {}  # Secure in-RAM password store / ذخیره امن رمز در حافظه
+# Secure in-RAM password store. A mutable bytearray is used instead of a str
+# so the secret can be actively zeroed when the session ends (str objects are
+# immutable and cannot be wiped in CPython).
+# ذخیره امن رمز در حافظه. به‌جای str از bytearray تغییرپذیر استفاده می‌شود تا
+# هنگام پایان نشست بتوان رمز را فعالانه صفر کرد (اشیای str تغییرناپذیرند).
+_session_secrets: dict[str, bytearray] = {}
 
 EOVPN_SECRET_SCHEMA = Secret.Schema.new(
     "com.github.mahdi-arts.eovpn-pro",
     Secret.SchemaFlags.NONE,
-    {"username": Secret.SchemaAttributeType.STRING}
+    {"username": Secret.SchemaAttributeType.STRING},
 )
 
+# Single Gio.Settings instance shared by every Base subclass. Creating one
+# per instance wasted D-Bus round-trips and made settings state implicit.
+# یک نمونه Gio.Settings مشترک بین همه زیرکلاس‌های Base؛ ساخت نمونه برای هر
+# شیء، رفت‌وبرگشت‌های D-Bus اضافی ایجاد می‌کرد.
+_settings_instance: Gio.Settings | None = None
+
 logger = logging.getLogger(__name__)
+
+
+def _get_gs_settings() -> Gio.Settings:
+    """Returns the process-wide Gio.Settings singleton."""
+    global _settings_instance
+    if _settings_instance is None:
+        _settings_instance = Gio.Settings.new("com.github.mahdi-arts.eovpn-pro")
+    return _settings_instance
 
 
 class ConfigItem(GObject.Object):
@@ -45,6 +64,7 @@ class ConfigItem(GObject.Object):
     Model item representing a single OpenVPN configuration entry.
     آیتم مدل مربوط به یک کانفیگ OpenVPN در ListStore.
     """
+
     def __init__(self, name: str, **kwargs):
         super().__init__(**kwargs)
         self.name = name
@@ -59,11 +79,16 @@ class ConfigRow(Gtk.ListBoxRow):
     ویجت اختصاصی ردیف لیست برای نمایش کانفیگ OpenVPN همراه با برچسب پینگ/تأخیر،
     دکمه ستاره (مورد علاقه) و دکمه ویرایش.
     """
-    def __init__(self, filename: str, ovpn_dir: str,
-                 favorites: set[str] | None = None,
-                 on_favorite_toggled=None,
-                 protocols: set[str] | frozenset[str] | None = None,
-                 **kwargs):
+
+    def __init__(
+        self,
+        filename: str,
+        ovpn_dir: str,
+        favorites: set[str] | None = None,
+        on_favorite_toggled=None,
+        protocols: set[str] | frozenset[str] | None = None,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
         self.filename: str = filename
         self.ovpn_dir: str = ovpn_dir
@@ -79,16 +104,13 @@ class ConfigRow(Gtk.ListBoxRow):
 
         # Favorite (star) toggle / دکمه ستاره‌دار کردن کانفیگ
         self.fav_button = Gtk.ToggleButton()
-        self.fav_button.set_icon_name(
-            "starred-symbolic" if is_favorite else "non-starred-symbolic"
-        )
+        self.fav_button.set_icon_name("starred-symbolic" if is_favorite else "non-starred-symbolic")
         self.fav_button.add_css_class("flat")
         self.fav_button.add_css_class("server-fav-btn")
         self.fav_button.set_valign(Gtk.Align.CENTER)
         self.fav_button.set_active(is_favorite)
         self.fav_button.set_tooltip_text(
-            gettext.gettext("Remove from Favorites") if is_favorite
-            else gettext.gettext("Add to Favorites")
+            gettext.gettext("Remove from Favorites") if is_favorite else gettext.gettext("Add to Favorites")
         )
         self.fav_button.connect("toggled", self._on_favorite_toggled)
 
@@ -108,9 +130,7 @@ class ConfigRow(Gtk.ListBoxRow):
         self.proto_badge.set_visible(bool(badge_text))
         self.proto_badge.set_valign(Gtk.Align.CENTER)
         if badge_text:
-            self.proto_badge.set_tooltip_text(
-                gettext.gettext("OpenVPN protocol: {}").format(badge_text)
-            )
+            self.proto_badge.set_tooltip_text(gettext.gettext("OpenVPN protocol: {}").format(badge_text))
 
         # Latency label / برچسب نمایش پینگ
         self.latency_label = Gtk.Label.new("")
@@ -238,8 +258,7 @@ class ConfigRow(Gtk.ListBoxRow):
         active = button.get_active()
         button.set_icon_name("starred-symbolic" if active else "non-starred-symbolic")
         button.set_tooltip_text(
-            gettext.gettext("Remove from Favorites") if active
-            else gettext.gettext("Add to Favorites")
+            gettext.gettext("Remove from Favorites") if active else gettext.gettext("Add to Favorites")
         )
         if self.on_favorite_toggled:
             self.on_favorite_toggled(self.filename, active)
@@ -278,14 +297,18 @@ class Settings:
     LANGUAGE = "language"
     FAVORITES = "favorite-configs"
 
-    # Keep this list in sync with the GSettings schema keys
-    # این فهرست باید با کلیدهای اسکیمای GSettings هماهنگ بماند
-    all_settings = [
-        "last-connected", "last-connected-cursor", "notifications", "manager",
-        "req-auth", "ca", "remote", "auth-user", "nm-active-uuid", "show-flag",
-        "listbox-v-adjust", "layout", "dark-theme", "auto-reconnect",
-        "favorite-configs", "language", "openvpn3-dco"
-    ]
+    # Populated below from the declared keys (single source of truth).
+    # از روی کلیدهای اعلام‌شده در پایین پر می‌شود (منبع واحد حقیقت).
+    all_settings: list[str]
+
+
+# Derived from the declared keys above; parity with the GSettings schema is
+# enforced by scripts/check_project_meta.py.
+# از روی کلیدهای اعلام‌شده در بالا تولید می‌شود؛ تطابق آن با اسکیمای GSettings
+# توسط scripts/check_project_meta.py تضمین می‌شود.
+Settings.all_settings = [
+    value for key, value in vars(Settings).items() if not key.startswith("_") and isinstance(value, str)
+]
 
 
 class Base:
@@ -295,22 +318,7 @@ class Base:
     """
 
     def __init__(self):
-        metadata_path = os.path.join(os.path.dirname(__file__), "metadata.json")
-        try:
-            with open(metadata_path, encoding="utf-8") as f:
-                metadata = json.loads(f.read())
-        except Exception:
-            metadata = {
-                "APP_NAME": "eOVPN Pro",
-                "APP_ID": "com.github.mahdi-arts.eovpn-pro",
-                "APP_VERSION": "1.5",
-                "COMMIT": "release",
-                "AUTHOR": "Mahdi Bagheban",
-                "AUTHOR_MAIL": "info@MahdiArts.ir",
-                "AUTHOR_MAIL_SECONDARY": "mehdi.bagheban@gmail.com",
-                "AUTHOR_WEBSITE": "https://www.MahdiArts.ir",
-                "AUTHOR_DONATE": "https://www.MahdiArts.ir/donate"
-            }
+        metadata = load_metadata()
 
         self.APP_NAME = metadata.get("APP_NAME", "eOVPN Pro")
         self.APP_ID = metadata.get("APP_ID", "com.github.mahdi-arts.eovpn-pro")
@@ -330,18 +338,38 @@ class Base:
         self.EOVPN_GRESOURCE_PREFIX = "/com/github/mahdi-arts/eovpn-pro"
         self.EOVPN_CSS = self.EOVPN_GRESOURCE_PREFIX + "/css/main.css"
         self.SETTING = Settings()
-        self.__settings = Gio.Settings.new(self.APP_ID)
+        self.__settings = _get_gs_settings()
 
     def set_session_password(self, password: str | None):
-        """Stores password securely in volatile RAM session cache only."""
+        """
+        Stores password securely in volatile RAM session cache only.
+
+        The value is kept as a mutable bytearray so it can be actively zeroed
+        on clear (immutable str objects cannot be wiped in CPython).
+
+        ذخیره امن رمز فقط در حافظه موقت پروسه؛ مقدار به‌صورت bytearray تغییرپذیر
+        نگه داشته می‌شود تا هنگام پاک‌سازی فعالانه صفر شود.
+        """
         if password:
-            _session_secrets["auth_password"] = password
+            previous = _session_secrets.get("auth_password")
+            if previous is not None:
+                previous[:] = b"\x00" * len(previous)
+            _session_secrets["auth_password"] = bytearray(password.encode("utf-8"))
         else:
-            _session_secrets.pop("auth_password", None)
+            self._wipe_session_password()
+
+    def _wipe_session_password(self) -> None:
+        """Zeroes and removes the in-RAM password, if any."""
+        secret = _session_secrets.pop("auth_password", None)
+        if secret is not None:
+            secret[:] = b"\x00" * len(secret)
 
     def get_session_password(self) -> str | None:
-        """Retrieves in-memory session password."""
-        return _session_secrets.get("auth_password")
+        """Retrieves in-memory session password (decoded on demand)."""
+        secret = _session_secrets.get("auth_password")
+        if secret is None:
+            return None
+        return bytes(secret).decode("utf-8", errors="ignore")
 
     def get_builder(self, ui_resource_name: str) -> Gtk.Builder:
         if ui_resource_name not in _builder_record:
@@ -360,68 +388,54 @@ class Base:
         # عمداً پویا: رجیستری درون‌حافظه، ویجت‌ها/مدل‌های ناهمگون نگه می‌دارد.
         return _storage_record.get(item)
 
-    def send_connected_notification(self):
+    def _send_notification(self, title: str, message: str, icon_resource: str):
+        """Shared notification dispatcher / ارسال‌کننده مشترک اعلان‌ها."""
         if self.get_setting(self.SETTING.NOTIFICATIONS) is False:
             return
         Notify.init(self.APP_ID)
-        notif = Notify.Notification.new(
-            gettext.gettext("Connected"),
-            gettext.gettext("Secure VPN connection established.")
-        )
+        notif = Notify.Notification.new(title, message)
         try:
             pixbuf = GdkPixbuf.Pixbuf.new_from_resource_at_scale(
-                self.EOVPN_GRESOURCE_PREFIX + "/icons/notification_connected.svg",
-                128, -1, True
+                self.EOVPN_GRESOURCE_PREFIX + icon_resource, 128, -1, True
             )
             notif.set_image_from_pixbuf(pixbuf)
         except Exception as e:
             logger.debug("Failed to set notification pixbuf: %s", e)
         notif.show()
+
+    def send_connected_notification(self):
+        """Notifies that the VPN tunnel is up / اعلان برقراری تونل VPN."""
+        self._send_notification(
+            gettext.gettext("Connected"),
+            gettext.gettext("Secure VPN connection established."),
+            "/icons/notification_connected.svg",
+        )
 
     def send_disconnected_notification(self):
-        if self.get_setting(self.SETTING.NOTIFICATIONS) is False:
-            return
-        Notify.init(self.APP_ID)
-        notif = Notify.Notification.new(
+        """Notifies that the VPN tunnel went down / اعلان قطع تونل VPN."""
+        self._send_notification(
             gettext.gettext("Disconnected"),
-            gettext.gettext("VPN tunnel disconnected.")
+            gettext.gettext("VPN tunnel disconnected."),
+            "/icons/notification_disconnected.svg",
         )
-        try:
-            pixbuf = GdkPixbuf.Pixbuf.new_from_resource_at_scale(
-                self.EOVPN_GRESOURCE_PREFIX + "/icons/notification_disconnected.svg",
-                128, -1, True
-            )
-            notif.set_image_from_pixbuf(pixbuf)
-        except Exception as e:
-            logger.debug("Failed to set notification pixbuf: %s", e)
-        notif.show()
 
     def send_error_notification(self, error_message: str):
-        if self.get_setting(self.SETTING.NOTIFICATIONS) is False:
-            return
-        Notify.init(self.APP_ID)
-        notif = Notify.Notification.new(gettext.gettext("Connection Error"), error_message)
-        try:
-            pixbuf = GdkPixbuf.Pixbuf.new_from_resource_at_scale(
-                self.EOVPN_GRESOURCE_PREFIX + "/icons/notification_disconnected.svg",
-                128, -1, True
-            )
-            notif.set_image_from_pixbuf(pixbuf)
-        except Exception as e:
-            logger.debug("Failed to set notification pixbuf: %s", e)
-        notif.show()
+        """Notifies about a connection error / اعلان خطای اتصال."""
+        self._send_notification(
+            gettext.gettext("Connection Error"),
+            error_message,
+            "/icons/notification_disconnected.svg",
+        )
 
     def get_country_pixbuf(self, country_code: str | None) -> GdkPixbuf.Pixbuf:
         code = country_code.lower() if country_code else "uno"
         try:
             return GdkPixbuf.Pixbuf.new_from_resource_at_scale(
-                f"{self.EOVPN_GRESOURCE_PREFIX}/country_flags/svg/{code}.svg",
-                -1, 128, True
+                f"{self.EOVPN_GRESOURCE_PREFIX}/country_flags/svg/{code}.svg", -1, 128, True
             )
         except Exception:
             return GdkPixbuf.Pixbuf.new_from_resource_at_scale(
-                f"{self.EOVPN_GRESOURCE_PREFIX}/country_flags/svg/uno.svg",
-                -1, 128, True
+                f"{self.EOVPN_GRESOURCE_PREFIX}/country_flags/svg/uno.svg", -1, 128, True
             )
 
     def get_setting(self, key: str):
@@ -432,16 +446,18 @@ class Base:
             return None
 
         v_type = v.get_type_string()
-        if v_type == 'b':
+        if v_type == "b":
             return v.get_boolean()
-        elif v_type == 'i':
+        elif v_type == "i":
             return v.get_int32()
-        elif v_type == 's':
+        elif v_type == "s":
             val = v.get_string()
-            # "null" is the project's sentinel for an unset string key; an
-            # empty string is also treated as unset for robustness.
-            # رشته "null" نشانگر مقدار تنظیم‌نشده است؛ رشته خالی نیز برای
-            # استحکام بیشتر به‌عنوان «تنظیم‌نشده» در نظر گرفته می‌شود.
+            # Schema defaults are now "" (unset). The legacy "null" sentinel
+            # written by pre-1.6 installations is still mapped to None here so
+            # upgrades behave identically.
+            # پیش‌فرض اسکیما اکنون "" (تنظیم‌نشده) است؛ سنتینل قدیمی "null" که
+            # نصب‌های پیش از ۱.۶ نوشته‌اند همچنان در اینجا به None نگاشت می‌شود
+            # تا رفتار ارتقاء یکسان بماند.
             return None if val in ("null", "") else val
         elif v_type == "d":
             return v.get_double()
@@ -618,7 +634,7 @@ class Base:
 
         def fade_tick(tick):
             if tick.get_opacity() <= 0:
-                tick.hide()
+                tick.set_visible(False)
                 return False
             tick.set_opacity(tick.get_opacity() - 0.05)
             return True
@@ -630,7 +646,7 @@ class Base:
                 tick = self.retrieve("settings_tick")
                 if tick:
                     tick.set_opacity(1.0)
-                    tick.show()
+                    tick.set_visible(True)
                     GLib.timeout_add(25, fade_tick, tick)
             # GTK widgets must only be touched on the main thread.
             # ویجت‌های GTK فقط باید در نخ اصلی دستکاری شوند.
@@ -676,9 +692,7 @@ class Base:
                 try:
                     for name in os.listdir(self.EOVPN_OVPN_CONFIG_DIR):
                         if name.endswith(".ovpn"):
-                            suspicious = audit_ovpn_content(
-                                os.path.join(self.EOVPN_OVPN_CONFIG_DIR, name)
-                            )
+                            suspicious = audit_ovpn_content(os.path.join(self.EOVPN_OVPN_CONFIG_DIR, name))
                             if suspicious:
                                 audit_results[name] = suspicious
                 except Exception as exc:

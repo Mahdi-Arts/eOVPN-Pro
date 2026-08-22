@@ -18,6 +18,9 @@ __pycache__/
 .ruff_cache/
 .venv/
 dist/packages/
+.coverage
+coverage.xml
+htmlcov/
 
 # Generated sources / فایل‌های تولیدشده
 eovpn/metadata.json

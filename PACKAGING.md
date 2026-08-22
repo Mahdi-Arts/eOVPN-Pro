@@ -277,38 +277,42 @@ flatpak install --user eovpn-pro.flatpak
 
 ## 6. Automated CI/CD Deployment
 
-The repository ships two GitHub Actions workflows.
-مخزن دارای دو وورک‌فلوی GitHub Actions است.
+The repository ships three GitHub Actions workflows.
+مخزن دارای سه وورک‌فلوی GitHub Actions است.
 
 ### `.github/workflows/ci.yml` — Continuous Integration
-Runs on every push to `master`/`arena/**`, on every pull request, and on demand.
-روی هر push به `master` و `arena/**`، هر pull request و به‌صورت دستی اجرا می‌شود.
+Runs on every push to `master`, on every pull request, and on demand.
+روی هر push به `master`، هر pull request و به‌صورت دستی اجرا می‌شود.
 
 | Job | Purpose / وظیفه |
 |---|---|
-| `quality` | Ruff lint + format check, mypy, 56 unit tests on Python 3.10 / 3.11 / 3.12, metadata consistency, byte-compile |
-| `security` | `pip-audit --strict` against `requirements.txt` + CodeQL static analysis |
-| `build-meson` | Full Meson build, `meson test`, staged install, `desktop-file-validate`, `appstreamcli validate`, `msgfmt --check` on every `po/*.po` |
-| `build-deb` | `dpkg-buildpackage` + `lintian`, uploads the `.deb` as an artifact |
-| `build-rpm` | Builds the RPM inside a `fedora:41` container |
-| `build-arch` | Builds the Arch package inside an `archlinux:base-devel` container |
-| `ci-summary` | Aggregate gate — fails if any required job failed |
+| `lint-test` | Ruff lint + format check, mypy, the offline unit tests on Python 3.10 / 3.11 / 3.12, coverage of the pure modules, metadata consistency and `pip-audit --strict` |
+| `meson-build` | Full Meson build, `meson test`, `desktop-file-validate`, `appstreamcli validate` |
+| `deb-smoke` | `dpkg-buildpackage` on Ubuntu 24.04; uploads the `.deb` as an artifact |
+| `rpm-smoke` | Builds the RPM inside a `fedora:latest` container |
+| `arch-smoke` | Builds the Arch package inside an `archlinux:latest` container (in-tree mode) |
+
+### `.github/workflows/codeql.yml` — Static Analysis
+Runs the security-extended CodeQL query packs against the Python codebase and the
+compiled C bindings on every push, every pull request, and weekly.
+پکیج‌های پرس‌وجوی security-extended کدکیوال را روی کدبیس پایتون و بایندینگ‌های
+کامپایل‌شده C در هر push، هر pull request و به‌صورت هفتگی اجرا می‌کند.
 
 ### `.github/workflows/release.yml` — Release Automation
 Triggered by a semantic version tag.
 با ایجاد تگ نسخهٔ معنایی فعال می‌شود.
 
-1. **`prepare`** — verifies that `meson.build`, `debian/changelog`, the RPM spec, the
-   AppStream metainfo and the README all declare the same version as the tag, then runs
-   the unit tests. A mismatch aborts the release.
-   بررسی می‌کند که نسخهٔ اعلام‌شده در همهٔ فایل‌های متادیتا با تگ یکسان باشد و تست‌ها را
-   اجرا می‌کند؛ هر ناهماهنگی، انتشار را متوقف می‌کند.
-2. **`deb` / `rpm` / `arch` / `appimage` / `flatpak`** — build all five formats in parallel.
-   ساخت موازی هر پنج قالب بسته.
-3. **`publish`** — collects the artifacts, generates `SHA256SUMS`, extracts the matching
-   section from `CHANGELOG.md` as release notes, and publishes the GitHub Release.
-   جمع‌آوری خروجی‌ها، تولید `SHA256SUMS`، استخراج بخش متناظر از `CHANGELOG.md` به‌عنوان
-   یادداشت انتشار و انتشار نسخه در GitHub.
+1. **`verify`** — checks that the tag matches `meson.build` and that every packaging
+   file declares the same version (via `scripts/check_project_meta.py`); any mismatch
+   aborts the release.
+   بررسی می‌کند که تگ با `meson.build` و نسخهٔ همهٔ فایل‌های بسته‌بندی یکسان باشد؛
+   هر ناهماهنگی انتشار را متوقف می‌کند.
+2. **`deb` / `rpm` / `arch` / `appimage` / `flatpak`** — build all five formats in parallel;
+   the `.deb` and AppImage artifacts receive build-provenance attestations.
+   ساخت موازی هر پنج قالب؛ گواهی provenance برای `.deb` و AppImage ضمیمه می‌شود.
+3. **`release`** — collects the artifacts, generates `SHA256SUMS` and publishes the
+   GitHub Release with auto-generated release notes.
+   جمع‌آوری خروجی‌ها، تولید `SHA256SUMS` و انتشار نسخه GitHub با یادداشت‌های خودکار.
 
 To publish a release / برای انتشار یک نسخه:
 ```bash
@@ -318,17 +322,6 @@ python3 scripts/check_project_meta.py
 # 2. Tag and push / ایجاد تگ و ارسال آن
 git tag -a v1.5.0 -m "eOVPN-Pro 1.5.0"
 git push origin v1.5.0
-```
-
-Dependabot (`.github/dependabot.yml`) keeps GitHub Actions and Python dependencies
-updated weekly.
-سرویس Dependabot به‌صورت هفتگی، اکشن‌های GitHub و وابستگی‌های پایتون را به‌روز نگه می‌دارد.
-
-See [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md) for the full release runbook.
-راهنمای کامل انتشار در [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md) موجود است.
-
----
-
 ## 7. Format Support Matrix
 
 | Format / قالب | Recipe / دستور ساخت | Built in CI | Published on release | Maturity / بلوغ |

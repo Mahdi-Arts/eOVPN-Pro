@@ -24,7 +24,7 @@ error_reasons = [
     "Starting the service providing the VPN connection failed.",
     "Necessary secrets for the VPN connection were not provided.",
     "Authentication to the VPN server failed.",
-    "The connection was deleted from settings."
+    "The connection was deleted from settings.",
 ]
 
 
@@ -50,7 +50,7 @@ class NMDbus:
             None,
             Gio.DBusSignalFlags.NONE,
             self.sub_callback,
-            callback
+            callback,
         )
 
     def remove_watch(self):
@@ -59,8 +59,14 @@ class NMDbus:
             self.conn_id = None
 
     def sub_callback(
-        self, connection, sender_name, object_path, interface_name,
-        signal_name, parameters, update_callback,
+        self,
+        connection,
+        sender_name,
+        object_path,
+        interface_name,
+        signal_name,
+        parameters,
+        update_callback,
     ):
         logger.debug("NM Signal: %s %s", signal_name, parameters)
 

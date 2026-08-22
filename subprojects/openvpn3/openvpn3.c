@@ -37,7 +37,36 @@
  */
 #define EOVPN_DBUS_TIMEOUT_MS 15000
 
-static GDBusProxy *UniqueSession = NULL;
+/*
+ * Session-scoped helpers. Every operation below takes the session object
+ * path explicitly instead of relying on process-wide static state: the
+ * binding is now thread-safe and can drive more than one tunnel session.
+ *
+ * توابع دارای محدوده نشست. همه عملیات‌های پایین مسیر نشست را صریحاً می‌گیرند
+ * و به state سراسری پروسه تکیه نمی‌کنند؛ بایندینگ اکنون thread-safe است و
+ * می‌تواند بیش از یک نشست تونل را هدایت کند.
+ */
+
+/*
+ * Creates a D-Bus proxy for one session object path, or NULL with ``error``
+ * set when the path is unusable.
+ */
+static GDBusProxy *
+_session_proxy_for (const char *session_object, GError **error)
+{
+    if (session_object == NULL)
+        return NULL;
+
+    return g_dbus_proxy_new_for_bus_sync (
+        G_BUS_TYPE_SYSTEM,
+        G_DBUS_PROXY_FLAGS_NONE,
+        NULL,
+        "net.openvpn.v3.sessions",
+        session_object,
+        "net.openvpn.v3.sessions",
+        NULL,
+        error);
+}
 
 static GVariantIter *
 _get_all_sessions (void)
@@ -76,7 +105,10 @@ _get_all_sessions (void)
         return NULL;
     }
 
-    GVariant *active_sessions = g_variant_get_child_value (available_sessions, 0);
+    /* The iter takes its own reference; the autoptr releases ours so this
+     * polling helper no longer leaks one GVariant per call. */
+    g_autoptr(GVariant) active_sessions =
+        g_variant_get_child_value (available_sessions, 0);
     return g_variant_iter_new (active_sessions);
 }
 
@@ -394,112 +426,31 @@ prepare_tunnel (char *config_object)
     return g_strdup (session_object);
 }
 
+/*
+ * Session-scoped operations. Each function takes the session object path
+ * explicitly instead of relying on process-wide static state, so the binding
+ * is thread-safe and can drive more than one tunnel session at a time.
+ *
+ * عملیات‌های دارای محدوده نشست. هر تابع مسیر نشست را صریحاً می‌گیرد و به
+ * وضعیت سراسری پروسه تکیه نمی‌کند؛ بنابراین بایندینگ thread-safe است و
+ * می‌تواند بیش از یک نشست تونل را همزمان هدایت کند.
+ */
+
 void
-init_unique_session (char *session_object)
+set_log_forward (char *session_object)
 {
-    if (session_object == NULL)
-        return;
-
     g_autoptr(GError) error = NULL;
-    GDBusProxy *unique_session = g_dbus_proxy_new_for_bus_sync (
-        G_BUS_TYPE_SYSTEM,
-        G_DBUS_PROXY_FLAGS_NONE,
-        NULL,
-        "net.openvpn.v3.sessions",
-        (gchar *) session_object,
-        "net.openvpn.v3.sessions",
-        NULL,
-        &error);
+    g_autoptr(GDBusProxy) session = _session_proxy_for (session_object, &error);
 
-    if (unique_session == NULL || error != NULL)
+    if (session == NULL || error != NULL)
     {
         if (error != NULL)
             g_warning ("%s:%d -> %s", __FUNCTION__, __LINE__, error->message);
         return;
     }
 
-    g_clear_object (&UniqueSession);
-    UniqueSession = unique_session;
-}
-
-void
-set_dco (char *session_object, int state)
-{
-    if (session_object == NULL)
-        return;
-
-    g_autoptr(GError) error = NULL;
-    g_autoptr(GDBusProxy) sessions_proxy = g_dbus_proxy_new_for_bus_sync (
-        G_BUS_TYPE_SYSTEM,
-        G_DBUS_PROXY_FLAGS_NONE,
-        NULL,
-        "net.openvpn.v3.sessions",
-        (gchar *) session_object,
-        "org.freedesktop.DBus.Properties",
-        NULL,
-        &error);
-
-    if (sessions_proxy == NULL || error != NULL)
-    {
-        if (error != NULL)
-            g_warning ("%s:%d -> %s", __FUNCTION__, __LINE__, error->message);
-        return;
-    }
-
-    GVariant *params = g_variant_new (
-        "(ssv)", "net.openvpn.v3.sessions", "dco", g_variant_new ("b", state));
     g_dbus_proxy_call_sync (
-        sessions_proxy, "Set", params, G_DBUS_PROXY_FLAGS_NONE,
-        EOVPN_DBUS_TIMEOUT_MS, NULL, &error);
-
-    if (error != NULL)
-        g_warning ("%s:%d -> %s", __FUNCTION__, __LINE__, error->message);
-}
-
-void
-set_receive_log_events (char *session_object, int set_to)
-{
-    if (session_object == NULL)
-        return;
-
-    g_autoptr(GError) error = NULL;
-    g_autoptr(GDBusProxy) sessions_proxy = g_dbus_proxy_new_for_bus_sync (
-        G_BUS_TYPE_SYSTEM,
-        G_DBUS_PROXY_FLAGS_NONE,
-        NULL,
-        "net.openvpn.v3.sessions",
-        (gchar *) session_object,
-        "org.freedesktop.DBus.Properties",
-        NULL,
-        &error);
-
-    if (sessions_proxy == NULL || error != NULL)
-    {
-        if (error != NULL)
-            g_warning ("%s:%d -> %s", __FUNCTION__, __LINE__, error->message);
-        return;
-    }
-
-    GVariant *params = g_variant_new (
-        "(ssv)", "net.openvpn.v3.sessions", "receive_log_events",
-        g_variant_new ("b", set_to));
-    g_dbus_proxy_call_sync (
-        sessions_proxy, "Set", params, G_DBUS_PROXY_FLAGS_NONE,
-        EOVPN_DBUS_TIMEOUT_MS, NULL, &error);
-
-    if (error != NULL)
-        g_warning ("%s:%d -> %s", __FUNCTION__, __LINE__, error->message);
-}
-
-void
-set_log_forward (void)
-{
-    if (UniqueSession == NULL)
-        return;
-
-    g_autoptr(GError) error = NULL;
-    g_dbus_proxy_call_sync (
-        UniqueSession,
+        session,
         "net.openvpn.v3.sessions.LogForward",
         g_variant_new ("(b)", true),
         G_DBUS_PROXY_FLAGS_NONE,
@@ -512,14 +463,24 @@ set_log_forward (void)
 }
 
 char *
-is_ready_to_connect (void)
+is_ready_to_connect (char *session_object)
 {
-    if (UniqueSession == NULL)
+    g_autoptr(GError) error = NULL;
+    g_autoptr(GDBusProxy) session = NULL;
+
+    if (session_object == NULL)
         return g_strdup ("Session not initialized");
 
-    g_autoptr(GError) error = NULL;
+    session = _session_proxy_for (session_object, &error);
+    if (session == NULL || error != NULL)
+    {
+        if (error != NULL)
+            return g_strdup (error->message);
+        return g_strdup ("Session proxy unavailable");
+    }
+
     g_dbus_proxy_call_sync (
-        UniqueSession,
+        session,
         "net.openvpn.v3.sessions.Ready",
         NULL,
         G_DBUS_PROXY_FLAGS_NONE,
@@ -528,10 +489,7 @@ is_ready_to_connect (void)
         &error);
 
     if (error != NULL)
-    {
-        char *error_msg = g_strdup (error->message);
-        return error_msg;
-    }
+        return g_strdup (error->message);
 
     return NULL;
 }
@@ -539,34 +497,24 @@ is_ready_to_connect (void)
 void
 send_auth (char *session_object, int type, int group, int id, char *value)
 {
+    g_autoptr(GError) error = NULL;
+    g_autoptr(GDBusProxy) session = NULL;
+    GVariant *params = NULL;
+
     if (session_object == NULL || value == NULL)
         return;
 
-    g_autoptr(GError) error = NULL;
-    GDBusProxy *unique_session = g_dbus_proxy_new_for_bus_sync (
-        G_BUS_TYPE_SYSTEM,
-        G_DBUS_PROXY_FLAGS_NONE,
-        NULL,
-        "net.openvpn.v3.sessions",
-        (gchar *) session_object,
-        "net.openvpn.v3.sessions",
-        NULL,
-        &error);
-
-    if (unique_session == NULL || error != NULL)
+    session = _session_proxy_for (session_object, &error);
+    if (session == NULL || error != NULL)
     {
         if (error != NULL)
             g_warning ("%s:%d -> %s", __FUNCTION__, __LINE__, error->message);
-        g_clear_object (&unique_session);
         return;
     }
 
-    g_clear_object (&UniqueSession);
-    UniqueSession = unique_session;
-
-    GVariant *params = g_variant_new ("(uuus)", type, group, id, value);
+    params = g_variant_new ("(uuus)", type, group, id, value);
     g_dbus_proxy_call_sync (
-        UniqueSession, "UserInputProvide", params, G_DBUS_PROXY_FLAGS_NONE,
+        session, "UserInputProvide", params, G_DBUS_PROXY_FLAGS_NONE,
         EOVPN_DBUS_TIMEOUT_MS, NULL, &error);
 
     if (error != NULL)
@@ -574,14 +522,20 @@ send_auth (char *session_object, int type, int group, int id, char *value)
 }
 
 void
-connect_vpn (void)
+connect_vpn (char *session_object)
 {
-    if (UniqueSession == NULL)
-        return;
-
     g_autoptr(GError) error = NULL;
+    g_autoptr(GDBusProxy) session = _session_proxy_for (session_object, &error);
+
+    if (session == NULL || error != NULL)
+    {
+        if (error != NULL)
+            g_warning ("%s:%d -> %s", __FUNCTION__, __LINE__, error->message);
+        return;
+    }
+
     g_dbus_proxy_call_sync (
-        UniqueSession, "Connect", g_variant_new ("()"), G_DBUS_PROXY_FLAGS_NONE,
+        session, "Connect", g_variant_new ("()"), G_DBUS_PROXY_FLAGS_NONE,
         EOVPN_DBUS_TIMEOUT_MS, NULL, &error);
 
     if (error != NULL)
@@ -589,32 +543,45 @@ connect_vpn (void)
 }
 
 void
-disconnect_vpn (void)
+disconnect_vpn (char *session_object)
 {
-    if (UniqueSession == NULL)
-        return;
-
     g_autoptr(GError) error = NULL;
+    g_autoptr(GDBusProxy) session = _session_proxy_for (session_object, &error);
+
+    if (session == NULL || error != NULL)
+    {
+        if (error != NULL)
+            g_warning ("%s:%d -> %s", __FUNCTION__, __LINE__, error->message);
+        return;
+    }
+
     g_dbus_proxy_call_sync (
-        UniqueSession, "Disconnect", g_variant_new ("()"), G_DBUS_PROXY_FLAGS_NONE,
+        session, "Disconnect", g_variant_new ("()"), G_DBUS_PROXY_FLAGS_NONE,
         EOVPN_DBUS_TIMEOUT_MS, NULL, &error);
 
     if (error != NULL)
         g_warning ("%s:%d -> %s", __FUNCTION__, __LINE__, error->message);
-
-    g_object_unref (UniqueSession);
-    UniqueSession = NULL;
 }
 
 void
-pause_vpn (char *reason)
+pause_vpn (char *session_object, char *reason)
 {
-    if (UniqueSession == NULL || reason == NULL)
+    g_autoptr(GError) error = NULL;
+    g_autoptr(GDBusProxy) session = NULL;
+
+    if (session_object == NULL || reason == NULL)
         return;
 
-    g_autoptr(GError) error = NULL;
+    session = _session_proxy_for (session_object, &error);
+    if (session == NULL || error != NULL)
+    {
+        if (error != NULL)
+            g_warning ("%s:%d -> %s", __FUNCTION__, __LINE__, error->message);
+        return;
+    }
+
     g_dbus_proxy_call_sync (
-        UniqueSession, "Pause", g_variant_new ("(s)", reason),
+        session, "Pause", g_variant_new ("(s)", reason),
         G_DBUS_PROXY_FLAGS_NONE, EOVPN_DBUS_TIMEOUT_MS, NULL, &error);
 
     if (error != NULL)
@@ -622,14 +589,20 @@ pause_vpn (char *reason)
 }
 
 void
-resume_vpn (void)
+resume_vpn (char *session_object)
 {
-    if (UniqueSession == NULL)
-        return;
-
     g_autoptr(GError) error = NULL;
+    g_autoptr(GDBusProxy) session = _session_proxy_for (session_object, &error);
+
+    if (session == NULL || error != NULL)
+    {
+        if (error != NULL)
+            g_warning ("%s:%d -> %s", __FUNCTION__, __LINE__, error->message);
+        return;
+    }
+
     g_dbus_proxy_call_sync (
-        UniqueSession, "Resume", g_variant_new ("()"), G_DBUS_PROXY_FLAGS_NONE,
+        session, "Resume", g_variant_new ("()"), G_DBUS_PROXY_FLAGS_NONE,
         EOVPN_DBUS_TIMEOUT_MS, NULL, &error);
 
     if (error != NULL)

@@ -7,4 +7,6 @@ Exec=eovpn
 Terminal=false
 Type=Application
 Categories=Network;X-VPN;
+Keywords=VPN;OpenVPN;Network;Tunnel;Proxy;Privacy;
 StartupNotify=false
+X-GNOME-UsesNotifications=true

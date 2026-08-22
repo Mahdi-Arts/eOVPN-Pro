@@ -2,8 +2,16 @@
 eOVPN-Pro Settings & Preferences Window Module
 ماژول پنجره تنظیمات و پیکربندی در eOVPN-Pro
 
-Manages user preferences, configuration sources (ZIP/Folder), credentials, and backend options.
+Manages user preferences, configuration sources (ZIP/Folder), credentials, and
+backend options. File pickers go through ``ui_compat.FilePicker`` so the window
+works on both modern (GTK >= 4.10) and older GTK4 runtimes, and backend
+versions are read through lightweight ``probe_version()`` classmethods instead
+of instantiating whole backends on the UI thread.
+
 مدیریت ترجیحات کاربر، منابع کانفیگ، نام کاربری و کلمه عبور و گزینه‌های بک‌اند.
+انتخاب‌گرهای فایل از ``ui_compat.FilePicker`` عبور می‌کنند تا پنجره روی
+رانتایم‌های مدرن و قدیمی GTK4 کار کند و نسخه بک‌اندها با classmethodهای سبک
+``probe_version()`` به‌جای نمونه‌سازی کامل روی نخ UI خوانده می‌شود.
 """
 
 import contextlib
@@ -14,16 +22,17 @@ import shutil
 
 import gi
 
-gi.require_version('Gtk', '4.0')
+gi.require_version("Gtk", "4.0")
 from gi.repository import Gio, GLib, Gtk, Secret
 
 from .connection_manager import NetworkManager, OpenVPN3, create_connection_manager
 from .eovpn_base import Base, StorageItem
+from .ui_compat import FilePicker, show_alert
 
 logger = logging.getLogger(__name__)
 
 
-class SettingsWindow(Base, Gtk.Builder):
+class SettingsWindow(Base):
     """
     Controller for the settings modal dialog.
     کنترلر پنجره تنظیمات برنامه.
@@ -31,11 +40,11 @@ class SettingsWindow(Base, Gtk.Builder):
 
     def __init__(self):
         super().__init__()
-        Gtk.Builder.__init__(self)
         self.signals = SettingsSignals()
 
-        self.add_from_resource(self.EOVPN_GRESOURCE_PREFIX + "/ui/" + "settings.ui")
-        self.window = self.get_object("settings_window")
+        self.builder = Gtk.Builder()
+        self.builder.add_from_resource(self.EOVPN_GRESOURCE_PREFIX + "/ui/settings.ui")
+        self.window = self.builder.get_object("settings_window")
         self.window.set_title(gettext.gettext("{} Settings").format(self.APP_NAME))
 
         parent_win = self.retrieve(StorageItem.MAIN_WINDOW)
@@ -89,13 +98,13 @@ class SettingsWindow(Base, Gtk.Builder):
     def _build_header(self):
         self.reset_btn = Gtk.Button.new_with_label(gettext.gettext("Reset"))
         self.reset_btn.add_css_class("destructive-action")
-        self.header = self.get_object("settings_header_bar")
+        self.header = self.builder.get_object("settings_header_bar")
         self.header.pack_start(self.reset_btn)
 
         self.spinner = Gtk.Spinner()
         self.tick_mark = Gtk.Image()
         self.tick_mark.set_from_icon_name("object-select-symbolic")
-        self.tick_mark.hide()
+        self.tick_mark.set_visible(False)
         self.store("settings_tick", self.tick_mark)
 
         self.header.pack_end(self.tick_mark)
@@ -141,20 +150,26 @@ class SettingsWindow(Base, Gtk.Builder):
         configuration_source_hbox.append(zip_chooser_btn)
         configuration_source_hbox.append(folder_chooser_btn)
 
-        self.zip_file_chooser_dialog = Gtk.FileChooserNative(action=Gtk.FileChooserAction.OPEN)
-        self.zip_file_chooser_dialog.set_transient_for(self.window)
+        # Version-tolerant pickers (Gtk.FileDialog on GTK >= 4.10).
+        # انتخاب‌گرهای مقاوم به نسخه (Gtk.FileDialog روی GTK 4.10 به بالا).
         zip_filter = Gtk.FileFilter()
         zip_filter.set_name("ZIP")
         zip_filter.add_mime_type("application/zip")
-        self.zip_file_chooser_dialog.add_filter(zip_filter)
-        default_path = Gio.File.new_for_path(GLib.get_home_dir())
-        self.zip_file_chooser_dialog.set_current_folder(default_path)
-        zip_chooser_btn.connect("clicked", lambda btn: self.zip_file_chooser_dialog.show())
-
-        self.folder_file_chooser_dialog = Gtk.FileChooserNative(action=Gtk.FileChooserAction.SELECT_FOLDER)
-        self.folder_file_chooser_dialog.set_transient_for(self.window)
-        self.folder_file_chooser_dialog.set_current_folder(default_path)
-        folder_chooser_btn.connect("clicked", lambda btn: self.folder_file_chooser_dialog.show())
+        self.zip_picker = FilePicker(
+            self.window,
+            Gtk.FileChooserAction.OPEN,
+            gettext.gettext("Choose ZIP File"),
+            filters=[zip_filter],
+        )
+        self.zip_picker.set_initial_dir(GLib.get_home_dir())
+        self.folder_picker = FilePicker(
+            self.window,
+            Gtk.FileChooserAction.SELECT_FOLDER,
+            gettext.gettext("Choose Local Folder"),
+        )
+        self.folder_picker.set_initial_dir(GLib.get_home_dir())
+        zip_chooser_btn.connect("clicked", lambda btn: self.zip_picker.show())
+        folder_chooser_btn.connect("clicked", lambda btn: self.folder_picker.show())
 
         self.main_box.append(configuration_source_hbox)
 
@@ -209,15 +224,17 @@ class SettingsWindow(Base, Gtk.Builder):
         self.ca_chooser_btn = Gtk.Button.new_with_label("(None)")
         self.ca_chooser_btn.set_hexpand(True)
 
-        self.ca_file_chooser_dialog = Gtk.FileChooserNative(action=Gtk.FileChooserAction.OPEN)
-        self.ca_file_chooser_dialog.set_transient_for(self.window)
         ca_filter = Gtk.FileFilter()
         ca_filter.set_name("CA / CRT")
         ca_filter.add_mime_type("application/pkix-cert")
-        self.ca_file_chooser_dialog.add_filter(ca_filter)
-        default_path = Gio.File.new_for_path(self.EOVPN_OVPN_CONFIG_DIR)
-        self.ca_file_chooser_dialog.set_current_folder(default_path)
-        self.ca_chooser_btn.connect("clicked", lambda btn: self.ca_file_chooser_dialog.show())
+        self.ca_picker = FilePicker(
+            self.window,
+            Gtk.FileChooserAction.OPEN,
+            gettext.gettext("Choose CA / CRT Certificate"),
+            filters=[ca_filter],
+        )
+        self.ca_picker.set_initial_dir(self.EOVPN_OVPN_CONFIG_DIR)
+        self.ca_chooser_btn.connect("clicked", lambda btn: self.ca_picker.show())
         ca_box.append(self.ca_chooser_btn)
 
         self.user_pass_ca_box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 4)
@@ -263,32 +280,36 @@ class SettingsWindow(Base, Gtk.Builder):
         self.switches = [self.ask_auth_switch]
 
         row, switch = self.generate_option_row(
-            gettext.gettext("Notifications"), "user-available-symbolic",
-            bool(self.get_setting(self.SETTING.NOTIFICATIONS))
+            gettext.gettext("Notifications"),
+            "user-available-symbolic",
+            bool(self.get_setting(self.SETTING.NOTIFICATIONS)),
         )
         switch.connect("state-set", self.signals.notification_set)
         self.switches.append(switch)
         list_box.append(row)
 
         row, switch = self.generate_option_row(
-            gettext.gettext("Flag"), "preferences-desktop-locale-symbolic",
-            bool(self.get_setting(self.SETTING.SHOW_FLAG))
+            gettext.gettext("Flag"),
+            "preferences-desktop-locale-symbolic",
+            bool(self.get_setting(self.SETTING.SHOW_FLAG)),
         )
         switch.connect("state-set", self.signals.show_flag_set)
         self.switches.append(switch)
         list_box.append(row)
 
         row, switch = self.generate_option_row(
-            gettext.gettext("Dark Theme"), "weather-clear-night-symbolic",
-            bool(self.get_setting(self.SETTING.DARK_THEME))
+            gettext.gettext("Dark Theme"),
+            "weather-clear-night-symbolic",
+            bool(self.get_setting(self.SETTING.DARK_THEME)),
         )
         switch.connect("state-set", self.signals.dark_theme_set)
         self.switches.append(switch)
         list_box.append(row)
 
         row, switch = self.generate_option_row(
-            gettext.gettext("Auto Reconnect"), "network-wired-symbolic",
-            bool(self.get_setting(self.SETTING.AUTO_RECONNECT))
+            gettext.gettext("Auto Reconnect"),
+            "network-wired-symbolic",
+            bool(self.get_setting(self.SETTING.AUTO_RECONNECT)),
         )
         switch.connect("state-set", self.signals.auto_reconnect_set)
         self.switches.append(switch)
@@ -304,9 +325,7 @@ class SettingsWindow(Base, Gtk.Builder):
         # بک‌اند بومی فقط پروفایل‌های دارای برچسب `managed-by=eovpn-pro` را حذف
         # می‌کند (تابع eovpn_connection_is_managed در فایل eovpn_nm.c)، بنابراین
         # برچسب دکمه نباید پاک‌سازی سراسری سیستم را القا کند.
-        self.remove_all_vpn_btn = Gtk.Button.new_with_label(
-            gettext.gettext("Delete All eOVPN-Pro Profiles")
-        )
+        self.remove_all_vpn_btn = Gtk.Button.new_with_label(gettext.gettext("Delete All eOVPN-Pro Profiles"))
         self.remove_all_vpn_btn.set_tooltip_text(
             gettext.gettext(
                 "Removes every VPN profile created by eOVPN-Pro from NetworkManager. "
@@ -351,17 +370,18 @@ class SettingsWindow(Base, Gtk.Builder):
         self.combobox.set_valign(Gtk.Align.CENTER)
         manager = self.get_setting(self.SETTING.MANAGER) or "networkmanager"
 
+        # Lightweight version probes: no backend instantiation on the UI
+        # thread, no nested D-Bus main loops.
+        # پروب سبک نسخه: بدون نمونه‌سازی بک‌اند روی نخ UI و بدون حلقه D-Bus تودرتو.
         try:
-            nm = NetworkManager(None)
-            version = nm.version()
+            version = NetworkManager.probe_version()
             if version:
                 self.combobox.append("networkmanager", gettext.gettext("{} (OpenVPN 2)").format(version))
         except Exception as exc:
             logger.debug("NetworkManager module not available: %s", exc)
 
         try:
-            ovpn3 = OpenVPN3(None)
-            ovpn3_version = ovpn3.version()
+            ovpn3_version = OpenVPN3.probe_version()
             if ovpn3_version:
                 self.combobox.append("openvpn3", gettext.gettext("OpenVPN 3 {}").format(ovpn3_version))
         except Exception as exc:
@@ -435,14 +455,14 @@ class SettingsWindow(Base, Gtk.Builder):
             [self.config_source_entry, self.username_entry, self.password_entry],
             [self.ca_chooser_btn],
             self.switches,
-            self.window
+            self.window,
         )
         self.config_source_entry.connect("changed", self.signals.process_config_entry, self.revealer)
-        self.zip_file_chooser_dialog.connect(
-            "response", self.signals.process_zip, self.config_source_entry, self.revealer
+        self.zip_picker.connect_picked(
+            lambda path: self.signals.process_source_picked(path, self.config_source_entry, self.revealer)
         )
-        self.folder_file_chooser_dialog.connect(
-            "response", self.signals.process_folder, self.config_source_entry, self.revealer
+        self.folder_picker.connect_picked(
+            lambda path: self.signals.process_source_picked(path, self.config_source_entry, self.revealer)
         )
         self.validate_btn.connect(
             "clicked",
@@ -453,7 +473,7 @@ class SettingsWindow(Base, Gtk.Builder):
         )
         self.username_entry.connect("changed", self.signals.process_username)
         self.password_entry.connect("changed", self.signals.process_password)
-        self.ca_file_chooser_dialog.connect("response", self.signals.process_ca, self.ca_chooser_btn)
+        self.ca_picker.connect_picked(lambda path: self.signals.process_ca_picked(path, self.ca_chooser_btn))
         self.ask_auth_switch.connect("state-set", self.signals.req_auth, self.user_pass_ca_box)
         self.remove_all_vpn_btn.connect("clicked", self.confirm_delete_all_connections)
         self.combobox.connect("changed", self.signals.on_backend_selected)
@@ -481,48 +501,40 @@ class SettingsWindow(Base, Gtk.Builder):
         را بیان می‌کند تا کاربر دربارهٔ خسارتی که کد اصلاً توان ایجادش را ندارد
         هشدار نگیرد. با این حال این عمل برای پروفایل‌های خودِ ما بازگشت‌ناپذیر است.
         """
-        dialog = Gtk.AlertDialog.new(
-            gettext.gettext("Delete all eOVPN-Pro profiles?")
-        )
-        dialog.set_detail(
+        show_alert(
+            self.window,
+            gettext.gettext("Delete all eOVPN-Pro profiles?"),
             gettext.gettext(
                 "Every VPN profile that eOVPN-Pro created in NetworkManager will be "
                 "permanently removed. VPN profiles added by other applications are "
                 "not affected. This action cannot be undone."
-            )
+            ),
+            [gettext.gettext("Cancel"), gettext.gettext("Delete Profiles")],
+            # Cancel is also the default so that Enter or Escape never destroys data.
+            # «انصراف» دکمهٔ پیش‌فرض هم هست تا فشردن Enter یا Escape هرگز داده‌ای را
+            # از بین نبرد.
+            cancel_index=0,
+            default_index=0,
+            on_response=self._on_delete_all_response,
         )
-        dialog.set_buttons([
-            gettext.gettext("Cancel"),
-            gettext.gettext("Delete Profiles"),
-        ])
-        dialog.set_cancel_button(0)
-        # Cancel is also the default so that Enter or Escape never destroys data.
-        # «انصراف» دکمهٔ پیش‌فرض هم هست تا فشردن Enter یا Escape هرگز داده‌ای را
-        # از بین نبرد.
-        dialog.set_default_button(0)
-        dialog.choose(self.window, None, self._on_delete_all_confirmed, None)
 
-    def _on_delete_all_confirmed(self, dialog: Gtk.AlertDialog, result, *args):
+    def _on_delete_all_response(self, index: int) -> None:
         """
         Deletes the managed profiles only when the destructive button was chosen.
         فقط در صورتی که دکمهٔ مخرب انتخاب شده باشد، پروفایل‌های مدیریت‌شده را حذف می‌کند.
         """
+        if index != 1:
+            logger.debug("Delete-all dismissed without confirmation.")
+            return
         try:
-            if dialog.choose_finish(result) == 1:
-                NetworkManager(None).delete_all_connections()
-                logger.info("eOVPN-Pro managed VPN profiles were deleted by user confirmation.")
-        except GLib.Error as error:
-            # Dismissing the dialog (Escape) raises DIALOG_ERROR_DISMISSED; that
-            # is a normal cancellation and must not be logged as a failure.
-            # بستن دیالوگ با Escape خطای DIALOG_ERROR_DISMISSED می‌دهد که یک
-            # انصراف عادی است و نباید به‌عنوان خطا ثبت شود.
-            logger.debug("Delete-all dialog dismissed: %s", error.message)
+            NetworkManager(None).delete_all_connections()
+            logger.info("eOVPN-Pro managed VPN profiles were deleted by user confirmation.")
         except Exception as e:
             logger.error("Delete-all confirmation failed: %s", e)
 
     def show(self):
         self.setup()
-        self.window.show()
+        self.window.set_visible(True)
 
 
 class SettingsSignals(Base):
@@ -550,23 +562,15 @@ class SettingsSignals(Base):
             self.set_setting(self.SETTING.REMOTE, None)
             revealer.set_reveal_child(False)
 
-    def process_zip(self, chooser, response, entry, revealer):
-        if response == Gtk.ResponseType.ACCEPT:
-            path = chooser.get_file().get_path()
-            eb = Gtk.EntryBuffer()
-            eb.set_text(path, len(path))
-            self.set_setting(self.SETTING.REMOTE, path)
-            entry.set_buffer(eb)
-            revealer.set_reveal_child(True)
-
-    def process_folder(self, chooser, response, entry, revealer):
-        if response == Gtk.ResponseType.ACCEPT:
-            path = chooser.get_file().get_path()
-            eb = Gtk.EntryBuffer()
-            eb.set_text(path, len(path))
-            self.set_setting(self.SETTING.REMOTE, path)
-            entry.set_buffer(eb)
-            revealer.set_reveal_child(True)
+    def process_source_picked(self, path, entry, revealer):
+        """Handles a picked ZIP file or local folder path."""
+        if not path:
+            return
+        eb = Gtk.EntryBuffer()
+        eb.set_text(path, len(path))
+        self.set_setting(self.SETTING.REMOTE, path)
+        entry.set_buffer(eb)
+        revealer.set_reveal_child(True)
 
     def req_auth(self, switch, state, auth_box):
         self.set_setting(self.SETTING.REQ_AUTH, state)
@@ -660,15 +664,16 @@ class SettingsSignals(Base):
             "eOVPN Password",
             pwd,
             None,
-            on_password_stored
+            on_password_stored,
         )
         return GLib.SOURCE_REMOVE
 
-    def process_ca(self, chooser, response, button):
-        if response == Gtk.ResponseType.ACCEPT:
-            ca_path = chooser.get_file().get_path()
-            self.set_setting(self.SETTING.CA, ca_path)
-            button.set_label(chooser.get_file().get_basename())
+    def process_ca_picked(self, path, button):
+        """Stores the picked CA certificate path."""
+        if not path:
+            return
+        self.set_setting(self.SETTING.CA, path)
+        button.set_label(Gio.File.new_for_path(path).get_basename())
 
     def notification_set(self, switch, state):
         self.set_setting(self.SETTING.NOTIFICATIONS, state)
@@ -677,10 +682,7 @@ class SettingsSignals(Base):
         self.set_setting(self.SETTING.SHOW_FLAG, state)
         flag_img = self.retrieve(StorageItem.FLAG)
         if flag_img:
-            if state:
-                flag_img.show()
-            else:
-                flag_img.hide()
+            flag_img.set_visible(bool(state))
 
     def dark_theme_set(self, switch, state):
         gtk_settings = Gtk.Settings().get_default()
@@ -699,16 +701,16 @@ class SettingsSignals(Base):
             shutil.rmtree(self.EOVPN_OVPN_CONFIG_DIR)
 
         for e in entries:
-            e.set_text('')
+            e.set_text("")
         for b in buttons:
-            b.set_label('(None)')
+            b.set_label("(None)")
         for s in switches:
             s.set_state(False)
 
         GLib.idle_add(self.remove_only, True)
         flag_img = self.retrieve(StorageItem.FLAG)
         if flag_img:
-            flag_img.hide()
+            flag_img.set_visible(False)
 
     def openvpn3_dco_set(self, switch, state):
         self.set_setting(self.SETTING.OPENVPN3_DCO, state)

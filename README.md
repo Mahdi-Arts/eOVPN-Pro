@@ -198,8 +198,9 @@ python3 -m compileall -q eovpn tests run_program_debug.py cffi_compile.py meson_
 
 | Workflow / وورک‌فلو | Trigger / محرک | What it does / وظیفه |
 |---|---|---|
-| [`ci.yml`](.github/workflows/ci.yml) | every push & pull request — هر push و pull request | Ruff lint + format check, mypy, 56 unit tests on Python 3.10/3.11/3.12, `pip-audit`, CodeQL, Meson build, and smoke builds of the `.deb`, `.rpm` and Arch packages |
-| [`release.yml`](.github/workflows/release.yml) | version tags `v*.*.*` — تگ‌های نسخه | Verifies version parity across all packaging metadata, then builds `.deb`, `.rpm`, `.pkg.tar.zst`, AppImage and Flatpak, generates `SHA256SUMS`, and publishes the GitHub Release |
+| [`ci.yml`](.github/workflows/ci.yml) | every push & pull request — هر push و pull request | Ruff lint + format check, mypy, 56 unit tests on Python 3.10/3.11/3.12, coverage, `pip-audit`, metadata consistency, a full Meson build with desktop/AppStream validation, and smoke builds of the `.deb`, `.rpm` and Arch packages |
+| [`codeql.yml`](.github/workflows/codeql.yml) | every push, pull request & weekly — هر push، pull request و هفتگی | CodeQL static analysis for the Python codebase and the compiled C bindings (security-extended queries) |
+| [`release.yml`](.github/workflows/release.yml) | version tags `v*.*.*` — تگ‌های نسخه | Verifies version parity across all packaging metadata, then builds `.deb`, `.rpm`, `.pkg.tar.zst`, AppImage and Flatpak, attaches build provenance, generates `SHA256SUMS`, and publishes the GitHub Release |
 
 هر push و pull request توسط `ci.yml` بررسی می‌شود و ساخت و انتشار همهٔ قالب‌های بسته
 با ایجاد تگ نسخه توسط `release.yml` به‌صورت خودکار انجام می‌گیرد.

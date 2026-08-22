@@ -137,8 +137,7 @@
 
 **🔴 P0-1 — اجرای handler روی محتوای غیرقابل‌اعتماد (`eovpn_base.py:134`)**
 ```python
-self.edit_button.connect("clicked",
-    lambda w: subprocess.Popen(["xdg-open", str(target_file)]))
+self.edit_button.connect("clicked", lambda w: subprocess.Popen(["xdg-open", str(target_file)]))
 ```
 `target_file` از نام فایل درون ZIP دانلودشده می‌آید. اگرچه استخراج، basename را مسطح می‌کند و `shell=False` است (پس تزریق فرمان مستقیم نداریم)، اما:
 - هیچ بررسی وجود فایل یا محدودسازی به دایرکتوری کانفیگ انجام نمی‌شود؛

@@ -298,3 +298,7 @@ msgstr "انصراف"
 
 msgid "Delete All"
 msgstr "حذف همه"
+
+#: settings_window.py:new
+msgid "Choose CA / CRT Certificate"
+msgstr "انتخاب گواهی CA / CRT"

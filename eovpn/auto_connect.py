@@ -225,12 +225,7 @@ def build_cascade_queue(
 
     queue: list[str] = []
     for name in files:
-        if (
-            skip_unreachable
-            and has_any_rtt
-            and name in latencies
-            and latencies[name] is None
-        ):
+        if skip_unreachable and has_any_rtt and name in latencies and latencies[name] is None:
             continue
         queue.append(name)
         if len(queue) >= limit:

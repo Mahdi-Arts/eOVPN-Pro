@@ -27,12 +27,14 @@ import urllib.request
 import zipfile
 from typing import Any
 
+from ._meta import app_version
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Security limits / محدودیت‌های امنیتی
 # ---------------------------------------------------------------------------
-MAX_ZIP_DOWNLOAD_BYTES = 64 * 1024 * 1024      # 64 MiB compressed archive cap
+MAX_ZIP_DOWNLOAD_BYTES = 64 * 1024 * 1024  # 64 MiB compressed archive cap
 MAX_EXTRACTED_TOTAL_BYTES = 256 * 1024 * 1024  # 256 MiB extracted data cap
 MAX_FOLDER_IMPORT_TOTAL_BYTES = 256 * 1024 * 1024  # 256 MiB local folder cap
 MAX_ZIP_ENTRIES = 20_000
@@ -43,13 +45,28 @@ _CHUNK_SIZE = 64 * 1024
 # boundaries. Imports containing these are surfaced with a security warning.
 #
 # دایرکتیوهایی که می‌توانند دستور/پلاگین اجرا کنند یا مرز اعتماد را تغییر دهند.
-DANGEROUS_OVPN_DIRECTIVES: frozenset[str] = frozenset({
-    "up", "down", "route-up", "route-pre-down", "route-post-down",
-    "ipchange", "learn-address", "client-connect", "client-disconnect",
-    "tls-verify", "iproute", "script-security", "setenv", "plugin",
-    "management", "auth-user-pass", "auth-user-pass-verify",
-    "tls-crypt-v2-verify",
-})
+DANGEROUS_OVPN_DIRECTIVES: frozenset[str] = frozenset(
+    {
+        "up",
+        "down",
+        "route-up",
+        "route-pre-down",
+        "route-post-down",
+        "ipchange",
+        "learn-address",
+        "client-connect",
+        "client-disconnect",
+        "tls-verify",
+        "iproute",
+        "script-security",
+        "setenv",
+        "plugin",
+        "management",
+        "auth-user-pass",
+        "auth-user-pass-verify",
+        "tls-crypt-v2-verify",
+    }
+)
 
 
 class NotZipException(Exception):
@@ -75,9 +92,7 @@ class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         parsed = urllib.parse.urlparse(newurl)
         if parsed.scheme != "https":
-            raise InsecureSourceError(
-                gettext.gettext("Insecure redirect blocked: only HTTPS is permitted.")
-            )
+            raise InsecureSourceError(gettext.gettext("Insecure redirect blocked: only HTTPS is permitted."))
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
@@ -88,9 +103,7 @@ def _read_limited(response: Any) -> bytes:
     """
     content_length = response.headers.get("Content-Length")
     if content_length and content_length.isdigit() and int(content_length) > MAX_ZIP_DOWNLOAD_BYTES:
-        raise ValueError(
-            gettext.gettext("Configuration archive is too large to download safely.")
-        )
+        raise ValueError(gettext.gettext("Configuration archive is too large to download safely."))
 
     chunks: list[bytes] = []
     total = 0
@@ -100,9 +113,7 @@ def _read_limited(response: Any) -> bytes:
             break
         total += len(chunk)
         if total > MAX_ZIP_DOWNLOAD_BYTES:
-            raise ValueError(
-                gettext.gettext("Configuration archive exceeds the download size limit.")
-            )
+            raise ValueError(gettext.gettext("Configuration archive exceeds the download size limit."))
         chunks.append(chunk)
     return b"".join(chunks)
 
@@ -133,11 +144,35 @@ def is_private_or_loopback_host(host: str | None) -> bool:
         host = host[1:-1]
     try:
         ip = ipaddress.ip_address(host)
-        return bool(
-            ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved
-        )
+        return bool(ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved)
     except ValueError:
         return host.endswith(".local") or host.endswith(".localhost")
+
+
+def is_hard_blocked_source_host(host: str | None) -> bool:
+    """
+    Decides whether a configuration source host must be refused outright.
+
+    Localhost, mDNS-style names and literal private/reserved IP addresses are
+    blocked (SSRF hardening). Unresolvable hostnames are only *warned* about
+    because blocking them would require a DNS lookup, which would block the UI
+    and leak the source URL to the resolver.
+
+    تعیین می‌کند آیا میزبان منبع کانفیگ باید قاطعانه رد شود.
+    """
+    if not host:
+        return False
+    if host.startswith("[") and host.endswith("]"):
+        host = host[1:-1]
+    if host in {"localhost", "localhost.localdomain"}:
+        return True
+    if host.endswith(".localhost") or host.endswith(".local"):
+        return True
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return is_private_or_loopback_host(host)
 
 
 def matches_server_filter(
@@ -195,26 +230,30 @@ def download_remote_to_destination(remote: str, destination: str) -> list[str]:
             if os.path.islink(src):
                 raise NotZipException(gettext.gettext("Symlink archives are not allowed."))
             if os.path.getsize(src) > MAX_ZIP_DOWNLOAD_BYTES:
-                raise ValueError(
-                    gettext.gettext("Configuration archive is too large to import safely.")
-                )
+                raise ValueError(gettext.gettext("Configuration archive is too large to import safely."))
             with open(src, "rb") as f:
                 return make_zip_from_bytes(f.read())
 
         parsed = urllib.parse.urlparse(src)
         if parsed.scheme and parsed.scheme != "https":
             raise InsecureSourceError(
-                gettext.gettext(
-                    "Insecure configuration source blocked: remote URLs must use HTTPS."
-                )
+                gettext.gettext("Insecure configuration source blocked: remote URLs must use HTTPS.")
             )
         if not parsed.scheme:
             raise FileNotFoundError(gettext.gettext("Configuration source was not found."))
+        if is_hard_blocked_source_host(parsed.hostname):
+            # SSRF guard: localhost and literal private/reserved IPs are refused.
+            # نگهبان SSRF: localhost و IPهای خصوصی/رزرو به‌صورت صریح رد می‌شوند.
+            raise InsecureSourceError(
+                gettext.gettext(
+                    "Configuration sources on localhost or private network addresses are blocked."
+                )
+            )
         if is_private_or_loopback_host(parsed.hostname):
             logger.warning("Config source hostname appears private/loopback: %s", parsed.hostname)
 
         headers = {
-            "User-Agent": "eOVPN-Pro/1.5 (+https://github.com/Mahdi-Arts/eOVPN-Pro)",
+            "User-Agent": (f"eOVPN-Pro/{app_version()} (+https://github.com/Mahdi-Arts/eOVPN-Pro)"),
             "Accept": "application/zip,application/octet-stream,*/*",
             "Connection": "close",
         }
@@ -246,9 +285,7 @@ def download_remote_to_destination(remote: str, destination: str) -> list[str]:
             return []
 
         if total_bytes > MAX_FOLDER_IMPORT_TOTAL_BYTES:
-            raise ValueError(
-                gettext.gettext("Configuration folder is too large to import safely.")
-            )
+            raise ValueError(gettext.gettext("Configuration folder is too large to import safely."))
 
         for file_name in entries:
             src_file = os.path.join(expanded_remote, file_name)
@@ -260,10 +297,8 @@ def download_remote_to_destination(remote: str, destination: str) -> list[str]:
                     logger.warning("Skipping unsafe file path: %s", file_name)
                     continue
                 shutil.copy2(src_file, dest_file)
-                try:
+                with contextlib.suppress(OSError):
                     os.chmod(dest_file, 0o600)
-                except OSError:
-                    pass
                 if file_name.endswith((".crt", ".pem")):
                     found_certs.append(file_name)
         return found_certs
@@ -275,17 +310,13 @@ def download_remote_to_destination(remote: str, destination: str) -> list[str]:
     except Exception as exc:
         logger.error("Failed to load ZIP archive from %s: %s", expanded_remote, exc)
         raise NotZipException(
-            gettext.gettext(
-                "Configuration Source MUST be a valid HTTPS ZIP archive or accessible folder."
-            )
+            gettext.gettext("Configuration Source MUST be a valid HTTPS ZIP archive or accessible folder.")
         ) from exc
 
     with zip_file:
         infos = zip_file.infolist()
         if len(infos) > MAX_ZIP_ENTRIES:
-            raise NotZipException(
-                gettext.gettext("Configuration archive contains too many entries.")
-            )
+            raise NotZipException(gettext.gettext("Configuration archive contains too many entries."))
 
         configs = [info for info in infos if ovpn_regex.search(info.filename)]
         certs = [info for info in infos if crt_regex.search(info.filename)]
@@ -323,24 +354,19 @@ def download_remote_to_destination(remote: str, destination: str) -> list[str]:
                 continue
 
             try:
-                with os.fdopen(fd, "wb") as dest_stream:
-                    with zip_file.open(info, "r") as source_stream:
-                        while True:
-                            chunk = source_stream.read(_CHUNK_SIZE)
-                            if not chunk:
-                                break
-                            dest_stream.write(chunk)
-                            extracted_total += len(chunk)
-                            if extracted_total > MAX_EXTRACTED_TOTAL_BYTES:
-                                zip_bomb_detected = True
-                                logger.error(
-                                    "Extraction aborted: uncompressed size limit exceeded."
-                                )
-                                break
-                try:
+                with os.fdopen(fd, "wb") as dest_stream, zip_file.open(info, "r") as source_stream:
+                    while True:
+                        chunk = source_stream.read(_CHUNK_SIZE)
+                        if not chunk:
+                            break
+                        dest_stream.write(chunk)
+                        extracted_total += len(chunk)
+                        if extracted_total > MAX_EXTRACTED_TOTAL_BYTES:
+                            zip_bomb_detected = True
+                            logger.error("Extraction aborted: uncompressed size limit exceeded.")
+                            break
+                with contextlib.suppress(OSError):
                     os.chmod(target_path, 0o600)
-                except OSError:
-                    pass
 
                 if zip_bomb_detected:
                     break
@@ -361,10 +387,21 @@ def download_remote_to_destination(remote: str, destination: str) -> list[str]:
 
 
 def ovpn_is_auth_required(ovpn_file: str) -> bool:
-    """Checks whether an .ovpn file specifies ``auth-user-pass``."""
+    """
+    Checks whether an .ovpn file specifies ``auth-user-pass``.
+
+    Stops at the first match instead of reading the whole file.
+    بررسی وجود دایرکتیو auth-user-pass؛ با اولین تطابق متوقف می‌شود.
+    """
     try:
         with open(ovpn_file, encoding="utf-8", errors="ignore") as f:
-            return "auth-user-pass" in f.read()
+            for line in f:
+                stripped = line.strip()
+                if stripped.startswith(("#", ";")) or not stripped:
+                    continue
+                if "auth-user-pass" in stripped:
+                    return True
+        return False
     except Exception as e:
         logger.error("Error reading %s: %s", ovpn_file, e)
         return False

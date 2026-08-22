@@ -1,0 +1,31 @@
+#!/bin/sh
+# eOVPN-Pro autopkgtest smoke test
+# آزمون دود autopkgtest برای بسته eOVPN-Pro
+#
+# Verifies the installed binary exists, responds to --help and that the
+# packaged desktop entry and GSettings schema are valid.
+# وجود باینری نصب‌شده، پاسخ به --help و اعتبار desktop entry و اسکیمای GSettings
+# را بررسی می‌کند.
+set -eu
+
+BIN="/usr/bin/eovpn"
+HELP_OUT="$(mktemp)"
+
+if [ ! -x "${BIN}" ]; then
+    echo "FAIL: ${BIN} is missing or not executable" >&2
+    exit 1
+fi
+
+# GLib option parsing handles --help before any display connection.
+# پارسر آپشن GLib پیش از هر اتصال به نمایشگر، --help را پردازش می‌کند.
+xvfb-run -a "${BIN}" --help > "${HELP_OUT}" 2>&1 \
+    || { echo "FAIL: eovpn --help exited non-zero" >&2; cat "${HELP_OUT}" >&2; exit 1; }
+
+grep -q "debug" "${HELP_OUT}" \
+    || { echo "FAIL: expected --debug option missing from help output" >&2; exit 1; }
+
+desktop-file-validate /usr/share/applications/com.github.mahdi-arts.eovpn-pro.desktop
+glib-compile-schemas /usr/share/glib-2.0/schemas
+
+rm -f "${HELP_OUT}"
+echo "PASS: eOVPN-Pro smoke test"

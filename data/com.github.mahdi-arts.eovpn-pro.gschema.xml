@@ -15,20 +15,25 @@
       <key type="b" name="req-auth">
          <default>false</default>
       </key>
+      <!-- Empty string is the "unset" default for string keys; the legacy
+           "null" sentinel from pre-1.6 installs is still mapped to None in
+           eovpn_base.get_setting() for smooth upgrades.
+           رشته خالی پیش‌فرض «تنظیم‌نشده» کلیدهای رشته‌ای است؛ سنتینل قدیمی
+           "null" نصب‌های پیش از ۱.۶ همچنان در get_setting به None نگاشت می‌شود. -->
       <key type="s" name="ca">
-         <default>"null"</default>
+         <default>""</default>
       </key>
       <key type="s" name="remote">
-         <default>"null"</default>
+         <default>""</default>
       </key>
       <key type="s" name="auth-user">
-         <default>"null"</default>
+         <default>""</default>
       </key>
       <key type="s" name="nm-active-uuid">
-         <default>"null"</default>
+         <default>""</default>
       </key>
       <key type="s" name="last-connected">
-         <default>"null"</default>
+         <default>""</default>
       </key>
       <key type="i" name="last-connected-cursor">
          <default>-1</default>
