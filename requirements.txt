@@ -1,1 +1,10 @@
-cffi
+# eOVPN-Pro Python Dependencies
+# وابستگی‌های پایتون eOVPN-Pro
+#
+# Core runtime dependencies / وابستگی‌های اصلی زمان اجرا
+cffi>=1.15.0
+PyGObject>=3.42.0
+
+# Development & testing dependencies / وابستگی‌های توسعه و تست
+# Install with: pip install -r requirements-dev.txt
+# نصب با دستور: pip install -r requirements-dev.txt

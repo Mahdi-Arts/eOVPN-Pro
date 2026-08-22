@@ -6,6 +6,12 @@ Builds the native CFFI bindings with Meson/Ninja and launches the app from the
 source tree (no system installation required).
 کتابخانه‌های بومی CFFI را با Meson/Ninja می‌سازد و برنامه را بدون نیاز به نصب
 سیستمی، مستقیم از درخت منبع اجرا می‌کند.
+
+Requirements:
+  - A running desktop session (Wayland/X11) with GTK4 and Libadwaita.
+  - NetworkManager with openvpn plugin installed.
+  - نیازمند یک نشست گرافیکی (Wayland/X11) با GTK4 و Libadwaita.
+  - نصب NetworkManager به همراه افزونه openvpn.
 """
 
 import os
@@ -31,6 +37,28 @@ sys.path.insert(1, os.getcwd())
 sys.path.insert(1, os.getcwd() + "/eovpn/")
 os.environ["GSETTINGS_SCHEMA_DIR"] = "data/"
 os.environ["G_MESSAGES_DEBUG"] = "eovpn"
+
+
+def _check_display() -> None:
+    """
+    Verifies that a GTK-compatible display server is available.
+    بررسی وجود یک نمایش‌گر سازگار با GTK.
+    """
+    display = os.environ.get("WAYLAND_DISPLAY") or os.environ.get("DISPLAY")
+    if not display:
+        print(
+            "ERROR: No display server detected (neither WAYLAND_DISPLAY nor DISPLAY is set).\n"
+            "خطا: هیچ نمایش‌گری یافت نشد (نه WAYLAND_DISPLAY و نه DISPLAY تنظیم نشده است).\n"
+            "\n"
+            "eOVPN-Pro requires a running desktop session with GTK4 / Libadwaita.\n"
+            "eOVPN-Pro نیازمند یک نشست گرافیکی با GTK4 / Libadwaita است.\n"
+            "\n"
+            "You can still run the offline tests:\n"
+            "هنوز می‌توانید تست‌های آفلاین را اجرا کنید:\n"
+            "  python3 -m unittest discover -s tests -v\n",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 def reset() -> None:
@@ -69,6 +97,8 @@ def copy_libs() -> None:
 
 
 def main() -> None:
+    """Entry point: validates environment, builds, and launches the app."""
+    _check_display()
     reset()
     copy_libs()
 

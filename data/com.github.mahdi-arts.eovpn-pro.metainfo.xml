@@ -23,7 +23,12 @@
 
   <screenshots>
     <screenshot type="default">
-      <image>https://raw.githubusercontent.com/Mahdi-Arts/eOVPN-Pro/master/static/window.png</image>
+      <image>https://raw.githubusercontent.com/Mahdi-Arts/eOVPN-Pro/master/static/window_connected_with_flag.png</image>
+      <caption>eOVPN-Pro main window with active VPN connection / پنجره اصلی eOVPN-Pro با اتصال VPN فعال</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/Mahdi-Arts/eOVPN-Pro/master/static/window_persian.png</image>
+      <caption>eOVPN-Pro in Persian (Farsi) RTL mode / eOVPN-Pro در حالت فارسی</caption>
     </screenshot>
   </screenshots>
 

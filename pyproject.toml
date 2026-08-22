@@ -1,0 +1,71 @@
+# eOVPN-Pro Python Project Configuration
+# پیکربندی پروژه پایتون eOVPN-Pro
+#
+# Central configuration for ruff, mypy, and other Python tooling.
+# پیکربندی متمرکز برای ruff، mypy و سایر ابزارهای پایتون.
+
+[build-system]
+requires = ["meson>=0.60.0", "ninja", "cffi"]
+build-backend = "mesonpy"
+
+[tool.ruff]
+# Ruff rules — stricter than flake8 defaults
+# قوانین Ruff — سخت‌گیرانه‌تر از پیش‌فرض‌های flake8
+target-version = "py310"
+line-length = 110
+
+# Exclude same paths as .flake8
+exclude = [
+    ".git",
+    "__pycache__",
+    "build",
+    "dist/packages",
+    ".flatpak-builder",
+    ".mypy_cache",
+    ".ruff_cache",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "N",  # pep8-naming
+    "UP", # pyupgrade
+    "SIM", # flake8-simplify
+]
+ignore = [
+    "E402",  # module-import-not-at-top-of-file
+    "E203",  # whitespace-before-punctuation
+    "W503",  # line-before-binary-operator
+    "N801",  # class-name (allow lowercase class names for legacy)
+    "N802",  # function-name (allow lowercase function names)
+    "N803",  # argument-name (allow lowercase args)
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.mypy]
+python_version = "3.10"
+strict = false
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_return_any = false
+exclude = [
+    "build/",
+    "dist/",
+    ".flatpak-builder/",
+]
+
+[[tool.mypy.overrides]]
+module = [
+    "gi.*",
+    "cffi.*",
+    "openvpn3.*",
+]
+ignore_missing_imports = true

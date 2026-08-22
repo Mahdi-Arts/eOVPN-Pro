@@ -8,6 +8,7 @@
 
 [![Repository](https://img.shields.io/badge/GitHub-Mahdi--Arts%2FeOVPN--Pro-181717?logo=github)](https://github.com/Mahdi-Arts/eOVPN-Pro)
 [![Version](https://img.shields.io/badge/version-1.5.0-3E8914)](https://github.com/Mahdi-Arts/eOVPN-Pro/releases)
+[![CI](https://img.shields.io/github/actions/workflow/status/Mahdi-Arts/eOVPN-Pro/ci-cd.yml?branch=master&label=CI&logo=github)](https://github.com/Mahdi-Arts/eOVPN-Pro/actions/workflows/ci-cd.yml)
 [![Packaging](https://img.shields.io/badge/Package-.deb%20%7C%20.rpm%20%7C%20Flatpak-blue)](PACKAGING.md)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 
@@ -122,15 +123,18 @@ Run the full offline test suite, linting, and byte-compilation:
 python3 -m unittest discover -s tests -v
 
 # Linting / بررسی کیفیت کد
-pip install flake8
+pip install -r requirements-dev.txt
 python3 -m flake8 eovpn tests run_program_debug.py cffi_compile.py meson_post_install.py
+
+# Type checking / بررسی نوع‌ها
+python3 -m mypy --ignore-missing-imports eovpn tests
 
 # Byte-compile all sources / کامپایل همه فایل‌ها
 python3 -m compileall -q eovpn tests run_program_debug.py cffi_compile.py meson_post_install.py
 ```
 
-These checks run automatically in CI (`.github/workflows/ci-cd.yml`) on every push/PR.
-این بررسی‌ها به‌صورت خودکار در CI روی هر push/PR اجرا می‌شوند.
+These checks run automatically in the CI pipeline (`.github/workflows/ci-cd.yml`) on every push/PR.
+این بررسی‌ها به‌صورت خودکار در خط لوله CI روی هر push/PR اجرا می‌شوند.
 
 ---
 

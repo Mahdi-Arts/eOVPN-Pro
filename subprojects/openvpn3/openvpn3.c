@@ -1,6 +1,22 @@
 /*
  * eOVPN-Pro OpenVPN 3 Linux Native C / D-Bus Binding
  * لایه بایندینگ بومی C جهت تعامل با D-Bus و سرویس OpenVPN 3 Linux در eOVPN-Pro
+ *
+ * This file is part of eOVPN-Pro.
+ * این فایل بخشی از eOVPN-Pro است.
+ *
+ * eOVPN-Pro is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * eOVPN-Pro is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with eOVPN-Pro.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #define G_LOG_DOMAIN "eovpn"

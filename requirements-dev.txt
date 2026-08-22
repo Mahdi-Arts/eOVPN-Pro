@@ -1,0 +1,20 @@
+# eOVPN-Pro Development Dependencies
+# وابستگی‌های توسعه eOVPN-Pro
+#
+# Install with: pip install -r requirements-dev.txt
+# نصب با دستور: pip install -r requirements-dev.txt
+
+# Core runtime / زمان اجرا
+-r requirements.txt
+
+# Testing / تست
+flake8>=7.0.0
+ruff>=0.5.0
+mypy>=1.10.0
+
+# Packaging validation / اعتبارسنجی بسته‌بندی
+build>=1.0.0
+twine>=5.0.0
+
+# Type stubs / فایل‌های نوع (stub)
+types-setuptools>=70.0.0

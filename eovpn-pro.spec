@@ -1,3 +1,11 @@
+# eOVPN-Pro RPM Spec
+# مشخصات بسته RPM eOVPN-Pro
+#
+# This spec file is maintained at: dist/rpm/eovpn-pro.spec
+# این فایل در dist/rpm/eovpn-pro.spec نگهداری می‌شود
+
+%global __name eovpn-pro
+
 Name:           eovpn-pro
 Version:        1.5.0
 Release:        1%{?dist}
