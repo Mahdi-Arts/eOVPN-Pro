@@ -1,0 +1,1048 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+new file mode 100644
+index 0000000..79d5b10
+--- /dev/null
++++ b/.github/workflows/ci.yml
+@@ -0,0 +1,252 @@
++# eOVPN-Pro Continuous Integration
++# یکپارچه‌سازی مداوم eOVPN-Pro
++#
++# Runs on every push to master, every pull request and on demand.
++# Runs: Ruff lint + format check, mypy, the offline unit tests on Python
++# 3.10/3.11/3.12 with coverage, metadata consistency, dependency CVE audit,
++# a full Meson build with desktop/AppStream validation, and smoke builds of
++# the .deb, .rpm and Arch packages.
++name: CI
++
++on:
++  push:
++    branches: [master]
++  pull_request:
++  workflow_dispatch:
++
++# Cancel superseded runs on the same ref to save CI minutes.
++concurrency:
++  group: ci-${{ github.ref }}
++  cancel-in-progress: true
++
++# Least privilege: CI only reads source code and uploads artifacts.
++permissions:
++  contents: read
++
++jobs:
++  # --------------------------------------------------------------------- lint-test
++  # Lint, static type-check and the offline unit tests across the supported
++  # Python range. These steps need no display server, no D-Bus and no GTK,
++  # so they run on a plain Python environment.
++  lint-test:
++    name: Lint & tests (Python ${{ matrix.python }})
++    runs-on: ubuntu-latest
++    strategy:
++      fail-fast: false
++      matrix:
++        python: ["3.10", "3.11", "3.12"]
++    steps:
++      - uses: actions/checkout@v4
++
++      - uses: actions/setup-python@v5
++        with:
++          python-version: ${{ matrix.python }}
++
++      - name: Install tooling
++        # Install only the tools this job uses. The full requirements-dev.txt
++        # pulls in PyGObject (via requirements.txt), which cannot be pip-built
++        # without GObject dev headers — and the offline tests do not need it.
++        run: pip install "ruff>=0.5.0" "mypy>=1.10.0" coverage
++
++      - name: Ruff lint
++        run: ruff check .
++
++      - name: Ruff format check
++        run: ruff format --check .
++
++      - name: Mypy type check
++        run: mypy --ignore-missing-imports eovpn tests
++
++      - name: Byte-compile all sources
++        run: python3 -m compileall -q eovpn tests run_program_debug.py cffi_compile.py meson_post_install.py
++
++      - name: Offline unit tests with coverage
++        run: coverage run -m unittest discover -s tests -v
++
++      - name: Coverage report (pure modules only)
++        run: coverage report
++
++      - name: Upload coverage data
++        if: matrix.python == '3.12'
++        uses: actions/upload-artifact@v4
++        with:
++          name: coverage-data
++          path: .coverage
++          retention-days: 7
++
++  # --------------------------------------------------------------------- meta-audit
++  # Version/schema/resource parity plus a strict dependency CVE scan.
++  meta-audit:
++    name: Metadata consistency & dependency audit
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@v4
++
++      - uses: actions/setup-python@v5
++        with:
++          python-version: "3.12"
++
++      - run: pip install "pip-audit>=2.7.0"
++
++      - name: Project metadata consistency
++        run: python3 scripts/check_project_meta.py
++
++      - name: Dependency CVE audit (strict)
++        run: pip-audit --requirement requirements.txt --strict
++
++  # --------------------------------------------------------------------- meson-build
++  # Full native build: compiles the CFFI C bindings, installs into a staging
++  # root, validates the desktop entry and AppStream metainfo, and re-runs the
++  # test suite through the Meson test runner.
++  meson-build:
++    name: Meson build & validation
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@v4
++
++      - name: Install build dependencies
++        run: |
++          sudo apt-get update
++          sudo apt-get install -y --no-install-recommends \
++            meson ninja-build pkg-config gettext desktop-file-utils \
++            appstream \
++            python3-cffi python3-gi \
++            libnm-dev libglib2.0-dev libgtk-4-dev libadwaita-1-dev \
++            libsecret-1-dev libnotify-dev
++
++      - name: Meson setup
++        run: meson setup build --prefix=/usr -Dopenvpn3=false
++
++      - name: Compile
++        run: meson compile -C build
++
++      - name: Install to staging root
++        run: DESTDIR=${{ github.workspace }}/staging meson install -C build
++
++      - name: Validate desktop entry
++        run: |
++          desktop-file-validate \
++            staging/usr/share/applications/com.github.mahdi-arts.eovpn-pro.desktop
++
++      - name: Validate AppStream metainfo
++        run: |
++          # appstream-util is being removed from Debian/Ubuntu (appstream-glib
++          # 0.8.3-3, 2026-03); appstreamcli is the maintained replacement.
++          appstreamcli validate --no-net \
++            staging/usr/share/metainfo/com.github.mahdi-arts.eovpn-pro.metainfo.xml
++
++      - name: Run unit tests via Meson
++        run: meson test -C build --print-errorlogs
++
++  # --------------------------------------------------------------------- deb-smoke
++  # Native Debian build to prove the packaging metadata produces an installable
++  # .deb (and runs dh_auto_test -> meson test inside it).
++  deb-smoke:
++    name: Debian package smoke build
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@v4
++
++      - name: Install build dependencies
++        run: |
++          sudo apt-get update
++          sudo apt-get install -y --no-install-recommends \
++            build-essential dpkg-dev debhelper-compat dh-python \
++            meson ninja-build pkg-config gettext desktop-file-utils \
++            python3-all python3-cffi python3-gi \
++            libnm-dev libglib2.0-dev libgtk-4-dev libadwaita-1-dev \
++            libsecret-1-dev libnotify-dev
++
++      - name: Build .deb
++        run: dpkg-buildpackage -us -uc -b
++
++      - name: Collect artifact
++        run: |
++          mkdir -p artifacts
++          mv ../eovpn-pro_*.deb artifacts/
++
++      - uses: actions/upload-artifact@v4
++        with:
++          name: deb-package
++          path: artifacts/*.deb
++          if-no-files-found: error
++
++  # --------------------------------------------------------------------- rpm-smoke
++  # Builds the RPM from the canonical spec inside a Fedora container.
++  rpm-smoke:
++    name: RPM smoke build
++    runs-on: ubuntu-latest
++    container: fedora:latest
++    steps:
++      - uses: actions/checkout@v4
++
++      - name: Install build dependencies
++        run: |
++          dnf install -y \
++            rpm-build meson ninja-build gcc pkgconf-pkg-config \
++            NetworkManager-libnm-devel glib2-devel gtk4-devel libadwaita-devel \
++            libsecret-devel libnotify-devel python3-devel python3-cffi \
++            gettext desktop-file-utils appstream git
++
++      - name: Prepare source tarball
++        run: |
++          VERSION="$(grep -oP "version:\s*'\K[0-9.]+" meson.build | head -1)"
++          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
++          mkdir -p "$HOME/rpmbuild/SOURCES"
++          # The spec uses %autosetup, so the archive top dir must be %{name}-%{version}.
++          git archive --prefix="eovpn-pro-${VERSION}/" \
++            -o "$HOME/rpmbuild/SOURCES/eovpn-pro-${VERSION}.tar.gz" HEAD
++
++      - name: Build RPM
++        run: rpmbuild -ba dist/rpm/eovpn-pro.spec
++
++      - name: Collect artifact
++        run: |
++          mkdir -p artifacts
++          mv "$HOME"/rpmbuild/RPMS/*/*.rpm artifacts/
++
++      - uses: actions/upload-artifact@v4
++        with:
++          name: rpm-package
++          path: artifacts/*.rpm
++          if-no-files-found: error
++
++  # --------------------------------------------------------------------- arch-smoke
++  # Builds the Arch package in-tree inside an Arch container.
++  arch-smoke:
++    name: Arch package smoke build
++    runs-on: ubuntu-latest
++    container: archlinux:latest
++    steps:
++      - uses: actions/checkout@v4
++
++      - name: Install build dependencies
++        run: |
++          pacman -Sy --noconfirm --needed archlinux-keyring
++          pacman -S --noconfirm --needed \
++            base-devel meson ninja pkgconf gcc gettext \
++            desktop-file-utils appstream-glib python python-gobject python-cffi \
++            gtk4 libadwaita libsecret libnotify networkmanager \
++            networkmanager-openvpn openvpn git sudo
++
++      # makepkg refuses to run as root, so build as an unprivileged user.
++      - name: Create non-root builder
++        run: |
++          useradd -m -G wheel builder
++          echo "builder ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/builder
++          chown -R builder .
++
++      - name: Build Arch package (in-tree mode)
++        run: |
++          su builder -c "cd dist/arch && makepkg -sf --skipinteg --noconfirm"
++
++      - name: Collect artifact
++        run: |
++          mkdir -p artifacts
++          mv dist/arch/*.pkg.tar.zst artifacts/
++
++      - uses: actions/upload-artifact@v4
++        with:
++          name: arch-package
++          path: artifacts/*.pkg.tar.zst
++          if-no-files-found: error
+diff --git a/.github/workflows/codeql.yml b/.github/workflows/codeql.yml
+new file mode 100644
+index 0000000..2bf0fda
+--- /dev/null
++++ b/.github/workflows/codeql.yml
+@@ -0,0 +1,64 @@
++# eOVPN-Pro CodeQL Static Analysis
++# تحلیل ایستای CodeQL برای eOVPN-Pro
++#
++# Runs the security-extended CodeQL query packs against the Python codebase and
++# the compiled C bindings on every push, every pull request and weekly.
++name: CodeQL
++
++on:
++  push:
++    branches: [master]
++  pull_request:
++  schedule:
++    # Every Monday 06:00 UTC.
++    - cron: "0 6 * * 1"
++  workflow_dispatch:
++
++permissions:
++  contents: read
++
++jobs:
++  analyze:
++    name: Analyze (${{ matrix.language }})
++    runs-on: ubuntu-latest
++    timeout-minutes: 45
++    permissions:
++      # Job-level permissions replace the top-level set, so contents:read must be
++      # restated for actions/checkout. Mirrors the official CodeQL starter.
++      actions: read
++      contents: read
++      security-events: write
++    strategy:
++      fail-fast: false
++      matrix:
++        include:
++          - language: python
++          - language: c-cpp
++    steps:
++      - uses: actions/checkout@v4
++
++      - name: Initialize CodeQL
++        uses: github/codeql-action/init@v3
++        with:
++          languages: ${{ matrix.language }}
++          # security-extended surfaces deeper security queries than the default suite.
++          queries: security-extended
++
++      # The C bindings are only compiled on demand (Meson + CFFI), so for the
++      # c-cpp language we drive an actual build so CodeQL can trace the compiler.
++      - name: Build C bindings for tracing (c-cpp only)
++        if: matrix.language == 'c-cpp'
++        run: |
++          sudo apt-get update
++          sudo apt-get install -y --no-install-recommends \
++            meson ninja-build pkg-config gettext \
++            python3-cffi python3-gi \
++            libnm-dev libglib2.0-dev libgtk-4-dev libadwaita-1-dev \
++            libsecret-1-dev libnotify-dev
++          meson setup build -Dopenvpn3=false
++          meson compile -C build
++
++      - name: Perform CodeQL analysis
++        uses: github/codeql-action/analyze@v3
++        with:
++          category: "/language:${{ matrix.language }}"
+diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
+new file mode 100644
+index 0000000..4915399
+--- /dev/null
++++ b/.github/workflows/release.yml
+@@ -0,0 +1,305 @@
++# eOVPN-Pro Release Automation
++# اتوماسیون انتشار eOVPN-Pro
++#
++# Triggered by a semantic version tag (v*.*.*). Verifies that the tag matches
++# the version declared across every packaging file, then builds all five
++# package formats in parallel, attaches build-provenance attestations to the
++# .deb and AppImage, generates a SHA256SUMS manifest and publishes the
++# GitHub Release with auto-generated notes.
++name: Release
++
++on:
++  push:
++    tags:
++      - "v*.*.*"
++  workflow_dispatch:
++    inputs:
++      version:
++        description: "Version to build (without a leading 'v')"
++        required: true
++
++permissions:
++  contents: read
++
++jobs:
++  # --------------------------------------------------------------------- verify
++  # Abort early if the tag and every packaging file do not agree on the version.
++  verify:
++    name: Verify version parity
++    runs-on: ubuntu-latest
++    outputs:
++      version: ${{ steps.meta.outputs.version }}
++    steps:
++      - uses: actions/checkout@v4
++
++      - uses: actions/setup-python@v5
++        with:
++          python-version: "3.12"
++
++      - name: Resolve version from tag or input
++        id: meta
++        run: |
++          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
++            VERSION="${{ github.event.inputs.version }}"
++          else
++            VERSION="${GITHUB_REF_NAME#v}"
++          fi
++          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
++
++      - name: Check internal packaging parity
++        run: python3 scripts/check_project_meta.py
++
++      - name: Check tag matches project version
++        run: |
++          MESON_VERSION="$(grep -oP "version:\s*'\K[0-9.]+" meson.build | head -1)"
++          if [ "${MESON_VERSION}" != "${{ steps.meta.outputs.version }}" ]; then
++            echo "::error::Tag version '${{ steps.meta.outputs.version }}' != meson.build version '${MESON_VERSION}'"
++            exit 1
++          fi
++          echo "Version parity OK: ${MESON_VERSION}"
++
++  # --------------------------------------------------------------------- deb
++  deb:
++    name: Build .deb
++    needs: verify
++    runs-on: ubuntu-latest
++    permissions:
++      contents: read        # checkout (job-level permissions replace the top-level set)
++      id-token: write       # build-provenance attestation
++      attestations: write   # build-provenance attestation
++    steps:
++      - uses: actions/checkout@v4
++
++      - name: Install build dependencies
++        run: |
++          sudo apt-get update
++          sudo apt-get install -y --no-install-recommends \
++            build-essential dpkg-dev debhelper-compat dh-python \
++            meson ninja-build pkg-config gettext desktop-file-utils \
++            python3-all python3-cffi python3-gi \
++            libnm-dev libglib2.0-dev libgtk-4-dev libadwaita-1-dev \
++            libsecret-1-dev libnotify-dev
++
++      - name: Build .deb
++        run: dpkg-buildpackage -us -uc -b
++
++      - name: Stage artifact
++        run: |
++          mkdir -p release
++          mv ../eovpn-pro_*.deb release/
++
++      - name: Generate build provenance
++        uses: actions/attest-build-provenance@v2
++        with:
++          subject-path: release/*.deb
++
++      - uses: actions/upload-artifact@v4
++        with:
++          name: deb-package
++          path: release/*.deb
++          if-no-files-found: error
++
++  # --------------------------------------------------------------------- rpm
++  rpm:
++    name: Build .rpm
++    needs: verify
++    runs-on: ubuntu-latest
++    container: fedora:latest
++    steps:
++      - uses: actions/checkout@v4
++
++      - name: Install build dependencies
++        run: |
++          dnf install -y \
++            rpm-build meson ninja-build gcc pkgconf-pkg-config \
++            NetworkManager-libnm-devel glib2-devel gtk4-devel libadwaita-devel \
++            libsecret-devel libnotify-devel python3-devel python3-cffi \
++            gettext desktop-file-utils appstream git
++
++      - name: Prepare source tarball
++        run: |
++          VERSION="${{ needs.verify.outputs.version }}"
++          mkdir -p "$HOME/rpmbuild/SOURCES"
++          git archive --prefix="eovpn-pro-${VERSION}/" \
++            -o "$HOME/rpmbuild/SOURCES/eovpn-pro-${VERSION}.tar.gz" HEAD
++
++      - name: Build RPM
++        run: rpmbuild -ba dist/rpm/eovpn-pro.spec
++
++      - name: Stage artifact
++        run: |
++          mkdir -p release
++          mv "$HOME"/rpmbuild/RPMS/*/*.rpm release/
++
++      - uses: actions/upload-artifact@v4
++        with:
++          name: rpm-package
++          path: release/*.rpm
++          if-no-files-found: error
++
++  # --------------------------------------------------------------------- arch
++  arch:
++    name: Build .pkg.tar.zst
++    needs: verify
++    runs-on: ubuntu-latest
++    container: archlinux:latest
++    steps:
++      - uses: actions/checkout@v4
++
++      - name: Install build dependencies
++        run: |
++          pacman -Sy --noconfirm --needed archlinux-keyring
++          pacman -S --noconfirm --needed \
++            base-devel meson ninja pkgconf gcc gettext \
++            desktop-file-utils appstream-glib python python-gobject python-cffi \
++            gtk4 libadwaita libsecret libnotify networkmanager \
++            networkmanager-openvpn openvpn git sudo
++
++      - name: Create non-root builder
++        run: |
++          useradd -m -G wheel builder
++          echo "builder ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/builder
++          chown -R builder .
++
++      - name: Build Arch package (in-tree mode)
++        run: |
++          su builder -c "cd dist/arch && makepkg -sf --skipinteg --noconfirm"
++
++      - name: Stage artifact
++        run: |
++          mkdir -p release
++          mv dist/arch/*.pkg.tar.zst release/
++
++      - uses: actions/upload-artifact@v4
++        with:
++          name: arch-package
++          path: release/*.pkg.tar.zst
++          if-no-files-found: error
++
++  # --------------------------------------------------------------------- appimage
++  # Built on the oldest supported LTS base for maximum runtime portability
++  # (older glibc => runs on more distributions).
++  appimage:
++    name: Build AppImage
++    needs: verify
++    runs-on: ubuntu-22.04
++    permissions:
++      contents: read        # checkout (job-level permissions replace the top-level set)
++      id-token: write       # build-provenance attestation
++      attestations: write   # build-provenance attestation
++    steps:
++      - uses: actions/checkout@v4
++
++      - name: Install build dependencies
++        run: |
++          sudo apt-get update
++          sudo apt-get install -y --no-install-recommends \
++            meson ninja-build pkg-config libfuse2 file wget gettext \
++            desktop-file-utils \
++            python3-dev python3-cffi python3-gi \
++            libnm-dev libglib2.0-dev libgtk-4-dev libadwaita-1-dev \
++            libsecret-1-dev libnotify-dev
++
++      - name: Download linuxdeploy + GTK plugin
++        run: |
++          wget -q -O linuxdeploy \
++            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
++          wget -q -O linuxdeploy-plugin-gtk.sh \
++            https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh
++          chmod +x linuxdeploy linuxdeploy-plugin-gtk.sh
++          echo "LINUXDEPLOY_BIN=$PWD/linuxdeploy" >> "$GITHUB_ENV"
++
++      - name: Build AppImage
++        run: VERSION=${{ needs.verify.outputs.version }} bash dist/appimage/build-appimage.sh
++
++      - name: Stage artifact
++        run: |
++          mkdir -p release
++          mv eovpn-pro-*.AppImage release/
++
++      - name: Generate build provenance
++        uses: actions/attest-build-provenance@v2
++        with:
++          subject-path: release/*.AppImage
++
++      - uses: actions/upload-artifact@v4
++        with:
++          name: appimage
++          path: release/*.AppImage
++          if-no-files-found: error
++
++  # --------------------------------------------------------------------- flatpak
++  # Best-effort: the manifest builds NetworkManager + OpenVPN 3 from source,
++  # so a cold build is long and depends on large external SDKs. A failure here
++  # never blocks the release of the other four formats.
++  flatpak:
++    name: Build Flatpak
++    needs: verify
++    runs-on: ubuntu-latest
++    continue-on-error: true
++    steps:
++      - uses: actions/checkout@v4
++
++      - name: Install Flatpak tooling
++        run: |
++          sudo apt-get update
++          sudo apt-get install -y --no-install-recommends flatpak flatpak-builder
++
++      - name: Add Flathub remote and install GNOME runtime
++        run: |
++          flatpak --user remote-add --if-not-exists flathub \
++            https://flathub.org/repo/flathub.flatpakrepo
++          flatpak install -y --user flathub org.gnome.Sdk//50 org.gnome.Platform//50
++
++      - name: Build Flatpak bundle
++        run: bash scripts/build-flatpak.sh
++
++      - name: Stage artifact
++        run: |
++          mkdir -p release
++          mv dist/flatpak/eovpn-pro.flatpak release/ || true
++
++      - uses: actions/upload-artifact@v4
++        with:
++          name: flatpak-bundle
++          path: release/*.flatpak
++          if-no-files-found: warn
++
++  # --------------------------------------------------------------------- release
++  release:
++    name: Publish GitHub Release
++    needs: [verify, deb, rpm, arch, appimage, flatpak]
++    runs-on: ubuntu-latest
++    permissions:
++      contents: write
++    steps:
++      - uses: actions/checkout@v4
++
++      - name: Download all package artifacts
++        uses: actions/download-artifact@v4
++        with:
++          path: artifacts
++
++      - name: Flatten artifacts and generate SHA256SUMS
++        run: |
++          mkdir -p release
++          find artifacts -type f \
++            \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.zst' \
++               -o -name '*.AppImage' -o -name '*.flatpak' \) \
++            -exec cp {} release/ \;
++          (cd release && sha256sum * > ../SHA256SUMS)
++          echo "## Artifacts" >> "$GITHUB_STEP_SUMMARY"
++          (cd release && ls -1) >> "$GITHUB_STEP_SUMMARY"
++
++      - name: Create GitHub Release
++        uses: softprops/action-gh-release@v2
++        with:
++          # On a tag push github.ref_name is the tag; on a manual run we derive
++          # the tag from the resolved version.
++          tag_name: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', needs.verify.outputs.version) || github.ref_name }}
++          name: eOVPN-Pro ${{ needs.verify.outputs.version }}
++          generate_release_notes: true
++          fail_on_unmatched_files: false
++          files: |
++            release/*
++            SHA256SUMS
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 0f0bb56..70cd9e1 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -8,12 +8,12 @@ All notable changes are documented here. Format follows [Keep a Changelog](https
+ 
+ ### Added / افزوده‌شده
+ - **Continuous integration** — `.github/workflows/ci.yml`: Ruff lint and format check, mypy,
+-  the 56 offline unit tests across Python 3.10/3.11/3.12, coverage of the pure modules,
++  the 81 offline unit tests across Python 3.10/3.11/3.12, coverage of the pure modules,
+   `pip-audit --strict`, metadata consistency, a full Meson build with desktop/AppStream
+   validation, and smoke builds of the `.deb`, `.rpm` and Arch packages (Debian native,
+   Fedora and Arch containers).
+   **یکپارچه‌سازی مداوم** — ورک‌فلوی `ci.yml`: لینت و بررسی قالب‌بندی Ruff، بررسی نوع mypy،
+-  اجرای ۵۶ تست واحد آفلاین روی پایتون ۳٫۱۰ تا ۳٫۱۲، پوشش ماژول‌های خالص، `pip-audit --strict`،
++  اجرای ۸۱ تست واحد آفلاین روی پایتون ۳٫۱۰ تا ۳٫۱۲، پوشش ماژول‌های خالص، `pip-audit --strict`،
+   بررسی یکپارچگی متادیتا، ساخت کامل Meson با اعتبارسنجی desktop و AppStream، و ساخت آزمایشی
+   بسته‌های `.deb`، `.rpm` و آرچ (به‌صورت بومی دبیان و کانتینر فدورا/آرچ).
+ - **CodeQL static analysis** — `.github/workflows/codeql.yml` runs the security-extended query
+@@ -119,10 +119,10 @@ All notable changes are documented here. Format follows [Keep a Changelog](https
+ ### Documentation / مستندات
+ - `README.md`, `PACKAGING.md` and `SECURITY.md` no longer describe CI/CD, package formats or
+   security scanning that did not exist. Every claim is now backed by a file in the repository,
+-  and the test count is stated accurately (56).
++  and the test count is stated accurately (81).
+   فایل‌های `README.md` و `PACKAGING.md` و `SECURITY.md` دیگر قابلیت‌های موجود نبودهٔ CI/CD،
+   قالب‌های بسته و پویش امنیتی را توصیف نمی‌کنند. اکنون هر ادعا به یک فایل واقعی در مخزن متکی
+-  است و تعداد تست‌ها دقیق (۵۶) ذکر شده است.
++  است و تعداد تست‌ها دقیق (۸۱) ذکر شده است.
+ - Installation instructions added for all five package formats, plus a format support matrix.
+   دستور نصب برای هر پنج قالب بسته و یک جدول وضعیت پشتیبانی قالب‌ها افزوده شد.
+ - Known limitations are now documented explicitly, including the absence of a kill-switch and
+diff --git a/PACKAGING.md b/PACKAGING.md
+index 670a5d7..f6dbfa7 100644
+--- a/PACKAGING.md
++++ b/PACKAGING.md
+@@ -147,9 +147,9 @@ makepkg -sf --skipinteg
+ sudo pacman -U eovpn-pro-1.5.0-1-x86_64.pkg.tar.zst
+ ```
+ 
+-> `makepkg` runs the project's 56 offline unit tests in its `check()` stage.
++> `makepkg` runs the project's 81 offline unit tests in its `check()` stage.
+ > Pass `--nocheck` to skip them inside minimal containers.
+-> دستور `makepkg` در مرحلهٔ `check()` هر ۵۶ تست واحد آفلاین را اجرا می‌کند؛ برای رد کردن
++> دستور `makepkg` در مرحلهٔ `check()` هر ۸۱ تست واحد آفلاین را اجرا می‌کند؛ برای رد کردن
+ > آن‌ها در کانتینرهای حداقلی از `--nocheck` استفاده کنید.
+ 
+ ### Enabling the OpenVPN 3 backend (فعال‌سازی بک‌اند OpenVPN 3)
+@@ -322,6 +322,8 @@ python3 scripts/check_project_meta.py
+ # 2. Tag and push / ایجاد تگ و ارسال آن
+ git tag -a v1.5.0 -m "eOVPN-Pro 1.5.0"
+ git push origin v1.5.0
++```
++
+ ## 7. Format Support Matrix
+ 
+ | Format / قالب | Recipe / دستور ساخت | Built in CI | Published on release | Maturity / بلوغ |
+diff --git a/README.md b/README.md
+index 47f61ac..26365a0 100644
+--- a/README.md
++++ b/README.md
+@@ -163,13 +163,13 @@ python3 run_program_debug.py
+ 
+ ## 🧪 Testing & Quality Assurance (آزمون و تست نرم‌افزار)
+ 
+-The project ships **56 offline unit tests** that require no network, no D-Bus and
++The project ships **81 offline unit tests** that require no network, no D-Bus and
+ no display server, so they run identically on a laptop and inside CI.
+-این پروژه دارای **۵۶ تست واحد آفلاین** است که به شبکه، D-Bus یا سرور نمایش نیاز
++این پروژه دارای **۸۱ تست واحد آفلاین** است که به شبکه، D-Bus یا سرور نمایش نیاز
+ ندارند و به همین دلیل روی سیستم شخصی و داخل CI یکسان اجرا می‌شوند.
+ 
+ ```bash
+-# Unit tests / تست‌های واحد  (56 tests)
++# Unit tests / تست‌های واحد  (81 tests)
+ python3 -m unittest discover -s tests -v
+ 
+ # …or through Meson / یا از طریق Meson
+@@ -198,7 +198,7 @@ python3 -m compileall -q eovpn tests run_program_debug.py cffi_compile.py meson_
+ 
+ | Workflow / وورک‌فلو | Trigger / محرک | What it does / وظیفه |
+ |---|---|---|
+-| [`ci.yml`](.github/workflows/ci.yml) | every push & pull request — هر push و pull request | Ruff lint + format check, mypy, 56 unit tests on Python 3.10/3.11/3.12, coverage, `pip-audit`, metadata consistency, a full Meson build with desktop/AppStream validation, and smoke builds of the `.deb`, `.rpm` and Arch packages |
++| [`ci.yml`](.github/workflows/ci.yml) | every push & pull request — هر push و pull request | Ruff lint + format check, mypy, 81 unit tests on Python 3.10/3.11/3.12, coverage, `pip-audit`, metadata consistency, a full Meson build with desktop/AppStream validation, and smoke builds of the `.deb`, `.rpm` and Arch packages |
+ | [`codeql.yml`](.github/workflows/codeql.yml) | every push, pull request & weekly — هر push، pull request و هفتگی | CodeQL static analysis for the Python codebase and the compiled C bindings (security-extended queries) |
+ | [`release.yml`](.github/workflows/release.yml) | version tags `v*.*.*` — تگ‌های نسخه | Verifies version parity across all packaging metadata, then builds `.deb`, `.rpm`, `.pkg.tar.zst`, AppImage and Flatpak, attaches build provenance, generates `SHA256SUMS`, and publishes the GitHub Release |
+ 
+diff --git a/docs/PR_BODY_R3.md b/docs/PR_BODY_R3.md
+new file mode 100644
+index 0000000..412471f
+--- /dev/null
++++ b/docs/PR_BODY_R3.md
+@@ -0,0 +1,58 @@
++# PR: ci — add CI/CodeQL/release workflows and sync docs (R3)
++
++> Branch: `arena/01a02949-eovpn-pro` → `master`
++
++## Summary
++
++Implements the action plan from the third-round senior audit
++([`docs/REVIEW_SENIOR_2026-08-R3.md`](../REVIEW_SENIOR_2026-08-R3.md)). The
++audit found the codebase itself needed **no code changes** (Ruff / mypy / 81
++unit tests all green); the single critical gap was the **absence of CI/CD
++automation** while `README.md`, `SECURITY.md`, `PACKAGING.md` and `CHANGELOG.md`
++already promised it.
++
++## Added — three GitHub Actions workflows
++
++| Workflow | Trigger | Purpose |
++|---|---|---|
++| [`ci.yml`](../../.github/workflows/ci.yml) | push to `master` + PRs | Ruff lint+format, mypy, **81 offline unit tests** on Python 3.10/3.11/3.12 + coverage, metadata consistency, `pip-audit --strict`, a full Meson build with desktop/AppStream validation, and `.deb` / `.rpm` / `.arch` smoke builds |
++| [`codeql.yml`](../../.github/workflows/codeql.yml) | push, PRs, weekly | `security-extended` CodeQL for Python **and** the compiled C bindings (a real `meson compile` drives the C compiler so CodeQL traces it) |
++| [`release.yml`](../../.github/workflows/release.yml) | tag `v*.*.*` | version-parity check, builds all 5 formats in parallel, build-provenance attestations for `.deb` + AppImage, `SHA256SUMS`, publishes the GitHub Release |
++
++## Changed (Minimal Diff — no source code touched)
++
++- `README.md`, `CHANGELOG.md`, `PACKAGING.md`: corrected the offline test count
++  **56 → 81** everywhere (English + Persian); the CI/Release badges and tables
++  are now backed by real files.
++- `PACKAGING.md`: closed an unclosed code fence in §6 so §7 renders as prose
++  instead of a code block.
++
++## Bugs caught & fixed during internal QA review
++
++- **`appstream-util` is being removed from Debian/Ubuntu** (appstream-glib
++  `0.8.3-3`, 2026-03) → switched to the maintained `appstreamcli`.
++- **`pip install -r requirements-dev.txt` would fail on CI** — PyGObject can't
++  pip-build without GObject dev headers, and the offline tests don't need `gi`
++  → each job installs only the tools it uses.
++- **GitHub Actions gotcha:** job-level `permissions:` replace the top-level
++  set, which drops `contents: read` needed by `actions/checkout` → restated it
++  on the `deb`, `appimage` and CodeQL `analyze` jobs.
++- Corrected the `tag_name` ternary for the `workflow_dispatch` trigger.
++
++## Verification
++
++- `ruff check` ✅ · `ruff format --check` ✅ · `mypy` ✅ (26 files)
++- **81/81 unit tests** ✅ · `scripts/check_project_meta.py` ✅
++- All three workflow YAML files validated.
++- Opening this PR runs `ci.yml` + `codeql.yml` on the PR itself, validating the
++  workflows end-to-end.
++
++## Notes
++
++- No business logic, Python source, or C bindings were modified — CI/CD + docs
++  only. Kill-switch / DNS-leak protection remain tracked in
++  `docs/SECURITY-ROADMAP.md` for 1.6.0 (out of scope).
++
++Closes the P0 gap from the R3 audit.
++
++*یا علی مدد* 💚
+diff --git a/docs/REVIEW_SENIOR_2026-08-R3.md b/docs/REVIEW_SENIOR_2026-08-R3.md
+new file mode 100644
+index 0000000..3e6a035
+--- /dev/null
++++ b/docs/REVIEW_SENIOR_2026-08-R3.md
+@@ -0,0 +1,252 @@
++# 🔍 بازبینی فنی سطح Senior (دور سوم — R3) — مخزن eOVPN-Pro
++
++**تاریخ بازبینی:** 2026-08-22 · **شاخه:** `arena/01a02949-eovpn-pro` (کامیت پایه `9a6b220` از `master` = ادغام PR#11)
++**نسخه:** 1.5.0 · **مجوز:** GPL-3.0-or-later · **App ID:** `com.github.mahdi-arts.eovpn-pro`
++**نقش بازبین:** مهندس Full-Stack ارشد + مدیر سیستم لینوکس ارشد + متخصص امنیت سایبری + معمار نرم‌افزار
++**روش:** خواندن کامل کدبیس (Python + C + Meson + پکیجینگ)، **اجرای واقعی** تست‌ها/lint/تایپ‌چک، راستی‌آزمایی وضعیت با `git ls-files` و فایل‌سیستم
++
++> این گزارش، بازبینی **مستقل** سوم است. گزارش‌های R1 و R2 در `docs/REVIEW_SENIOR_2026-08.md` و
++> `docs/REVIEW_SENIOR_2026-08-R2.md` موجود‌اند. وضعیت هر موردِ R2 مجدداً راستی‌آزمایی شده و
++> نتیجه در جدول پایین آمده است. **اصل راهنما:** چیزی که از قبل درست است را تغییر نمی‌دهیم؛ صرفاً مشکلات واقعی را گزارش می‌کنیم.
++
++---
++
++## 🧪 راستی‌آزمایی‌های اجراشده (Evidences)
++
++| بررسی | نتیجه |
++|---|---|
++| `python3 -m unittest discover -s tests` | ✅ **81/81 OK** (0.028s) — *(نه ۵۶؛ شمارش قدیمی در مستندات باقی مانده)* |
++| `python3 -m ruff check .` | ✅ **All checks passed!** |
++| `python3 -m ruff format --check .` | ✅ **64 files already formatted** |
++| `python3 -m mypy --ignore-missing-imports eovpn` | ✅ **Success: no issues found in 26 source files** |
++| `python3 scripts/check_project_meta.py` | ✅ `All metadata checks passed (version 1.5.0)` |
++| `python3 -m compileall eovpn tests` | ✅ بدون خطا |
++| `git ls-files \| grep -i workflow` | ❌ **خروجی خالی — هیچ فایل ورک‌فلو tracked نیست** |
++| `ls .github/workflows/` | ❌ **پوشه وجود ندارد** |
++| `gh api repos/Mahdi-Arts/eOVPN-Pro/releases` | ❌ **هیچ Release منتشرشده‌ای وجود ندارد** |
++| `test_` functions واقعی | **۸۱ تابع** (افزایش از ۵۶) |
++
++### ↻ راستی‌آزمایی کامل موارد R2 (همگی بررسی شدند)
++
++| گروه R2 | وضعیت فعلی |
++|---|---|
++| **A1–A3** (ورک‌فلوهای `ci.yml` / `codeql.yml` / `release.yml`) | ❌ **هنوز ساخته نشده‌اند** — یافتهٔ اصلی این گزارش |
++| **A4** (Dependabot گروهی + `versioning-strategy`) | ✅ انجام شد |
++| **B1/B2** (کف cffi → `>=1.16.0`) | ✅ در `requirements.txt` و `pyproject.toml` |
++| **B3** (UAF در `eovpn_nm.c`) | ✅ حل شد — `eovpn_get_managed_active_uuid` فقط UUID کپی‌شده برمی‌گرداند، نه شیء connection |
++| **B4** (نشت GVariant در `_get_all_sessions`) | ✅ حل شد — `g_autoptr` + `g_variant_iter_new` ارجاع خودش را می‌گیرد |
++| **B5** (PKGBUILD `sha256sums=SKIP`) | 🟡 حالت دوگانه؛ `SKIP` فقط در حالت AUR/release (با کامنت صادقانه) — CI در حالت درون‌مخزنی免疫 |
++| **B6** (سند نقشه راه امنیتی) | ✅ `docs/SECURITY-ROADMAP.md` موجود (Kill-Switch/DNS-leak برای 1.6.0) |
++| **B7** (SSRF سخت) | ✅ `is_hard_blocked_source_host` اضافه شد |
++| **B8** (رمز به‌صورت `bytes` پاک‌شو) | ✅ `bytearray` + `_wipe_session_password` |
++| **B9** (User-Agent از متادیتا) | ✅ `app_version()` تزریق‌شده |
++| **C1/C2/C3/C4** (استخراج cascade/monitor/events) | ✅ همگی ایجاد و به `main_window` متصل شدند (۱۷۹۷→۱۳۳۱ خط) |
++| **C5** (Singleton `Gio.Settings`) | ✅ `_get_gs_settings()` پروسه‌ای |
++| **C6** (APIهای منسوخ GTK) | ✅ لایهٔ `ui_compat.py` (FileDialog/AlertDialog با fallback) — طراحی درست، **نیازی به تغییر ندارد** |
++| **C7** (`probe_version` / حذف کد مرده) | ✅ classmethod سبک اضافه شد؛ `get_name` در ABC اکنون بدون بدنه |
++| **C8** (هک `sys.argv`) | ✅ `--config` به‌عنوان `add_main_option` رسمی ثبت شد |
++| **C9** (state سراسری `UniqueSession` در C) | ✅ حذف شد؛ همهٔ عملیات‌ها `session_object` صریح می‌گیرند (thread-safe) |
++| **C10** (GMainLoop روی نخ UI) | ✅ `_dispatch_off_ui_thread` عملیات مسدود را به نخ کارگر می‌برد |
++| **D1/D2/D3/D4** (تست‌ها/coverage) | ✅ ۵۶→۸۱ تست؛ `app_version`، HTTPS، cascade-state، network-monitor اضافه شدند |
++| **D6** (`ovpn_is_auth_required` توقف زودهنگام) | ✅ |
++| **E1** (AppRun واقعی) | ✅ اسکریپت `GSETTINGS_SCHEMA_DIR`/`XDG_DATA_DIRS`/`PYTHONPATH` را صادر می‌کند |
++| **E2** (autopkgtest) | ✅ `debian/tests/{control,smoke}` موجود |
++| **E3** (check_project_meta گسترش‌یافته) | ✅ PKGBUILD/AppImage/.SRCINFO/metainfo/README را چک می‌کند |
++| **E5** (`build-rpm.sh`) | ✅ موجود |
++| **G1** (blueprint واگرا) | ✅ حل شد — `otp.blp` حذف شد، فقط `.ui` در gresource |
++| **G2** (Keywords + notifications در desktop) | ✅ |
++
++> **نتیجه:** تقریباً همهٔ موارد R2 اجرا شده‌اند. تنها شکافِ واقعی و بحرانی، **نبود CI/CD** و پیامد مستنداتی آن است.
++
++---
++
++## ۱. تحلیل معماری و ساختار (Architecture & Structure)
++
++### ۱.۱ نقاط قوت ✅ (بدون نیاز به تغییر)
++
++1. **لایه‌بندی تمیز UI / Domain / Native** و جداسازی منطق خالص از GTK — این طراحی، دلیل اصلی سبز بودن **۸۱ تست آفلاین** بدون نشست گرافیکی است؛ بهترین تصمیم معماری پروژه.
++2. **انتزاع بک‌اند درست:** `ConnectionManager(ABC)` + `NetworkManager`/`OpenVPN3` + fallback امن در `create_connection_manager()`. افزودن بک‌اند سوم کم‌هزینه است.
++3. **استخراج ماشین‌های حالت:** `cascade_controller.py` (۵۸۸ خط) و `network_monitor.py` (۱۵۴ خط) منطق بلندمدت را با وابستگی‌های تزریق‌شده نگه می‌دارند؛ `main_window.py` از ۱۷۹۷ به ۱۳۳۱ خط تقلیل یافت و اکنون کنترلرها را هماهنگ می‌کند نه خودش اجرا می‌کند.
++4. **زنجیرهٔ ایمپورت اتمی** (staging → swap → پاک‌سازی `.old`) — شکست دانلود هرگز کانفیگ‌های قبلی را از بین نمی‌برد.
++5. **ماشین حالت Cascade با Enum و توابع خالص** (`cascade.py`) — قابل تست.
++6. **باندل GResource واحد** (UI/CSS/آیکون/۲۵۶ پرچم) — نصب تمیز.
++7. **کد C با کیفیت بالا:** `g_autoptr`، بررسی `GError`، تایم‌اوت سخت ۱۵s، عدم state سراسری (thread-safe + چندنشسته)، `.clang-format`.
++
++### ۱.۲ Anti-Patternهای باقی‌مانده ⚠️
++
++| # | یافته | محل | شدت | توضیح |
++|---|---|---|---|---|
++| 1 | **`MainWindow` همچنان بزرگ (۱۳۳۱ خط / ~۶۵ متد)** | `eovpn/main_window.py` | 🟡 متوسط | تقلیل چشمگیری نسبت به ۱۷۹۷ خط داشته، ولی هنوز هم‌زمان هماهنگ‌کنندهٔ UI + wiring آبشار + رویداد D-Bus است. این یک **بهبود تدریجی** است، نه اشکال بحرانی؛ به `on_connection_event` با جدول انتقال حالت صریح می‌توان کم‌رنگ‌ترش کرد. |
++| 2 | **Service-Locator پویا (`retrieve()` با خروجی `Any`)** | `eovpn/eovpn_base.py` | 🟡 پایین | برای یک برنامهٔ تک‌نشستهٔ دسکتاپ قابل قبول است و در `ARCHITECTURE.md` صادقانه مستند شده. فقط در صورت چندنشسته‌شدن باید به DI تایپ‌شده ارتقا یابد. **امروز نیازی به تغییر ندارد.** |
++
++**حکم بخش ۱:** معماری بالاتر از میانگین پروژه‌های دسکتاپ متن‌باز است و بازآرایی‌های R2 اثربخش بوده‌اند. هیچ بازنویسی معماری ضروری وجود ندارد.
++
++---
++
++## ۲. بررسی کیفیت کد (Code Quality & Maintainability)
++
++### ۲.۱ نقاط قوت ✅
++
++- **دروازه‌های کیفیت همگی سبز:** `ruff check` ✓، `ruff format --check` ✓ (۶۴ فایل)، `mypy` ✓ (۲۶ فایل، بدون ایراد)، ۸۱ تست ✓، `check_project_meta` ✓.
++- **تایپ‌هینت مدرن و پیوسته:** `str | None`، `frozenset[str]`، `dataclass`، `from __future__ import annotations`.
++- **مدیریت خطای منسجم:** I/O و D-Bus همگی در `try/except` با لاگ سطح‌بندی‌شده؛ بدون `print` و بدون `pass` خاموش.
++- **DRY:** `Settings.all_settings` از روی کلاس تولید می‌شود (منبع واحد حقیقت)، سه متد اعلان به `_send_notification` یکسان شدند، `network_monitor` فقط **یک عبور** از `/proc/net/dev` دارد.
++- **داک‌استرینگ‌های دوزبانه** در سراسر ماژول‌ها — الگویی و ارزشمند.
++- **نام‌گذاری** سازگار با PEP8 و idiom GTK.
++
++### ۲.۲ نقض‌های جزئی 🟡
++
++- `self.__NAME__` در `ConnectionManager.__init__` ست می‌شود اما زیرکلاس‌ها `get_name()` را hardcode برمی‌گردانند (کد مردهٔ بی‌اثر). **نکتهٔ پیش‌پاافتاده — ارزش دست‌زدن ندارد.**
++- `on_connection_event` همچنان پیچیدگی شناختی بالایی دارد (شاخه‌های تودرتو). کاهش آن به جدول انتقال حالت یک **بهبود تدریجی P2** است، نه اشکال.
++
++**حکم بخش ۲:** کیفیت کد در سطح بالا و آمادهٔ تولید است. بدهی فنی باقی‌مانده از نوع «نظم بیشتر» است نه «اشکال». **تغییر کد ضروری وجود ندارد.**
++
++---
++
++## ۳. بررسی امنیت و شبکه (Security & Network)
++
++### ۳.۱ نقاط قوت ✅ (لایهٔ برنامه نمونه‌ای است)
++
++- **رازها:** Secret Service (اسکیمای اختصاصی) + RAM فرّار به‌صورت `bytearray` با پاک‌سازی فعالانه؛ هرگز dconf/دیسک. بک‌اند NM رمز را `AGENT_OWNED` می‌کند و در صورت شکست اعمال پرچم، **کل ایمپورت را متوقف** می‌کند.
++- **ورودی غیرقابل‌اعتماد:** HTTPS-Only + ریدایرکت‌هندلر ضد downgrade؛ سقف ۶۴/۲۵۶ MiB؛ Zip-Slip با `commonpath`؛ `O_NOFOLLOW` + `0600`؛ رد symlink و basename تکراری؛ SSRF با `is_hard_blocked_source_host` (block سخت، نه فقط warning).
++- **ممیزی کانفیگ:** هشدار برای دایرکتیوهای اجرایی (`up`/`down`/`script-security`/`plugin`/…).
++- **مقاوم‌سازی در دسترس‌پذیری:** تایم‌اوت سخت ۱۵s روی همهٔ فراخوانی‌های D-Bus.
++- **نخ‌امنی GTK:** همهٔ به‌روزرسانی‌های ویجت از `GLib.idle_add`.
++- **بومی C:** UAF و نشت GVariant هر دو حل شدند؛ state سراسری حذف شد (thread-safe).
++- **زنجیرهٔ تأمین در طراحی:** SHA256SUMS برنامه‌ریزی‌شده، Dependabot گروهی فعال.
++
++### ۳.۲ شکاف‌ها و مسیر راه ⚠️
++
++| # | یافته | محل | شدت | توضیح |
++|---|---|---|---|---|
++| 1 | **هیچ CI امنیتی اجرا نمی‌شود.** | `.github/workflows/` (ناموجود) | 🔴 بحرانی | وعدهٔ `pip-audit` و CodeQL در `SECURITY.md` داده شده ولی در عمل صفر است. یعنی کشف CVE و تحلیل ایستا امروز رخ نمی‌دهد. **همان شکاف CI/CD است.** |
++| 2 | **نبود SHA256SUMS/امضای ریلیز** | `release.yml` (ناموجود) | 🟠 متوسط | دستور `sha256sum -c SHA256SUMS` در README برای کاربران غیرقابل اجراست چون هیچ ریلیزی منتشر نمی‌شود. |
++| 3 | **نبود Kill-Switch / ضد نشت DNS** | معماری | 🟠 متوسط (مسیر راه) | در `SECURITY-ROADMAP.md` برای نسخهٔ ۱.۶.۰ برنامه‌ریزی شده است. یک مورد محصولی واقعی است ولی **به‌عنوان مسیر راه ردیابی می‌شود، نه اشکال فعلی.** |
++| 4 | **مجوز گستردهٔ Flatpak (`--system-talk-name=org.freedesktop.NetworkManager`)** | `dist/flatpak/*.yml` | 🟡 پایین (مسیر راه) | در `SECURITY-ROADMAP.md` برای تنگ‌تر شدن با `xdg-dbus-proxy` ثبت شده. |
++| 5 | رمز به‌صورت `bytearray` (بهتر از str ولی CPython همچنان کپی می‌تواند بسازد) | `eovpn_base.py` | 🟡 بسیار پایین | بهبود ساده‌لوحانه؛ ارزش دست‌زدن ندارد. |
++
++### ۳.۳ احراز هویت و مجوزها ✅
++
++- احراز هویت: username/password در Secret Service؛ OTP/2FA با دیالوگ؛ `AUTH_USER` هرگز خالی ارسال نمی‌شود. **خوب.**
++- مجوزها: اجرای سطح کاربر؛ حذف پروفایل فقط با برچسب `managed-by=eovpn-pro` + دیالوگ تأیید با پیش‌فرض «انصراف». **خوب.**
++- شبکه: HTTPS اجباری + تایم‌اوت ۱۲s؛ تست سرعت فقط به مقصدهای داخل `.ovpn` (سقف ۱۶). **خوب.**
++
++**حکم بخش ۳:** لایهٔ امنیت برنامه نمونه‌ای است. شکاف واقعی، «خاموش بودن اتوماسیون امنیتی (CI/CodeQL/pip-audit/ریلیز)» است — نه کد.
++
++---
++
++## ۴. ارزیابی مستندات (Documentation)
++
++| سند | وضعیت |
++|---|---|
++| `README.md` | ✅ عالی و دوزبانه؛ ❌ **بج‌های CI/Release به ورک‌فلوهای ناموجود لینک می‌دهند (۴۰۴)** و شمارش تست «۵۶» به‌جای ۸۱ است. |
++| `docs/ARCHITECTURE.md` | ✅ نمونه — لایه‌ها، تصمیمات، نقشهٔ ماژول. |
++| `SECURITY.md` | ✅ جامع؛ ❌ بخش Supply-chain ادعای اجرای `ci.yml`/`codeql.yml` دارد (ناموجود). |
++| `PACKAGING.md` | ✅ کامل برای ۵ قالب؛ ❌ بخش ۶ «سه ورک‌فلو» خیالی است + شمارش ۵۶ تست. |
++| `CHANGELOG.md` | ✅ Keep-a-Changelog؛ ❌ بخش `[Unreleased]`، CI/CodeQL/release.yml را «افزوده‌شده» توصیف می‌کند (هنوز ناموجود) + شمارش ۵۶. *نکتهٔ صادقانه در خط ۱۵۷ به تعویق اشاره دارد.* |
++| `docs/RELEASE_CHECKLIST.md` | ✅ **تنها سند صادقانه** — چک‌باکس باز «`.github/workflows/` present». |
++| `docs/SECURITY-ROADMAP.md` | ✅ عالی — مسیر راه صریح برای ۱.۶.۰. |
++| `CONTRIBUTING.md`, `eovpn.1`, `po/`, `tests/`, `dist/*/README.md` | ✅ موجود و خوب. |
++| Docstrings | ✅ دوزبانه و تقریباً کامل. |
++
++**حکم بخش ۴:** از نظر کمیت/کیفیت متن، نمونه‌ای است. تنها مشکل **«پیشگوییِ اتوماسیونی که وجود خارجی ندارد»** + **drift شمارش تست (۵۶→۸۱)** است. هر دو با ساخته‌شدن ورک‌فلوها و یک ویرایش کوچک حل می‌شوند.
++
++---
++
++## ۵. ارزیابی انتشار و بسته‌بندی (Packaging Readiness)
++
++| قالب | فایل‌ها | وضعیت | یادداشت |
++|---|---|---|---|
++| `.deb` | `debian/` | ✅ **آماده** | debhelper 13، `hardening=+all`، `dh_python3`، `autopkgtest` (smoke) |
++| `.rpm` | `dist/rpm/eovpn-pro.spec` | ✅ **آماده** | ماکروهای `%meson`، `%check`، `%find_lang`، filetriggers |
++| `.pkg.tar.zst` | `dist/arch/PKGBUILD` + `.SRCINFO` | ✅ **آماده** | دوحالته؛ `SKIP` فقط در حالت AUR (زمان انتشار پر می‌شود) |
++| `.AppImage` | `dist/appimage/build-appimage.sh` | ✅ **آماده** (R1/R2 ناقص بود) | AppRun واقعی، صادر کردن schema/data/python paths |
++| Flatpak | `dist/flatpak/*.yml` + پچ‌ها + cffi manifest | ✅ **آماده** | NM/openvpn3 از سورس با تگ/هش پین‌شده |
++| **CI/CD** | `.github/workflows/` | ❌ **وجود ندارد** | **بزرگ‌ترین و تنها شکاف جدی** |
++| متادیتا | `scripts/check_project_meta.py` | ✅ خوب | نسخه‌ها/اسکیما/gresource همگانی |
++| AppStream/desktop | metainfo.xml, .desktop | ✅ خوب | `content_rating`، `releases`، `Keywords`، `X-GNOME-UsesNotifications` |
++
++**حکم بخش ۵:** دستورهای بسته‌بندی برای هر ۵ قالب با کیفیت خوب موجود و پس از R1/R2 کامل شده‌اند. آمادگی انتشار منحصراً گروگانِ نبود CI/CD و حداقل یک ریلیز واقعی است.
++
++---
++
++## ۶. امتیازدهی کمی (Scoring)
++
++| شاخص | نمره | توجیه |
++|---|---|---|
++| کیفیت کد و معماری | **8/10** | دروازه‌های کیفیت همگی سبز؛ ruff/mypy/۸۱ تست؛ God Object تقلیل یافته. (نسبت به R2: ۶.۵→۸) |
++| امنیت | **7.5/10** | لایهٔ برنامه نمونه‌ای؛ UAF/نشت حل شد. کسر نمره: CI امنیتی خاموش، نبود Kill-Switch و امضای ریلیز. (۷→۷.۵) |
++| مستندات | **7.5/10** | کمیت/کیفیت عالی و دوزبانه؛ کسر: وعدهٔ اتوماسیون ناموجود + drift تست. |
++| قابلیت توسعه (Scalability) | **6.5/10** | انتزاع بک‌اند و استخراج کنترلرها خوب؛ Service-Locator پویا سقف را پایین نگه داشته. (۵.۵→۶.۵) |
++| آمادگی بسته‌بندی (Packaging) | **6.5/10** | هر ۵ قالب آماده و کامل؛ کسر: **صفر اتوماسیون CI/Release** + `SKIP` در AUR. (۶→۶.۵) |
++| **میانگین کل** | **7.2/10** | کدبیس در سطح آمادهٔ تولید؛ نقطهٔ ضعف متمرکز و تنها، لایهٔ CI/CD است. (R2: ۶.۵→۷.۲) |
++
++> ارتقای نمره نسبت به R2 واقعی است و ناشی از اجرای موفق برنامهٔ R2 است — به‌جز ورک‌فلوها.
++
++---
++
++## ۷. طرح اجرایی (Action Plan for Prompt 2) — چک‌لیست ماشین‌خوان
++
++> **اصل کلیدی این گزارش:** کدبیس **نیازی به تغییر ندارد**. تقریباً همهٔ موارد R2 اجرا شده‌اند.
++> طرح زیر، تنها کارِ واقعاً ضروری (CI/CD + همگام‌سازی مستندات) را پوشش می‌دهد. اندازهٔ کوچک لیست، نشانهٔ سلامت پروژه است — نه غفلت.
++>
++> فرمت: `ID | ACTION | PRIORITY | PATH | توضیح یک‌خطی`
++> `ACTION ∈ {CREATE, EDIT}` — `PRIORITY ∈ {P0, P1}`
++> P0 = باید فوراً (اتوماسیون/امنیت) · P1 = همگام‌سازی مستندات پس از P0
++
++### A. CI/CD و دروازه‌های امنیتی (P0 — تنها کار بحرانی)
++
++| ID | ACTION | PRIORITY | PATH | توضیح یک‌خطی |
++|---|---|---|---|---|
++| A1 | CREATE | P0 | `.github/workflows/ci.yml` | ورک‌فلوی CI: ماتریس Python 3.10/3.11/3.12 → `ruff check` + `ruff format --check` + `mypy` + `unittest discover` + coverage؛ سپس `pip-audit --strict`؛ سپس `scripts/check_project_meta.py`؛ سپس `meson setup/compile/install` با `desktop-file-validate` و `appstreamcli validate`؛ و در انتها smoke-build بسته‌های deb/rpm/arch (در کانتینر بومی). همهٔ جزئیات دقیقاً در README/PACKAGING/CHANGELOG توصیف شده‌اند. |
++| A2 | CREATE | P0 | `.github/workflows/codeql.yml` | تحلیل ایستای CodeQL (security-extended) روی زبان‌های `python` و `c-cpp`؛トリگر push/PR + `schedule: weekly`. |
++| A3 | CREATE | P0 | `.github/workflows/release.yml` | تریگر تگ `v*.*.*`: اجرای `check_project_meta.py` برای parity نسخه → ساخت deb/rpm/pkg.tar.zst/AppImage/Flatpak → تولید `SHA256SUMS` → `actions/attest-build-provenance` → انتشار GitHub Release با یادداشت خودکار. |
++
++### B. همگام‌سازی مستندات با واقعیت (P1 — پس از A1–A3 تقریباً خود‌به‌خود)
++
++| ID | ACTION | PRIORITY | PATH | توضیح یک‌خطی |
++|---|---|---|---|---|
++| B1 | EDIT | P1 | `README.md` | اصلاح شمارش تست «۵۶»→«۸۱» (سه‌جا: خطوط ۱۶۸، ۱۷۲، ۲۰۱). *بج‌های CI/Release پس از A1/A3 خود‌به‌خود واقعی می‌شوند.* |
++| B2 | EDIT | P1 | `CHANGELOG.md` | اصلاح «۵۶ تست»→«۸۱ تست» (خط ۱۶)؛ هنگام merge، انتقال مواردهای CI/Release از `[Unreleased]` به نسخهٔ واقعی. |
++| B3 | EDIT | P1 | `PACKAGING.md` | اصلاح «۵۶ تست»→«۸۱ تست» (خط ۱۵۲). *بخش ۶ پس از A1/A3 خود‌به‌خود واقعی می‌شود.* |
++
++### مواری که **عمداً در لیست نیست** (تایید عدم‌نیاز به تغییر)
++
++- **کد Python/C** — هیچ فایلی نیاز به ویرایش ندارد (mypy/ruff/۸۱ تست سبز؛ UAF/نشت/state سراسری حل شده‌اند).
++- **`ui_compat.py`** — لایهٔ compat برای FileDialog/AlertDialog با fallback، طراحی درست است؛ تغییر نمی‌خواهد.
++- **`eovpn_base.py` Service-Locator** — برای دسکتاپ تک‌نشسته قابل قبول و مستند است.
++- **Kill-Switch / DNS-leak / Flatpak tightening** — در `SECURITY-ROADMAP.md` برای ۱.۶.۰ ردیابی می‌شوند؛ مسیر راه، نه اشکال فعلی.
++- **PKGBUILD `sha256sums=SKIP`** — حالت AUR/release؛ با اولین تگ واقعی پر می‌شود. حالت درون‌مخزنیِ CI ایمن است. **اقدامِ زمان انتشار، نه کد.**
++
++---
++
++## 📋 بلوک ورودیِ پرامپت بعدی (Input Command)
++
++```
++EXECUTE PLAN=R3-2026-08 SCOPE=eOVPN-Pro@9a6b220 BRANCH=arena/01a02949-eovpn-pro
++PRINCIPLE: کدبیس آمادهٔ تولید است؛ فقط CI/CD بساز و مستندات را همگام کن. کد را تغییر نده.
++
++P0 (critical — اتوماسیون/امنیت):
++  A1 CREATE .github/workflows/ci.yml     # CI کامل مطابق توصیف README/PACKAGING
++  A2 CREATE .github/workflows/codeql.yml # CodeQL security-extended (python + c-cpp)
++  A3 CREATE .github/workflows/release.yml# ساخت ۵ قالب + SHA256SUMS + provenance روی تگ v*.*.*
++
++P1 (doc sync — پس از P0):
++  B1 EDIT   README.md        # 56→81 تست (خط ۱۶۸/۱۷۲/۲۰۱)؛ بج‌ها با A1/A3 واقعی می‌شوند
++  B2 EDIT   CHANGELOG.md     # 56→81 (خط ۱۶)؛ انتقال [Unreleased] به نسخه هنگام merge
++  B3 EDIT   PACKAGING.md     # 56→81 (خط ۱۵۲)
++
++VERIFY (پس از هر آیتم):
++  - python3 -m ruff check . && python3 -m ruff format --check .
++  - python3 -m mypy --ignore-missing-imports eovpn
++  - python3 -m unittest discover -s tests   # انتظار: 81 OK
++  - python3 scripts/check_project_meta.py
++  - بعد از A1-A3: اجرای واقعی ورک‌فلوها روی PR برای تأیید سبز شدن بج‌ها
++
++COMMIT-MSG: ci(<scope>): <ID> <توضیح> | docs(<scope>): <ID> <توضیح>
++PR-TARGET: master از arena/01a02949-eovpn-pro
++```
++
++---
++
++*یا علی مدد 💚*

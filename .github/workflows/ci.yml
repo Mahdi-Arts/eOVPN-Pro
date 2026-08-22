@@ -1,0 +1,252 @@
+# eOVPN-Pro Continuous Integration
+# یکپارچه‌سازی مداوم eOVPN-Pro
+#
+# Runs on every push to master, every pull request and on demand.
+# Runs: Ruff lint + format check, mypy, the offline unit tests on Python
+# 3.10/3.11/3.12 with coverage, metadata consistency, dependency CVE audit,
+# a full Meson build with desktop/AppStream validation, and smoke builds of
+# the .deb, .rpm and Arch packages.
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: CI only reads source code and uploads artifacts.
+permissions:
+  contents: read
+
+jobs:
+  # --------------------------------------------------------------------- lint-test
+  # Lint, static type-check and the offline unit tests across the supported
+  # Python range. These steps need no display server, no D-Bus and no GTK,
+  # so they run on a plain Python environment.
+  lint-test:
+    name: Lint & tests (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install tooling
+        # Install only the tools this job uses. The full requirements-dev.txt
+        # pulls in PyGObject (via requirements.txt), which cannot be pip-built
+        # without GObject dev headers — and the offline tests do not need it.
+        run: pip install "ruff>=0.5.0" "mypy>=1.10.0" coverage
+
+      - name: Ruff lint
+        run: ruff check .
+
+      - name: Ruff format check
+        run: ruff format --check .
+
+      - name: Mypy type check
+        run: mypy --ignore-missing-imports eovpn tests
+
+      - name: Byte-compile all sources
+        run: python3 -m compileall -q eovpn tests run_program_debug.py cffi_compile.py meson_post_install.py
+
+      - name: Offline unit tests with coverage
+        run: coverage run -m unittest discover -s tests -v
+
+      - name: Coverage report (pure modules only)
+        run: coverage report
+
+      - name: Upload coverage data
+        if: matrix.python == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-data
+          path: .coverage
+          retention-days: 7
+
+  # --------------------------------------------------------------------- meta-audit
+  # Version/schema/resource parity plus a strict dependency CVE scan.
+  meta-audit:
+    name: Metadata consistency & dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install "pip-audit>=2.7.0"
+
+      - name: Project metadata consistency
+        run: python3 scripts/check_project_meta.py
+
+      - name: Dependency CVE audit (strict)
+        run: pip-audit --requirement requirements.txt --strict
+
+  # --------------------------------------------------------------------- meson-build
+  # Full native build: compiles the CFFI C bindings, installs into a staging
+  # root, validates the desktop entry and AppStream metainfo, and re-runs the
+  # test suite through the Meson test runner.
+  meson-build:
+    name: Meson build & validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            meson ninja-build pkg-config gettext desktop-file-utils \
+            appstream \
+            python3-cffi python3-gi \
+            libnm-dev libglib2.0-dev libgtk-4-dev libadwaita-1-dev \
+            libsecret-1-dev libnotify-dev
+
+      - name: Meson setup
+        run: meson setup build --prefix=/usr -Dopenvpn3=false
+
+      - name: Compile
+        run: meson compile -C build
+
+      - name: Install to staging root
+        run: DESTDIR=${{ github.workspace }}/staging meson install -C build
+
+      - name: Validate desktop entry
+        run: |
+          desktop-file-validate \
+            staging/usr/share/applications/com.github.mahdi-arts.eovpn-pro.desktop
+
+      - name: Validate AppStream metainfo
+        run: |
+          # appstream-util is being removed from Debian/Ubuntu (appstream-glib
+          # 0.8.3-3, 2026-03); appstreamcli is the maintained replacement.
+          appstreamcli validate --no-net \
+            staging/usr/share/metainfo/com.github.mahdi-arts.eovpn-pro.metainfo.xml
+
+      - name: Run unit tests via Meson
+        run: meson test -C build --print-errorlogs
+
+  # --------------------------------------------------------------------- deb-smoke
+  # Native Debian build to prove the packaging metadata produces an installable
+  # .deb (and runs dh_auto_test -> meson test inside it).
+  deb-smoke:
+    name: Debian package smoke build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential dpkg-dev debhelper-compat dh-python \
+            meson ninja-build pkg-config gettext desktop-file-utils \
+            python3-all python3-cffi python3-gi \
+            libnm-dev libglib2.0-dev libgtk-4-dev libadwaita-1-dev \
+            libsecret-1-dev libnotify-dev
+
+      - name: Build .deb
+        run: dpkg-buildpackage -us -uc -b
+
+      - name: Collect artifact
+        run: |
+          mkdir -p artifacts
+          mv ../eovpn-pro_*.deb artifacts/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb-package
+          path: artifacts/*.deb
+          if-no-files-found: error
+
+  # --------------------------------------------------------------------- rpm-smoke
+  # Builds the RPM from the canonical spec inside a Fedora container.
+  rpm-smoke:
+    name: RPM smoke build
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          dnf install -y \
+            rpm-build meson ninja-build gcc pkgconf-pkg-config \
+            NetworkManager-libnm-devel glib2-devel gtk4-devel libadwaita-devel \
+            libsecret-devel libnotify-devel python3-devel python3-cffi \
+            gettext desktop-file-utils appstream git
+
+      - name: Prepare source tarball
+        run: |
+          VERSION="$(grep -oP "version:\s*'\K[0-9.]+" meson.build | head -1)"
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          mkdir -p "$HOME/rpmbuild/SOURCES"
+          # The spec uses %autosetup, so the archive top dir must be %{name}-%{version}.
+          git archive --prefix="eovpn-pro-${VERSION}/" \
+            -o "$HOME/rpmbuild/SOURCES/eovpn-pro-${VERSION}.tar.gz" HEAD
+
+      - name: Build RPM
+        run: rpmbuild -ba dist/rpm/eovpn-pro.spec
+
+      - name: Collect artifact
+        run: |
+          mkdir -p artifacts
+          mv "$HOME"/rpmbuild/RPMS/*/*.rpm artifacts/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpm-package
+          path: artifacts/*.rpm
+          if-no-files-found: error
+
+  # --------------------------------------------------------------------- arch-smoke
+  # Builds the Arch package in-tree inside an Arch container.
+  arch-smoke:
+    name: Arch package smoke build
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          pacman -Sy --noconfirm --needed archlinux-keyring
+          pacman -S --noconfirm --needed \
+            base-devel meson ninja pkgconf gcc gettext \
+            desktop-file-utils appstream-glib python python-gobject python-cffi \
+            gtk4 libadwaita libsecret libnotify networkmanager \
+            networkmanager-openvpn openvpn git sudo
+
+      # makepkg refuses to run as root, so build as an unprivileged user.
+      - name: Create non-root builder
+        run: |
+          useradd -m -G wheel builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/builder
+          chown -R builder .
+
+      - name: Build Arch package (in-tree mode)
+        run: |
+          su builder -c "cd dist/arch && makepkg -sf --skipinteg --noconfirm"
+
+      - name: Collect artifact
+        run: |
+          mkdir -p artifacts
+          mv dist/arch/*.pkg.tar.zst artifacts/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arch-package
+          path: artifacts/*.pkg.tar.zst
+          if-no-files-found: error

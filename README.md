@@ -163,13 +163,13 @@ python3 run_program_debug.py
 
 ## 🧪 Testing & Quality Assurance (آزمون و تست نرم‌افزار)
 
-The project ships **56 offline unit tests** that require no network, no D-Bus and
+The project ships **81 offline unit tests** that require no network, no D-Bus and
 no display server, so they run identically on a laptop and inside CI.
-این پروژه دارای **۵۶ تست واحد آفلاین** است که به شبکه، D-Bus یا سرور نمایش نیاز
+این پروژه دارای **۸۱ تست واحد آفلاین** است که به شبکه، D-Bus یا سرور نمایش نیاز
 ندارند و به همین دلیل روی سیستم شخصی و داخل CI یکسان اجرا می‌شوند.
 
 ```bash
-# Unit tests / تست‌های واحد  (56 tests)
+# Unit tests / تست‌های واحد  (81 tests)
 python3 -m unittest discover -s tests -v
 
 # …or through Meson / یا از طریق Meson
@@ -198,7 +198,7 @@ python3 -m compileall -q eovpn tests run_program_debug.py cffi_compile.py meson_
 
 | Workflow / وورک‌فلو | Trigger / محرک | What it does / وظیفه |
 |---|---|---|
-| [`ci.yml`](.github/workflows/ci.yml) | every push & pull request — هر push و pull request | Ruff lint + format check, mypy, 56 unit tests on Python 3.10/3.11/3.12, coverage, `pip-audit`, metadata consistency, a full Meson build with desktop/AppStream validation, and smoke builds of the `.deb`, `.rpm` and Arch packages |
+| [`ci.yml`](.github/workflows/ci.yml) | every push & pull request — هر push و pull request | Ruff lint + format check, mypy, 81 unit tests on Python 3.10/3.11/3.12, coverage, `pip-audit`, metadata consistency, a full Meson build with desktop/AppStream validation, and smoke builds of the `.deb`, `.rpm` and Arch packages |
 | [`codeql.yml`](.github/workflows/codeql.yml) | every push, pull request & weekly — هر push، pull request و هفتگی | CodeQL static analysis for the Python codebase and the compiled C bindings (security-extended queries) |
 | [`release.yml`](.github/workflows/release.yml) | version tags `v*.*.*` — تگ‌های نسخه | Verifies version parity across all packaging metadata, then builds `.deb`, `.rpm`, `.pkg.tar.zst`, AppImage and Flatpak, attaches build provenance, generates `SHA256SUMS`, and publishes the GitHub Release |
 

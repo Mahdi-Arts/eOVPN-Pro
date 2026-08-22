@@ -1,0 +1,64 @@
+# eOVPN-Pro CodeQL Static Analysis
+# تحلیل ایستای CodeQL برای eOVPN-Pro
+#
+# Runs the security-extended CodeQL query packs against the Python codebase and
+# the compiled C bindings on every push, every pull request and weekly.
+name: CodeQL
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  schedule:
+    # Every Monday 06:00 UTC.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      # Job-level permissions replace the top-level set, so contents:read must be
+      # restated for actions/checkout. Mirrors the official CodeQL starter.
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: python
+          - language: c-cpp
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          # security-extended surfaces deeper security queries than the default suite.
+          queries: security-extended
+
+      # The C bindings are only compiled on demand (Meson + CFFI), so for the
+      # c-cpp language we drive an actual build so CodeQL can trace the compiler.
+      - name: Build C bindings for tracing (c-cpp only)
+        if: matrix.language == 'c-cpp'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            meson ninja-build pkg-config gettext \
+            python3-cffi python3-gi \
+            libnm-dev libglib2.0-dev libgtk-4-dev libadwaita-1-dev \
+            libsecret-1-dev libnotify-dev
+          meson setup build -Dopenvpn3=false
+          meson compile -C build
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"

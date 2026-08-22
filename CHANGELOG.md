@@ -8,12 +8,12 @@ All notable changes are documented here. Format follows [Keep a Changelog](https
 
 ### Added / افزوده‌شده
 - **Continuous integration** — `.github/workflows/ci.yml`: Ruff lint and format check, mypy,
-  the 56 offline unit tests across Python 3.10/3.11/3.12, coverage of the pure modules,
+  the 81 offline unit tests across Python 3.10/3.11/3.12, coverage of the pure modules,
   `pip-audit --strict`, metadata consistency, a full Meson build with desktop/AppStream
   validation, and smoke builds of the `.deb`, `.rpm` and Arch packages (Debian native,
   Fedora and Arch containers).
   **یکپارچه‌سازی مداوم** — ورک‌فلوی `ci.yml`: لینت و بررسی قالب‌بندی Ruff، بررسی نوع mypy،
-  اجرای ۵۶ تست واحد آفلاین روی پایتون ۳٫۱۰ تا ۳٫۱۲، پوشش ماژول‌های خالص، `pip-audit --strict`،
+  اجرای ۸۱ تست واحد آفلاین روی پایتون ۳٫۱۰ تا ۳٫۱۲، پوشش ماژول‌های خالص، `pip-audit --strict`،
   بررسی یکپارچگی متادیتا، ساخت کامل Meson با اعتبارسنجی desktop و AppStream، و ساخت آزمایشی
   بسته‌های `.deb`، `.rpm` و آرچ (به‌صورت بومی دبیان و کانتینر فدورا/آرچ).
 - **CodeQL static analysis** — `.github/workflows/codeql.yml` runs the security-extended query
@@ -119,10 +119,10 @@ All notable changes are documented here. Format follows [Keep a Changelog](https
 ### Documentation / مستندات
 - `README.md`, `PACKAGING.md` and `SECURITY.md` no longer describe CI/CD, package formats or
   security scanning that did not exist. Every claim is now backed by a file in the repository,
-  and the test count is stated accurately (56).
+  and the test count is stated accurately (81).
   فایل‌های `README.md` و `PACKAGING.md` و `SECURITY.md` دیگر قابلیت‌های موجود نبودهٔ CI/CD،
   قالب‌های بسته و پویش امنیتی را توصیف نمی‌کنند. اکنون هر ادعا به یک فایل واقعی در مخزن متکی
-  است و تعداد تست‌ها دقیق (۵۶) ذکر شده است.
+  است و تعداد تست‌ها دقیق (۸۱) ذکر شده است.
 - Installation instructions added for all five package formats, plus a format support matrix.
   دستور نصب برای هر پنج قالب بسته و یک جدول وضعیت پشتیبانی قالب‌ها افزوده شد.
 - Known limitations are now documented explicitly, including the absence of a kill-switch and

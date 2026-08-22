@@ -1,0 +1,305 @@
+# eOVPN-Pro Release Automation
+# اتوماسیون انتشار eOVPN-Pro
+#
+# Triggered by a semantic version tag (v*.*.*). Verifies that the tag matches
+# the version declared across every packaging file, then builds all five
+# package formats in parallel, attaches build-provenance attestations to the
+# .deb and AppImage, generates a SHA256SUMS manifest and publishes the
+# GitHub Release with auto-generated notes.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build (without a leading 'v')"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  # --------------------------------------------------------------------- verify
+  # Abort early if the tag and every packaging file do not agree on the version.
+  verify:
+    name: Verify version parity
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Resolve version from tag or input
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Check internal packaging parity
+        run: python3 scripts/check_project_meta.py
+
+      - name: Check tag matches project version
+        run: |
+          MESON_VERSION="$(grep -oP "version:\s*'\K[0-9.]+" meson.build | head -1)"
+          if [ "${MESON_VERSION}" != "${{ steps.meta.outputs.version }}" ]; then
+            echo "::error::Tag version '${{ steps.meta.outputs.version }}' != meson.build version '${MESON_VERSION}'"
+            exit 1
+          fi
+          echo "Version parity OK: ${MESON_VERSION}"
+
+  # --------------------------------------------------------------------- deb
+  deb:
+    name: Build .deb
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read        # checkout (job-level permissions replace the top-level set)
+      id-token: write       # build-provenance attestation
+      attestations: write   # build-provenance attestation
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential dpkg-dev debhelper-compat dh-python \
+            meson ninja-build pkg-config gettext desktop-file-utils \
+            python3-all python3-cffi python3-gi \
+            libnm-dev libglib2.0-dev libgtk-4-dev libadwaita-1-dev \
+            libsecret-1-dev libnotify-dev
+
+      - name: Build .deb
+        run: dpkg-buildpackage -us -uc -b
+
+      - name: Stage artifact
+        run: |
+          mkdir -p release
+          mv ../eovpn-pro_*.deb release/
+
+      - name: Generate build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: release/*.deb
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb-package
+          path: release/*.deb
+          if-no-files-found: error
+
+  # --------------------------------------------------------------------- rpm
+  rpm:
+    name: Build .rpm
+    needs: verify
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          dnf install -y \
+            rpm-build meson ninja-build gcc pkgconf-pkg-config \
+            NetworkManager-libnm-devel glib2-devel gtk4-devel libadwaita-devel \
+            libsecret-devel libnotify-devel python3-devel python3-cffi \
+            gettext desktop-file-utils appstream git
+
+      - name: Prepare source tarball
+        run: |
+          VERSION="${{ needs.verify.outputs.version }}"
+          mkdir -p "$HOME/rpmbuild/SOURCES"
+          git archive --prefix="eovpn-pro-${VERSION}/" \
+            -o "$HOME/rpmbuild/SOURCES/eovpn-pro-${VERSION}.tar.gz" HEAD
+
+      - name: Build RPM
+        run: rpmbuild -ba dist/rpm/eovpn-pro.spec
+
+      - name: Stage artifact
+        run: |
+          mkdir -p release
+          mv "$HOME"/rpmbuild/RPMS/*/*.rpm release/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpm-package
+          path: release/*.rpm
+          if-no-files-found: error
+
+  # --------------------------------------------------------------------- arch
+  arch:
+    name: Build .pkg.tar.zst
+    needs: verify
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          pacman -Sy --noconfirm --needed archlinux-keyring
+          pacman -S --noconfirm --needed \
+            base-devel meson ninja pkgconf gcc gettext \
+            desktop-file-utils appstream-glib python python-gobject python-cffi \
+            gtk4 libadwaita libsecret libnotify networkmanager \
+            networkmanager-openvpn openvpn git sudo
+
+      - name: Create non-root builder
+        run: |
+          useradd -m -G wheel builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/builder
+          chown -R builder .
+
+      - name: Build Arch package (in-tree mode)
+        run: |
+          su builder -c "cd dist/arch && makepkg -sf --skipinteg --noconfirm"
+
+      - name: Stage artifact
+        run: |
+          mkdir -p release
+          mv dist/arch/*.pkg.tar.zst release/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arch-package
+          path: release/*.pkg.tar.zst
+          if-no-files-found: error
+
+  # --------------------------------------------------------------------- appimage
+  # Built on the oldest supported LTS base for maximum runtime portability
+  # (older glibc => runs on more distributions).
+  appimage:
+    name: Build AppImage
+    needs: verify
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read        # checkout (job-level permissions replace the top-level set)
+      id-token: write       # build-provenance attestation
+      attestations: write   # build-provenance attestation
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            meson ninja-build pkg-config libfuse2 file wget gettext \
+            desktop-file-utils \
+            python3-dev python3-cffi python3-gi \
+            libnm-dev libglib2.0-dev libgtk-4-dev libadwaita-1-dev \
+            libsecret-1-dev libnotify-dev
+
+      - name: Download linuxdeploy + GTK plugin
+        run: |
+          wget -q -O linuxdeploy \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget -q -O linuxdeploy-plugin-gtk.sh \
+            https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh
+          chmod +x linuxdeploy linuxdeploy-plugin-gtk.sh
+          echo "LINUXDEPLOY_BIN=$PWD/linuxdeploy" >> "$GITHUB_ENV"
+
+      - name: Build AppImage
+        run: VERSION=${{ needs.verify.outputs.version }} bash dist/appimage/build-appimage.sh
+
+      - name: Stage artifact
+        run: |
+          mkdir -p release
+          mv eovpn-pro-*.AppImage release/
+
+      - name: Generate build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: release/*.AppImage
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: appimage
+          path: release/*.AppImage
+          if-no-files-found: error
+
+  # --------------------------------------------------------------------- flatpak
+  # Best-effort: the manifest builds NetworkManager + OpenVPN 3 from source,
+  # so a cold build is long and depends on large external SDKs. A failure here
+  # never blocks the release of the other four formats.
+  flatpak:
+    name: Build Flatpak
+    needs: verify
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Flatpak tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends flatpak flatpak-builder
+
+      - name: Add Flathub remote and install GNOME runtime
+        run: |
+          flatpak --user remote-add --if-not-exists flathub \
+            https://flathub.org/repo/flathub.flatpakrepo
+          flatpak install -y --user flathub org.gnome.Sdk//50 org.gnome.Platform//50
+
+      - name: Build Flatpak bundle
+        run: bash scripts/build-flatpak.sh
+
+      - name: Stage artifact
+        run: |
+          mkdir -p release
+          mv dist/flatpak/eovpn-pro.flatpak release/ || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak-bundle
+          path: release/*.flatpak
+          if-no-files-found: warn
+
+  # --------------------------------------------------------------------- release
+  release:
+    name: Publish GitHub Release
+    needs: [verify, deb, rpm, arch, appimage, flatpak]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten artifacts and generate SHA256SUMS
+        run: |
+          mkdir -p release
+          find artifacts -type f \
+            \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.zst' \
+               -o -name '*.AppImage' -o -name '*.flatpak' \) \
+            -exec cp {} release/ \;
+          (cd release && sha256sum * > ../SHA256SUMS)
+          echo "## Artifacts" >> "$GITHUB_STEP_SUMMARY"
+          (cd release && ls -1) >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          # On a tag push github.ref_name is the tag; on a manual run we derive
+          # the tag from the resolved version.
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', needs.verify.outputs.version) || github.ref_name }}
+          name: eOVPN-Pro ${{ needs.verify.outputs.version }}
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+          files: |
+            release/*
+            SHA256SUMS

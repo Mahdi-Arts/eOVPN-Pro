@@ -147,9 +147,9 @@ makepkg -sf --skipinteg
 sudo pacman -U eovpn-pro-1.5.0-1-x86_64.pkg.tar.zst
 ```
 
-> `makepkg` runs the project's 56 offline unit tests in its `check()` stage.
+> `makepkg` runs the project's 81 offline unit tests in its `check()` stage.
 > Pass `--nocheck` to skip them inside minimal containers.
-> دستور `makepkg` در مرحلهٔ `check()` هر ۵۶ تست واحد آفلاین را اجرا می‌کند؛ برای رد کردن
+> دستور `makepkg` در مرحلهٔ `check()` هر ۸۱ تست واحد آفلاین را اجرا می‌کند؛ برای رد کردن
 > آن‌ها در کانتینرهای حداقلی از `--nocheck` استفاده کنید.
 
 ### Enabling the OpenVPN 3 backend (فعال‌سازی بک‌اند OpenVPN 3)
@@ -322,6 +322,8 @@ python3 scripts/check_project_meta.py
 # 2. Tag and push / ایجاد تگ و ارسال آن
 git tag -a v1.5.0 -m "eOVPN-Pro 1.5.0"
 git push origin v1.5.0
+```
+
 ## 7. Format Support Matrix
 
 | Format / قالب | Recipe / دستور ساخت | Built in CI | Published on release | Maturity / بلوغ |
