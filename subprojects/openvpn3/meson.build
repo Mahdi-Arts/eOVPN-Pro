@@ -1,7 +1,7 @@
 project('openvpn3', 'c')
 
 main_project = 'eovpn'
-main_project_id = 'com.hithub.jkotra.eovpn'
+main_project_id = 'com.github.mahdi-bagheban.eovpn-pro'
 
 deps = [
     dependency('gio-unix-2.0'),
@@ -27,7 +27,7 @@ libopenvpn3 = shared_library('openvpn3',
 ffi = custom_target(
     input: libopenvpn3,
     output: '_libopenvpn3.so',
-    command: [python_exe, meson.source_root() / 'cffi_compile.py' ,
+    command: [python_exe, meson.project_source_root() / 'cffi_compile.py',
     '--library', libopenvpn3,
     '--header', meson.current_source_dir() / 'openvpn3.h',
     ],

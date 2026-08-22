@@ -11,7 +11,12 @@ import tempfile
 import unittest
 from unittest.mock import patch, MagicMock
 
-from eovpn.utils import download_remote_to_destination, ovpn_is_auth_required, NotZipException
+from eovpn.utils import (
+    download_remote_to_destination,
+    ovpn_is_auth_required,
+    is_safe_path,
+    NotZipException
+)
 
 
 class TestOpenVPNUtils(unittest.TestCase):
@@ -26,6 +31,15 @@ class TestOpenVPNUtils(unittest.TestCase):
     def tearDown(self):
         if os.path.exists(self.test_dir):
             shutil.rmtree(self.test_dir)
+
+    def test_is_safe_path(self):
+        """Test Zip-Slip / Path Traversal protection helper."""
+        base_dir = os.path.realpath(self.test_dir)
+        safe_child = os.path.join(base_dir, "config.ovpn")
+        unsafe_traversal = os.path.join(base_dir, "..", "evil.sh")
+
+        self.assertTrue(is_safe_path(base_dir, safe_child))
+        self.assertFalse(is_safe_path(base_dir, unsafe_traversal))
 
     def test_local_folder_import(self):
         """Test importing configurations from a local directory."""

@@ -3,8 +3,8 @@ eOVPN-Pro Base Application & State Management Module
 ماژول هسته و مدیریت وضعیت برنامه در eOVPN-Pro
 
 Provides global application definitions, settings management, notification dispatchers,
-and secure in-memory session stores.
-شامل تعاریف کلی، مدیریت تنظیمات، سیستم اعلان‌ها و حافظه موقت امن برای نشست‌ها.
+custom UI list widgets, and secure in-memory session stores.
+شامل تعاریف کلی، مدیریت تنظیمات، سیستم اعلان‌ها، ویجت‌های اختصاصی لیست و حافظه موقت امن برای نشست‌ها.
 """
 
 import os
@@ -19,6 +19,7 @@ from pathlib import Path
 import gi
 gi.require_version('Notify', '0.7')
 gi.require_version('Secret', '1')
+gi.require_version('Gtk', '4.0')
 from gi.repository import GObject, Gtk, Gio, GLib, GdkPixbuf, Notify, Secret
 
 from .utils import download_remote_to_destination
@@ -40,7 +41,7 @@ logger = logging.getLogger(__name__)
 class ConfigItem(GObject.Object):
     """
     Model item representing a single OpenVPN configuration entry.
-    آیتم مدل مربوط به یک کانفیگ OpenVPN.
+    آیتم مدل مربوط به یک کانفیگ OpenVPN در ListStore.
     """
     def __init__(self, name: str, **kwargs):
         super(ConfigItem, self).__init__(**kwargs)
@@ -48,6 +49,54 @@ class ConfigItem(GObject.Object):
 
     def __repr__(self) -> str:
         return str(self.name)
+
+
+class ConfigRow(Gtk.ListBoxRow):
+    """
+    Custom ListBoxRow widget representing an OpenVPN configuration entry.
+    ویجت اختصاصی ردیف لیست برای نمایش کانفیگ OpenVPN همراه با برچسب پینگ/تأخیر و دکمه ویرایش.
+    """
+    def __init__(self, filename: str, ovpn_dir: str, **kwargs):
+        super().__init__(**kwargs)
+        self.filename: str = filename
+        self.ovpn_dir: str = ovpn_dir
+
+        self.box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+        self.box.set_margin_start(10)
+        self.box.set_margin_end(8)
+        self.box.set_margin_top(4)
+        self.box.set_margin_bottom(4)
+
+        # File label / نام فایل کانفیگ
+        self.label = Gtk.Label.new(filename)
+        self.label.set_halign(Gtk.Align.START)
+        self.label.set_hexpand(True)
+        self.label.set_xalign(0.0)
+
+        # Latency label / برچسب نمایش پینگ
+        self.latency_label = Gtk.Label.new("")
+        self.latency_label.set_halign(Gtk.Align.END)
+        self.latency_label.set_margin_end(8)
+
+        # Edit button / دکمه ویرایش فایل کانفیگ
+        self.edit_button = Gtk.Button.new_from_icon_name("document-edit-symbolic")
+        self.edit_button.set_has_frame(False)
+        self.edit_button.set_tooltip_text(gettext.gettext("Edit Configuration"))
+        self.edit_button.set_halign(Gtk.Align.END)
+        self.edit_button.set_visible(False)
+        self.edit_button.add_css_class("btn-no-dec")
+
+        target_file = Path(self.ovpn_dir).joinpath(filename)
+        self.edit_button.connect("clicked", lambda w: subprocess.run(["xdg-open", str(target_file)]))
+
+        self.box.append(self.label)
+        self.box.append(self.latency_label)
+        self.box.append(self.edit_button)
+        self.set_child(self.box)
+
+    def set_edit_visible(self, visible: bool):
+        """Toggles visibility of the inline edit button."""
+        self.edit_button.set_visible(visible)
 
 
 class StorageItem:
@@ -292,37 +341,13 @@ class Base:
         self.store("latency_labels", {})
 
         def widget_factory(item):
-            row = Gtk.ListBoxRow.new()
             filename = str(item)
-
-            label_and_actions_box = Gtk.Grid()
-            label = Gtk.Label.new(filename)
-            label.set_halign(Gtk.Align.START)
-
-            latency_label = Gtk.Label.new("")
-            latency_label.set_halign(Gtk.Align.END)
-            latency_label.set_hexpand(True)
-            latency_label.set_margin_end(10)
+            row = ConfigRow(filename, self.EOVPN_OVPN_CONFIG_DIR)
 
             latency_dict = self.retrieve("latency_labels")
             if isinstance(latency_dict, dict):
-                latency_dict[filename] = latency_label
+                latency_dict[filename] = row.latency_label
 
-            edit_action = Gtk.Button.new_from_icon_name("document-edit-symbolic")
-            edit_action.set_has_frame(False)
-            edit_action.set_tooltip_text(gettext.gettext("Edit Configuration"))
-            edit_action.set_margin_end(4)
-            edit_action.set_halign(Gtk.Align.END)
-            edit_action.set_hexpand(False)
-            edit_action.set_visible(False)
-            edit_action.add_css_class("btn-no-dec")
-            f = Path(self.EOVPN_OVPN_CONFIG_DIR).joinpath(filename)
-            edit_action.connect("clicked", lambda w: subprocess.run(["xdg-open", str(f)]))
-
-            label_and_actions_box.attach(label, 0, 0, 1, 1)
-            label_and_actions_box.attach(latency_label, 1, 0, 1, 1)
-            label_and_actions_box.attach(edit_action, 2, 0, 1, 1)
-            row.set_child(label_and_actions_box)
             rows_list = self.retrieve(StorageItem.LISTBOX_ROWS)
             if isinstance(rows_list, list):
                 rows_list.append(row)
