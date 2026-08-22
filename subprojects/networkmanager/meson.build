@@ -1,7 +1,7 @@
 project('eovpn_nm', 'c')
 
 main_project = 'eovpn'
-main_project_id = 'com.hithub.jkotra.eovpn'
+main_project_id = 'com.github.mahdi-bagheban.eovpn-pro'
 
 deps = [
     dependency('libnm'),
@@ -20,11 +20,10 @@ libeovpn_nm = shared_library('eovpn_nm',
     install_dir: lib_install_dir
 )
 
-
 ffi = custom_target(
     input: libeovpn_nm,
     output: '_libeovpn_nm.so',
-    command: [python_exe, meson.source_root() / 'cffi_compile.py' ,
+    command: [python_exe, meson.project_source_root() / 'cffi_compile.py',
     '--library', libeovpn_nm,
     '--header', meson.current_source_dir() / 'eovpn_nm.h',
     ],

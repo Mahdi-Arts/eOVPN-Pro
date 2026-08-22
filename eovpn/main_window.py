@@ -20,7 +20,7 @@ from .settings_window import SettingsWindow
 from .connection_manager import NetworkManager, OpenVPN3
 from .ip_lookup.lookup import Lookup
 from .utils import ovpn_is_auth_required
-from .eovpn_base import Base, StorageItem
+from .eovpn_base import Base, StorageItem, ConfigRow
 
 logger = logging.getLogger(__name__)
 
@@ -30,16 +30,17 @@ class MainWindow(Base, Gtk.Builder):
     Main application window combining configuration selector and traffic monitor.
     پنجره اصلی برنامه شامل لیست کانفیگ‌ها، کارت آمار مصرف ترافیک و گزینه‌های اتصال.
     """
-    def __init__(self, app):
+    def __init__(self, app: Gtk.Application):
         super().__init__()
         Gtk.Builder.__init__(self)
         self.app = app
         
         if self.get_setting(self.SETTING.DARK_THEME) is True:
             gtk_settings = Gtk.Settings().get_default()
-            gtk_settings.set_property("gtk-application-prefer-dark-theme", True)
+            if gtk_settings:
+                gtk_settings.set_property("gtk-application-prefer-dark-theme", True)
 
-        self.add_from_resource(self.EOVPN_GRESOURCE_PREFIX + "/ui/" + "main.ui")
+        self.add_from_resource(self.EOVPN_GRESOURCE_PREFIX + "/ui/main.ui")
         self.window = self.get_object("main_window")
         self.window.set_title(self.APP_NAME)
         self.window.set_icon_name(self.APP_ID)
@@ -50,46 +51,63 @@ class MainWindow(Base, Gtk.Builder):
         self.store(StorageItem.MAIN_WINDOW, self.window)
         self.store("main_window_instance", self)
 
-        self.selected_row = None
+        self.selected_row: ConfigRow | None = None
         self.manual_disconnect = False
         self.selected_config = None
         self.connected_cursor = None
         self.signals = Signals()
-        self.latencies = {}
+        self.latencies: dict[str, float | None] = {}
         self.sort_by_speed_active = False
 
         ###########################################################
         # Initialize and setup Connection Manager (CM)
+        # مقداردهی اولیه مدیریت‌کننده اتصالات
         ###########################################################
         preferred = self.get_setting(self.SETTING.MANAGER)
-        self.store("CM", {"name": preferred,
-                        "instance": NetworkManager(self.on_connection_event)
-                        if preferred == "networkmanager"
-                        else OpenVPN3(self.on_connection_event)})
+        self.store("CM", {
+            "name": preferred,
+            "instance": NetworkManager(self.on_connection_event)
+            if preferred == "networkmanager"
+            else OpenVPN3(self.on_connection_event)
+        })
         self.store("on_connection_event", self.on_connection_event)
         self.CM = lambda: self.retrieve("CM")["instance"]
 
         self.lookup = Lookup()
 
-    def get_selected_config(self) -> str:
-        try:
-            row = self.list_box.get_selected_row().get_child()
-            self.selected_row = row
-            label = row.get_child_at(0, 0).get_label()
-            edit_action = row.get_child_at(2, 0)
-            edit_action.set_visible(True)
-            return label
-        except AttributeError:
+    def get_selected_config(self) -> str | None:
+        """
+        Retrieves the filename of the currently selected configuration.
+        دریافت نام فایل کانکشن انتخاب‌شده در لیست.
+        """
+        selected_row = self.list_box.get_selected_row()
+        if not selected_row:
             return None
+        if hasattr(selected_row, "filename"):
+            self.selected_row = selected_row
+            selected_row.set_edit_visible(True)
+            return selected_row.filename
+        return None
 
-    def row_changed(self, listbox, row):
-        try:
-            self.selected_row.get_child_at(2, 0).set_visible(False)
-        except:
-            pass
+    def row_changed(self, listbox: Gtk.ListBox, row: Gtk.ListBoxRow | None):
+        """
+        Handles list row selection changes and validates authentication requirements.
+        مدیریت تغییر ردیف انتخابی و بررسی نیازمندی‌های نام کاربری و کلمه عبور.
+        """
+        if self.selected_row and hasattr(self.selected_row, "set_edit_visible"):
+            try:
+                self.selected_row.set_edit_visible(False)
+            except Exception:
+                pass
+
+        self.selected_row = row
+        if row and hasattr(row, "set_edit_visible"):
+            row.set_edit_visible(True)
+
         if (selected := self.get_selected_config()) is not None:
             if self.get_setting(self.SETTING.REQ_AUTH) is True:
-                if ovpn_is_auth_required(os.path.join(self.EOVPN_OVPN_CONFIG_DIR, selected)) and self.get_setting(self.SETTING.AUTH_USER) is None:
+                config_path = os.path.join(self.EOVPN_OVPN_CONFIG_DIR, selected)
+                if ovpn_is_auth_required(config_path) and self.get_setting(self.SETTING.AUTH_USER) is None:
                     self.connect_btn.set_sensitive(False)
                     self.connect_btn.set_tooltip_text(gettext.gettext("Authentication Required!"))
                     return
@@ -97,8 +115,11 @@ class MainWindow(Base, Gtk.Builder):
         self.connect_btn.set_sensitive(True)
         self.connect_btn.set_tooltip_text("")
 
-    def generic_critical_error_dialog(self, error_message):
-
+    def generic_critical_error_dialog(self, error_message: list[str]):
+        """
+        Displays a critical modal error dialog.
+        نمایش دیالوگ خطای بحرانی.
+        """
         def cb(dialog, res):
             Gio.Application.quit(self.app)
 
@@ -111,7 +132,7 @@ class MainWindow(Base, Gtk.Builder):
         dlg.set_property("text", "<span weight='bold'>Error</span>")
         dlg.connect("response", cb)
 
-        btn = dlg.add_button("Exit", 1)
+        btn = dlg.add_button(gettext.gettext("Exit"), 1)
         btn.add_css_class("destructive-action")
 
         box = dlg.get_message_area()
@@ -120,47 +141,45 @@ class MainWindow(Base, Gtk.Builder):
         dlg.show()
 
     def setup(self):
-
-        ###########################################################
-        # Declare boxes for each major component.
-        ###########################################################
-        self.box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0) #top most box
-
-        self.inner_left = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0) #ListBox
-        self.inner_right = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0) #Info
+        """
+        Constructs and wires the full user interface.
+        ساخت و اتصال اجزای رابط کاربری.
+        """
+        self.box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
+        self.inner_left = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
+        self.inner_right = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
         self.paned = Gtk.Paned.new(Gtk.Orientation.HORIZONTAL)
 
         def update_layout():
-            if (self.get_setting(self.SETTING.LAYOUT) == "card-h"):
+            if self.get_setting(self.SETTING.LAYOUT) == "card-h":
                 self.paned.set_orientation(Gtk.Orientation.HORIZONTAL)
-                self.inner_left.set_size_request(200, -1)
+                self.inner_left.set_size_request(220, -1)
                 self.window.set_default_size(800, 400)
             else:
                 self.paned.set_orientation(Gtk.Orientation.VERTICAL)
-                self.inner_left.set_size_request(-1, 100)
+                self.inner_left.set_size_request(-1, 120)
                 self.window.set_default_size(400, 800)
         
         update_layout()
         self.paned.set_start_child(self.inner_left)
         self.paned.set_end_child(self.inner_right)
 
-
-        ###########################################################
-        # Left Box
-        ###########################################################
-
+        # ---------------------------------------------------------
+        # Left Panel (Configurations & Speed Test Toolbar)
+        # پنل سمت چپ (لیست کانفیگ‌ها و نوار ابزار تست سرعت)
+        # ---------------------------------------------------------
         viewport = Gtk.Viewport.new()
         viewport.set_vexpand(True)
         viewport.set_hexpand(True)
 
-        self.scrolled_window = Gtk.ScrolledWindow().new()
+        self.scrolled_window = Gtk.ScrolledWindow.new()
 
         self.list_box = Gtk.ListBox.new()
         self.list_box.connect("row-selected", self.row_changed)
         self.store(StorageItem.LISTBOX, self.list_box)
 
-        #add placeholder
-        v_box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 4)
+        # Placeholder when list is empty / ویجت جایگزین در زمان خالی بودن لیست
+        v_box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 6)
         v_box.set_valign(Gtk.Align.CENTER)
         lbl = Gtk.Label.new(gettext.gettext("No Configs Added!"))
         lbl.add_css_class("bold")
@@ -177,10 +196,10 @@ class MainWindow(Base, Gtk.Builder):
         viewport.set_child(self.list_box)
         self.load_only()
 
-        # Set up sort function
+        # Set up sorting function / مرتب‌سازی هوشمند
         self.list_box.set_sort_func(self.list_box_sort_func)
 
-        # Pro Features Toolbar
+        # Pro Features Toolbar / نوار ابزار قابلیت‌های حرفه‌ای
         self.pro_box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 6)
         self.pro_box.set_margin_start(10)
         self.pro_box.set_margin_end(10)
@@ -205,12 +224,12 @@ class MainWindow(Base, Gtk.Builder):
         self.pro_box.append(self.fastest_btn)
 
         self.inner_left.append(self.pro_box)
-
         self.inner_left.append(self.scrolled_window)
 
-        ###########################################################
-        # Right Box
-        ###########################################################
+        # ---------------------------------------------------------
+        # Right Panel (Status, IP, Traffic Card, and Connect Button)
+        # پنل سمت راست (وضعیت، آدرس آی‌پی، کارت مانیتورینگ و دکمه اتصال)
+        # ---------------------------------------------------------
         img = Gtk.Picture.new()
         img.set_halign(Gtk.Align.CENTER)
         img.set_valign(Gtk.Align.CENTER)
@@ -220,7 +239,7 @@ class MainWindow(Base, Gtk.Builder):
             img.hide()
         self.inner_right.append(img)
 
-        #this contains - OpenVPN info
+        # IP Address & Geolocation info / اطلاعات آی‌پی
         h_box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 6)
         h_box.set_halign(Gtk.Align.CENTER)
         self.ip_text = Gtk.Label.new(gettext.gettext("IP: "))
@@ -231,16 +250,15 @@ class MainWindow(Base, Gtk.Builder):
         cpy_btn = Gtk.Button.new_from_icon_name("edit-copy-symbolic")
         cpy_btn.set_valign(Gtk.Align.CENTER)
         cpy_btn.set_halign(Gtk.Align.CENTER)
-        cpy_btn.set_tooltip_text("Copy")
+        cpy_btn.set_tooltip_text(gettext.gettext("Copy IP Address"))
         cpy_btn.add_css_class("flat")
 
         h_box.append(self.ip_text)
         h_box.append(self.ip_addr)
         h_box.append(cpy_btn)
-
         self.inner_right.append(h_box)
 
-        # Traffic & Speed Card Panel (Redesigned - v1.5)
+        # Traffic & Speed Card Panel / کادر مدرن مانیتورینگ ترافیک زنده
         self.traffic_card = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 0)
         self.traffic_card.add_css_class("card")
         self.traffic_card.add_css_class("traffic-card")
@@ -250,7 +268,7 @@ class MainWindow(Base, Gtk.Builder):
         self.traffic_card.set_margin_bottom(12)
         self.traffic_card.set_tooltip_text(gettext.gettext("Live traffic statistics for the active VPN tunnel"))
 
-        def build_stat_cell(icon_name, css_variant, caption_text):
+        def build_stat_cell(icon_name: str, css_variant: str, caption_text: str):
             cell = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
             cell.set_hexpand(True)
             cell.set_halign(Gtk.Align.CENTER)
@@ -299,39 +317,34 @@ class MainWindow(Base, Gtk.Builder):
 
         self.inner_right.append(self.traffic_card)
 
-        #TODO: define it better!
         self.psh = None
 
         self.connect_box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 6)
         self.connect_box.set_valign(Gtk.Align.END)
         self.connect_box.add_css_class("m-10")
-        self.connect_btn = Gtk.Button().new_with_label(gettext.gettext("Connect"))
+        self.connect_btn = Gtk.Button.new_with_label(gettext.gettext("Connect"))
         self.connect_btn.set_valign(Gtk.Align.FILL)
         self.connect_btn.set_hexpand(True)
         self.connect_btn.set_vexpand(True)
         
         self.connect_box.append(self.connect_btn)
 
-        self.pause_resume_btn = Gtk.Button().new_from_icon_name("media-playback-pause-symbolic")
+        self.pause_resume_btn = Gtk.Button.new_from_icon_name("media-playback-pause-symbolic")
         self.pause_resume_btn.set_valign(Gtk.Align.END)
         self.pause_resume_btn.set_vexpand(True)
         self.pause_resume_btn.set_visible(False)
 
         self.connect_btn.connect("clicked", self.signals.connect, self.get_selected_config)
-
-        #Connects to pause()
         self.swap_pause_btn_signal_resume_to_pause()
 
         self.connect_box.append(self.pause_resume_btn)
-
         self.inner_right.append(self.connect_box)
 
-        ###########################################################
-        # Bottom Progress Bar
-        ###########################################################
+        # ---------------------------------------------------------
+        # Bottom Progress Bar / نوار پیشرفت پایین
+        # ---------------------------------------------------------
         self.progress_bar = Gtk.ProgressBar.new()
         
-        #Initial connection check on startup + Progress bar update + signal connects
         if self.CM().status():
             self.connect_btn.set_label(gettext.gettext("Disconnect"))
             self.connect_btn.add_css_class("destructive-action")
@@ -353,7 +366,8 @@ class MainWindow(Base, Gtk.Builder):
             if not website.startswith("http"):
                 website = "https://" + website
             about.set_website(website)
-            about.set_system_information("Flatpak: \t {}\nCommit: \t {}".format("true" if os.getenv("FLATPAK_ID") is not None else "false", self.APP_COMMIT))
+            about.set_system_information("Flatpak: \t {}\nCommit: \t {}".format(
+                "true" if os.getenv("FLATPAK_ID") is not None else "false", self.APP_COMMIT))
             about.set_transient_for(self.window)
             about.set_modal(True)
             about.show()
@@ -367,13 +381,12 @@ class MainWindow(Base, Gtk.Builder):
             window.show()
 
         def on_layout_update(action, value):
-            logger.info(value)
+            logger.info("Layout updated to: %s", value)
             action.set_state(value)
             self.set_setting(self.SETTING.LAYOUT, str(value).replace("'", ""))
             update_layout()
 
-
-        action = Gio.SimpleAction().new_stateful(
+        action = Gio.SimpleAction.new_stateful(
             "radiogroup",
             GLib.VariantType.new("s"),
             GLib.Variant("s", self.get_setting(self.SETTING.LAYOUT))
@@ -383,13 +396,13 @@ class MainWindow(Base, Gtk.Builder):
 
         def on_language_update(action, value):
             new_lang = str(value).replace("'", "")
-            logger.info(f"Changing language to: {new_lang}")
+            logger.info("Changing language to: %s", new_lang)
             action.set_state(value)
             self.set_setting(self.SETTING.LANGUAGE, new_lang)
             import sys
             os.execv(sys.executable, [sys.executable] + sys.argv)
 
-        action_lang = Gio.SimpleAction().new_stateful(
+        action_lang = Gio.SimpleAction.new_stateful(
             "language",
             GLib.VariantType.new("s"),
             GLib.Variant("s", self.get_setting(self.SETTING.LANGUAGE) or "en")
@@ -397,27 +410,27 @@ class MainWindow(Base, Gtk.Builder):
         action_lang.connect("activate", on_language_update)
         self.app.add_action(action_lang)
 
-        action = Gio.SimpleAction().new("update", None)
-        action.connect("activate", lambda x, d: self.validate_and_load(self.spinner) )
+        action = Gio.SimpleAction.new("update", None)
+        action.connect("activate", lambda x, d: self.validate_and_load(self.spinner))
         self.app.add_action(action)
 
-        action = Gio.SimpleAction().new("about", None)
+        action = Gio.SimpleAction.new("about", None)
         action.connect("activate", open_about_dialog)
         self.app.add_action(action)
 
-        action = Gio.SimpleAction().new("donate", None)
+        action = Gio.SimpleAction.new("donate", None)
         action.connect("activate", lambda x, d: webbrowser.open(self.AUTHOR_DONATE))
         self.app.add_action(action)
 
-        action = Gio.SimpleAction().new("keyboard_shortcuts", None)
+        action = Gio.SimpleAction.new("keyboard_shortcuts", None)
         action.connect("activate", open_ks)
         self.app.add_action(action)
 
-        action = Gio.SimpleAction().new("settings", None)
+        action = Gio.SimpleAction.new("settings", None)
         action.connect("activate", lambda x, d: SettingsWindow().show())
         self.app.add_action(action)
 
-        #add shortcuts
+        # Shortcuts / کلیدهای میانبر
         self.app.set_accels_for_action("app.keyboard_shortcuts", ["<Primary>question"])
         self.app.set_accels_for_action("app.settings", ["<Primary>S"])
         self.app.set_accels_for_action("app.update", ["<Primary>U"])
@@ -427,7 +440,6 @@ class MainWindow(Base, Gtk.Builder):
         action.connect('activate', self.signals.connect_via_ks, self.get_selected_config)
         self.app.add_action(action)
         self.app.set_accels_for_action("app.connect", ["<Primary>C", "<Primary>D"])
-
 
         menu = Gio.Menu()
         layout_menu = Gio.Menu()
@@ -457,7 +469,6 @@ class MainWindow(Base, Gtk.Builder):
         menu.append(gettext.gettext("About"), "app.about")
         popover = Gtk.PopoverMenu.new_from_model(menu)
 
-
         header_bar = self.get_object("header_bar")
 
         menu_button = Gtk.MenuButton.new()
@@ -477,17 +488,16 @@ class MainWindow(Base, Gtk.Builder):
 
         if (cur := self.get_setting(self.SETTING.LAST_CONNECTED_CURSOR)) != -1:
             try:
-                self.list_box.select_row(self.retrieve(StorageItem.LISTBOX_ROWS)[cur])
+                rows = self.retrieve(StorageItem.LISTBOX_ROWS)
+                if rows and cur < len(rows):
+                    self.list_box.select_row(rows[cur])
                 adj = self.scrolled_window.get_vadjustment()
                 v = self.get_setting(self.SETTING.LISTBOX_V_ADJUST)
-                adj.set_value(v)
-                adj.set_upper(v)
-                adj.set_lower(v+1)
+                if v is not None:
+                    adj.set_value(v)
             except Exception as e:
-                logger.error(e)
-                pass
+                logger.error("Error restoring cursor: %s", e)
 
-        #finally!
         self.box.append(self.paned)
         self.box.append(self.progress_bar)
         self.toast_overlay.set_child(self.box)
@@ -496,29 +506,25 @@ class MainWindow(Base, Gtk.Builder):
         def copy_ip(btn: Gtk.Button):
             toast = Adw.Toast.new(gettext.gettext("IP Address copied to Clipboard!"))
             toast.set_timeout(1)
-            Gdk.Display.get_default().get_clipboard().set(self.ip_addr.get_label())
+            clipboard = Gdk.Display.get_default().get_clipboard()
+            if clipboard:
+                clipboard.set(self.ip_addr.get_label())
             self.toast_overlay.add_toast(toast)
 
         cpy_btn.connect("clicked", copy_ip)
 
-    def list_box_sort_func(self, row1, row2, *args):
-        if not getattr(self, "sort_by_speed_active", False):
-            # Sort alphabetically (default)
-            try:
-                file1 = row1.get_child().get_child_at(0, 0).get_label()
-                file2 = row2.get_child().get_child_at(0, 0).get_label()
-                return 1 if file1 > file2 else -1
-            except Exception:
-                return 0
-        try:
-            grid1 = row1.get_child()
-            grid2 = row2.get_child()
-            if not grid1 or not grid2:
-                return 0
-            file1 = grid1.get_child_at(0, 0).get_label()
-            file2 = grid2.get_child_at(0, 0).get_label()
-        except Exception:
+    def list_box_sort_func(self, row1: Gtk.ListBoxRow, row2: Gtk.ListBoxRow, *args) -> int:
+        """
+        Sorts the configuration list alphabetically or by measured latency.
+        مرتب‌سازی هوشمند لیست کانفیگ‌ها بر اساس حروف الفبا یا کمترین پینگ.
+        """
+        file1 = getattr(row1, "filename", "")
+        file2 = getattr(row2, "filename", "")
+        if not file1 or not file2:
             return 0
+
+        if not getattr(self, "sort_by_speed_active", False):
+            return 1 if file1 > file2 else -1
 
         rtt1 = self.latencies.get(file1, None)
         rtt2 = self.latencies.get(file2, None)
@@ -538,6 +544,10 @@ class MainWindow(Base, Gtk.Builder):
             return 1 if file1 > file2 else -1
 
     def trigger_speed_test(self):
+        """
+        Initiates concurrent latency test for all available .ovpn endpoints.
+        آغاز تست پینگ موازی برای کلیه سرورهای موجود در کانفیگ‌ها.
+        """
         if not getattr(self, "speed_test_btn", None) or not self.speed_test_btn.get_sensitive():
             return
         self.speed_test_btn.set_sensitive(False)
@@ -554,7 +564,11 @@ class MainWindow(Base, Gtk.Builder):
         th.daemon = True
         th.start()
 
-    def on_speed_test_complete(self, latencies):
+    def on_speed_test_complete(self, latencies: dict[str, float | None]):
+        """
+        Updates latency labels in UI and applies sorting once speed test finishes.
+        به‌روزرسانی برچسب‌های پینگ در رابط کاربری و اعمال مرتب‌سازی خودکار پس از اتمام تست.
+        """
         self.latencies = latencies
         latency_labels = self.retrieve("latency_labels")
 
@@ -582,7 +596,11 @@ class MainWindow(Base, Gtk.Builder):
             self.auto_select_after_test = False
             self.select_fastest(None)
 
-    def on_sort_toggled(self, button):
+    def on_sort_toggled(self, button: Gtk.ToggleButton):
+        """
+        Toggles dynamic speed sorting on/off.
+        فعال یا غیرفعال کردن مرتب‌سازی پویا بر اساس پینگ سرور.
+        """
         self.sort_by_speed_active = button.get_active()
         if self.sort_by_speed_active:
             button.add_css_class("suggested-action")
@@ -592,7 +610,11 @@ class MainWindow(Base, Gtk.Builder):
             button.remove_css_class("suggested-action")
         self.list_box.invalidate_sort()
 
-    def select_fastest(self, button):
+    def select_fastest(self, button: Gtk.Button | None):
+        """
+        Finds and auto-selects the server configuration with the lowest latency.
+        شناسایی و انتخاب خودکار سریع‌ترین سرور در لیست کانفیگ‌ها.
+        """
         if not self.latencies:
             self.auto_select_after_test = True
             self.trigger_speed_test()
@@ -610,15 +632,21 @@ class MainWindow(Base, Gtk.Builder):
         try:
             idx = configs_list.index(fastest_file)
             rows = self.retrieve(StorageItem.LISTBOX_ROWS)
-            row_to_select = rows[idx]
-            self.list_box.select_row(row_to_select)
+            if idx < len(rows):
+                row_to_select = rows[idx]
+                self.list_box.select_row(row_to_select)
 
-            toast = Adw.Toast.new(gettext.gettext("Selected fastest server: {} ({} ms)").format(fastest_file, valid_latencies[fastest_file]))
+            toast = Adw.Toast.new(
+                gettext.gettext("Selected fastest server: {} ({} ms)").format(
+                    fastest_file, valid_latencies[fastest_file]
+                )
+            )
             self.toast_overlay.add_toast(toast)
         except Exception as e:
-            logger.error(f"Error selecting fastest: {e}")
+            logger.error("Error selecting fastest server: %s", e)
 
     def start_network_monitor(self):
+        """Starts real-time bandwidth monitoring."""
         self.stop_network_monitor()
         self.last_rx = 0
         self.last_tx = 0
@@ -627,11 +655,16 @@ class MainWindow(Base, Gtk.Builder):
         self.network_monitor_id = GLib.timeout_add_seconds(1, self.update_network_speed)
 
     def stop_network_monitor(self):
+        """Stops real-time bandwidth monitoring."""
         if hasattr(self, "network_monitor_id") and self.network_monitor_id:
             GLib.source_remove(self.network_monitor_id)
             self.network_monitor_id = None
 
-    def update_network_speed(self):
+    def update_network_speed(self) -> bool:
+        """
+        Reads kernel network statistics from /proc/net/dev and calculates live throughput.
+        محاسبه نرخ لحظه‌ای دانلود و آپلود از شمارنده‌های هسته لینوکس.
+        """
         try:
             rx, tx = 0, 0
             if os.path.exists("/proc/net/dev"):
@@ -670,7 +703,7 @@ class MainWindow(Base, Gtk.Builder):
                 dl_speed = (rx - last_rx) / dt
                 ul_speed = (tx - last_tx) / dt
 
-                def format_speed(bytes_per_sec):
+                def format_speed(bytes_per_sec: float) -> str:
                     if bytes_per_sec < 1024:
                         return f"{bytes_per_sec:.1f} B/s"
                     elif bytes_per_sec < 1024 * 1024:
@@ -678,7 +711,7 @@ class MainWindow(Base, Gtk.Builder):
                     else:
                         return f"{bytes_per_sec / (1024 * 1024):.1f} MB/s"
 
-                def format_size(bytes_total):
+                def format_size(bytes_total: float) -> str:
                     if bytes_total < 1024:
                         return f"{bytes_total} B"
                     elif bytes_total < 1024 * 1024:
@@ -696,27 +729,28 @@ class MainWindow(Base, Gtk.Builder):
             self.last_tx = tx
             self.last_time = now
         except Exception as e:
-            logger.error(f"Error in network monitor: {e}")
+            logger.error("Error in network monitor: %s", e)
 
         return True
 
-    def trigger_reconnect(self):
+    def trigger_reconnect(self) -> bool:
+        """Schedules automated reconnection."""
         selected = self.get_selected_config()
         if selected:
-            logger.info(f"Auto-reconnecting to {selected}")
+            logger.info("Auto-reconnecting to %s", selected)
             self.signals.connect(None, self.get_selected_config)
         return False
 
     def update_set_ip_flag(self):
+        """Updates public IP and country flag asynchronously."""
         self.spinner.start()
         if os.environ.get("FLATPAK_ID") is not None:
             sleep(1.25)
         self.lookup.update()
         self.retrieve(StorageItem.FLAG).set_pixbuf(self.get_country_pixbuf(self.lookup.country_code))
-        self.ip_addr.set_label(self.lookup.ip)
+        self.ip_addr.set_label(self.lookup.ip or "0.0.0.0")
         self.spinner.stop()
 
-    
     def swap_pause_btn_signal_pause_to_resume(self):
         self.pause_resume_btn.set_property("icon-name", "media-playback-start-symbolic")
         if self.psh is not None:
@@ -730,10 +764,13 @@ class MainWindow(Base, Gtk.Builder):
             self.pause_resume_btn.disconnect(self.psh)
         self.psh = self.pause_resume_btn.connect("clicked", self.signals.pause, self.CM())
 
-    
     def on_connection_event(self, result, error=None):
+        """
+        Handles connection status transitions and D-Bus signals.
+        مدیریت تغییرات وضعیت تونل VPN و پردازش رویدادهای D-Bus.
+        """
         if error is not None:
-            logger.error(error)
+            logger.error("Connection error: %s", error)
             self.send_error_notification(error)
             self.progress_bar.set_fraction(0)
             return
@@ -754,7 +791,6 @@ class MainWindow(Base, Gtk.Builder):
                     self.swap_pause_btn_signal_resume_to_pause()
                     return
 
-            logger.info(self.progress_bar.get_fraction())
             prev = self.progress_bar.get_fraction()
             if prev < 0.95:
                 self.progress_bar.set_fraction(prev + 0.35)
@@ -774,15 +810,21 @@ class MainWindow(Base, Gtk.Builder):
             self.progress_bar.set_fraction(1.0)
             self.set_setting(self.SETTING.LAST_CONNECTED, self.get_selected_config())
             self.send_connected_notification()
-            # save last cursor
+            
+            # Save last cursor & vertical adjustment / ذخیره آخرین موقعیت نشانگر
             adj = self.scrolled_window.get_vadjustment()
-            self.set_setting(self.SETTING.LISTBOX_V_ADJUST, float(adj.get_value()))
-            self.set_setting(self.SETTING.LAST_CONNECTED_CURSOR, self.retrieve(StorageItem.CONFIGS_LIST).index(self.get_selected_config()) - 1)
+            if adj:
+                self.set_setting(self.SETTING.LISTBOX_V_ADJUST, float(adj.get_value()))
+            
+            configs = self.retrieve(StorageItem.CONFIGS_LIST)
+            selected_cfg = self.get_selected_config()
+            if configs and selected_cfg in configs:
+                self.set_setting(self.SETTING.LAST_CONNECTED_CURSOR, configs.index(selected_cfg) - 1)
             
             self.swap_pause_btn_signal_resume_to_pause()
 
             if self.CM().get_name().lower() == "openvpn3":
-                if self.CM().config_path != None:
+                if self.CM().config_path is not None:
                     self.pause_resume_btn.set_visible(True)
 
         else:
@@ -791,7 +833,8 @@ class MainWindow(Base, Gtk.Builder):
             self.ul_speed_label.set_text("0.0 B/s")
             self.total_traffic_label.set_text("0 B")
 
-            should_reconnect = getattr(self, "was_connected", False) and self.get_setting(self.SETTING.AUTO_RECONNECT) and not getattr(self, "manual_disconnect", False)
+            should_reconnect = getattr(self, "was_connected", False) and self.get_setting(
+                self.SETTING.AUTO_RECONNECT) and not getattr(self, "manual_disconnect", False)
             self.was_connected = False
             self.manual_disconnect = False
 
@@ -813,6 +856,7 @@ class MainWindow(Base, Gtk.Builder):
                 GLib.timeout_add_seconds(3, self.trigger_reconnect)
 
     def show(self):
+        """Displays main application window."""
         self.setup()
         self.update_ip_flag_async()
         if logger.getEffectiveLevel() == 10:
@@ -820,17 +864,22 @@ class MainWindow(Base, Gtk.Builder):
         self.window.show()
 
     def update_ip_flag_async(self):
-        th = threading.Thread(target = self.update_set_ip_flag)
+        """Runs IP and geolocation lookup asynchronously."""
+        th = threading.Thread(target=self.update_set_ip_flag)
         th.daemon = True
         th.start()
 
 
 class Signals(Base):
+    """
+    Action dispatchers for MainWindow buttons and accelerator shortcuts.
+    سیستم مدیریت سیگنال‌ها و اکشن‌های پنجره اصلی.
+    """
 
     def __init__(self):
         super().__init__()
 
-    def connect(self, button, config):
+    def connect(self, button, config_callable):
         manager = self.retrieve("CM")["instance"]
         manager.start_watch()
         if manager.status():
@@ -838,20 +887,22 @@ class Signals(Base):
             return
         try:
             mw = self.retrieve("main_window_instance")
-            mw.manual_disconnect = False
+            if mw:
+                mw.manual_disconnect = False
         except Exception:
             pass
-        config = config()
-        manager.connect(os.path.join(self.EOVPN_CONFIG_DIR, "CONFIGS", config))
+        config = config_callable() if callable(config_callable) else config_callable
+        if config:
+            manager.connect(os.path.join(self.EOVPN_CONFIG_DIR, "CONFIGS", config))
 
-    def connect_via_ks(self, action, _args, config):
-        #FIXME: shortcuts
-        self.connect(None, config)
+    def connect_via_ks(self, action, _args, config_callable):
+        self.connect(None, config_callable)
 
     def disconnect(self, button, manager):
         try:
             mw = self.retrieve("main_window_instance")
-            mw.manual_disconnect = True
+            if mw:
+                mw.manual_disconnect = True
         except Exception:
             pass
         manager.disconnect()
