@@ -5,7 +5,8 @@ eOVPN-Pro Speed & Latency Test Unit Tests
 
 import os
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
 from eovpn.speed_test import parse_ovpn_remote, ping_host, test_single_ovpn
 
 
@@ -39,7 +40,7 @@ class TestSpeedTest(unittest.TestCase):
 
         rtt = ping_host("127.0.0.1", 80, timeout=2.0)
         self.assertIsNotNone(rtt)
-        self.assertGreaterEqual(rtt, 0)
+        self.assertGreaterEqual(rtt or 0.0, 0)
         mock_create_connection.assert_called_once_with(("127.0.0.1", 80), timeout=2.0)
         mock_sock.close.assert_called_once()
 

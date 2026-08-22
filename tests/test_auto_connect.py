@@ -91,7 +91,10 @@ class TestTimeoutAndQueue(unittest.TestCase):
     def test_timeout_unknown_and_invalid(self):
         self.assertEqual(compute_attempt_timeout(None), UNKNOWN_RTT_TIMEOUT_SECONDS)
         self.assertEqual(compute_attempt_timeout(-5), UNKNOWN_RTT_TIMEOUT_SECONDS)
-        self.assertEqual(compute_attempt_timeout("bad"), UNKNOWN_RTT_TIMEOUT_SECONDS)
+        self.assertEqual(
+            compute_attempt_timeout("bad"),  # type: ignore[arg-type]  # deliberate robustness test
+            UNKNOWN_RTT_TIMEOUT_SECONDS,
+        )
 
     def test_timeout_clamped_to_floor_and_ceiling(self):
         low = compute_attempt_timeout(1.0)

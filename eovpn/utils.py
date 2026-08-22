@@ -27,8 +27,20 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 MAX_ZIP_DOWNLOAD_BYTES = 64 * 1024 * 1024      # 64 MiB compressed archive cap
 MAX_EXTRACTED_TOTAL_BYTES = 256 * 1024 * 1024  # 256 MiB extracted data cap
+MAX_FOLDER_IMPORT_TOTAL_BYTES = 256 * 1024 * 1024  # 256 MiB local folder cap
 
 _CHUNK_SIZE = 64 * 1024
+
+# OpenVPN directives that can execute arbitrary commands (often with elevated
+# privileges) or enable script execution. Configs containing these should be
+# surfaced to the user as a security warning during import.
+# دایرکتیوهای OpenVPN که می‌توانند دستور دلخواه اجرا کنند (اغلب با اختیارات
+# بالا) یا اجرای اسکریپت را فعال کنند؛ هنگام ایمپورت باید به کاربر هشدار داده شود.
+DANGEROUS_OVPN_DIRECTIVES: frozenset[str] = frozenset({
+    "up", "down", "route-up", "route-pre-down", "route-post-down",
+    "ipchange", "learn-address", "client-connect", "client-disconnect",
+    "tls-verify", "iproute", "script-security", "auth-user-pass", "setenv",
+})
 
 
 class NotZipException(Exception):
@@ -124,9 +136,7 @@ def matches_server_filter(
     if mode == "offline" and (latencies or {}).get(name) is not None:
         return False
 
-    if proto_mode in ("tcp", "udp") and proto_mode not in (protocols or set()):
-        return False
-    return True
+    return not (proto_mode in ("tcp", "udp") and proto_mode not in (protocols or set()))
 
 
 def download_remote_to_destination(remote: str, destination: str) -> list[str]:
@@ -189,6 +199,23 @@ def download_remote_to_destination(remote: str, destination: str) -> list[str]:
         except Exception as err:
             logger.error("Failed to read directory %s: %s", expanded_remote, err)
             return []
+
+        # Pre-scan total size so an oversized folder never copies partially.
+        # بررسی پیش‌دست مجموع حجم تا پوشه حجیم هرگز نیمه‌کاره کپی نشود.
+        try:
+            total_bytes = sum(
+                os.path.getsize(os.path.join(expanded_remote, name))
+                for name in entries
+                if os.path.isfile(os.path.join(expanded_remote, name))
+                and (name.endswith(".ovpn") or name.endswith(".crt") or name.endswith(".pem"))
+            )
+        except Exception as err:
+            logger.error("Failed to scan directory %s: %s", expanded_remote, err)
+            return []
+        if total_bytes > MAX_FOLDER_IMPORT_TOTAL_BYTES:
+            raise ValueError(
+                gettext.gettext("Configuration folder is too large to import safely.")
+            )
 
         for file_name in entries:
             src_file = os.path.join(expanded_remote, file_name)
@@ -271,9 +298,79 @@ def ovpn_is_auth_required(ovpn_file: str) -> bool:
     بررسی نیاز فایل کانفیگ به نام کاربری و کلمه عبور.
     """
     try:
-        with open(ovpn_file, "r", encoding="utf-8", errors="ignore") as f:
+        with open(ovpn_file, encoding="utf-8", errors="ignore") as f:
             data = f.read()
             return "auth-user-pass" in data
     except Exception as e:
         logger.error("Error reading %s: %s", ovpn_file, e)
         return False
+
+
+def format_throughput(bytes_per_sec: float) -> str:
+    """
+    Formats a transfer rate as ``B/s``, ``KB/s`` or ``MB/s`` (human-readable).
+    قالب‌بندی نرخ انتقال به صورت ``B/s``، ``KB/s`` یا ``MB/s`` (خوانا برای کاربر).
+    """
+    if bytes_per_sec < 1024:
+        return f"{bytes_per_sec:.1f} B/s"
+    elif bytes_per_sec < 1024 * 1024:
+        return f"{bytes_per_sec / 1024:.1f} KB/s"
+    else:
+        return f"{bytes_per_sec / (1024 * 1024):.1f} MB/s"
+
+
+def format_data_size(bytes_total: float) -> str:
+    """
+    Formats a cumulative byte count as ``B``, ``KB``, ``MB`` or ``GB``.
+    قالب‌بندی حجم انباشته به صورت ``B``، ``KB``، ``MB`` یا ``GB``.
+    """
+    if bytes_total < 1024:
+        return f"{bytes_total} B"
+    elif bytes_total < 1024 * 1024:
+        return f"{bytes_total / 1024:.1f} KB"
+    elif bytes_total < 1024 * 1024 * 1024:
+        return f"{bytes_total / (1024 * 1024):.1f} MB"
+    else:
+        return f"{bytes_total / (1024 * 1024 * 1024):.1f} GB"
+
+
+def audit_ovpn_content(file_path: str) -> list[str]:
+    """
+    Scans an .ovpn file for directives that can execute commands or enable
+    script execution (``up``, ``down``, ``script-security``, ...).
+
+    ``auth-user-pass`` is only reported when it references an external
+    credentials file — the plain (no-argument) form is the app's normal
+    authentication flow and is considered safe.
+
+    Returns the sorted list of suspicious directive names (empty when safe).
+    پویش یک فایل کانفیگ برای دایرکتیوهایی که می‌توانند دستور اجرا کنند یا
+    اجرای اسکریپت را فعال کنند (مانند up ،down و script-security).
+    دستور auth-user-pass تنها زمانی گزارش می‌شود که به یک فایل اعتبارنامه
+    خارجی ارجاع دهد؛ شکل بدون آرگومان آن، جریان عادی احراز هویت برنامه است.
+    فهرست مرتب دایرکتیوهای مشکوک بازگردانده می‌شود (خالی یعنی امن).
+
+    :param file_path: Absolute path to the configuration file.
+    :return: Sorted list of suspicious directives, e.g. ``["up", "script-security"]``.
+    """
+    found: set[str] = set()
+    try:
+        with open(file_path, encoding="utf-8", errors="ignore") as handle:
+            for raw in handle:
+                line = raw.strip()
+                if not line or line.startswith("#") or line.startswith(";"):
+                    continue
+                parts = line.split()
+                key = parts[0].lower()
+                if key not in DANGEROUS_OVPN_DIRECTIVES:
+                    continue
+                if key == "auth-user-pass" and len(parts) < 2:
+                    # Plain form: the app itself supplies credentials via
+                    # the Keyring — not a script-execution risk.
+                    # شکل ساده: برنامه خودش اعتبارنامه را از Keyring تأمین
+                    # می‌کند — این خطر اجرای اسکریپت ندارد.
+                    continue
+                found.add(key)
+    except Exception as exc:
+        logger.error("Error auditing %s: %s", file_path, exc)
+    return sorted(found)

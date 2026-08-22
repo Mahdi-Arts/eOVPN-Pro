@@ -8,21 +8,22 @@ disconnecting, and monitoring VPN tunnels via NetworkManager and OpenVPN 3 Linux
 OpenVPN از طریق NetworkManager و OpenVPN 3.
 """
 
-import os
 import logging
+import os
 import tempfile
 from abc import ABC, abstractmethod
 
 from gi.repository import Secret
 
-from .eovpn_base import Base
-from .backend.networkmanager import _libeovpn_nm
+from .backend._base import CFFIStringMixin
+from .backend.networkmanager import _libeovpn_nm  # type: ignore[attr-defined]
 from .backend.networkmanager.dbus import NMDbus
+from .eovpn_base import Base
 
 logger = logging.getLogger(__name__)
 
 try:
-    from .backend.openvpn3 import _libopenvpn3
+    from .backend.openvpn3 import _libopenvpn3  # type: ignore[attr-defined]
     from .backend.openvpn3.dbus import OVPN3Dbus
 except Exception as e:
     logger.warning("OpenVPN 3 backend module unavailable: %s", e)
@@ -69,7 +70,7 @@ class ConnectionManager(ABC, Base):
         pass
 
 
-class NetworkManager(ConnectionManager):
+class NetworkManager(CFFIStringMixin, ConnectionManager):
     """
     NetworkManager backend implementation using libnm via CFFI and D-Bus signals.
     پیاده‌سازی بک‌اند NetworkManager با استفاده از بایندینگ C و سیگنال‌های D-Bus.
@@ -89,18 +90,21 @@ class NetworkManager(ConnectionManager):
     def get_name(self) -> str:
         return "networkmanager"
 
-    def to_cffi_string(self, data, decode: bool = False):
-        if data == self.ffi.NULL:
-            return None
-        _str = self.ffi.string(data)
-        if decode:
-            return _str.decode("utf-8")
-        return _str
-
     def start_watch(self):
         if not self.watch:
             self.dbus.watch(self.callback)
             self.watch = True
+
+    def stop_watch(self):
+        """
+        Unsubscribes from NetworkManager D-Bus signals (call on window close).
+        لغو اشتراک سیگنال‌های D-Bus شبکه (هنگام بسته‌شدن پنجره فراخوانی شود).
+        """
+        if self.watch:
+            try:
+                self.dbus.remove_watch()
+            finally:
+                self.watch = False
 
     def connect(self, openvpn_config: str):
         """
@@ -130,11 +134,11 @@ class NetworkManager(ConnectionManager):
             os.chmod(tmp_file.name, 0o600)
             self._temp_config_path = tmp_file.name
 
-            with open(openvpn_config, "r", encoding="utf-8", errors="ignore") as f:
+            with open(openvpn_config, encoding="utf-8", errors="ignore") as f:
                 data = f.read() + "\n"
 
             if nm_ca is not None and os.path.exists(nm_ca):
-                with open(nm_ca, "r", encoding="utf-8", errors="ignore") as caf:
+                with open(nm_ca, encoding="utf-8", errors="ignore") as caf:
                     data += f"\n<ca>\n{caf.read()}\n</ca>\n"
 
             tmp_file.write(data)
@@ -197,7 +201,7 @@ class NetworkManager(ConnectionManager):
         return bool(self.nm_manager.is_openvpn_plugin_available())
 
 
-class OpenVPN3(ConnectionManager):
+class OpenVPN3(CFFIStringMixin, ConnectionManager):
     """
     OpenVPN 3 Linux D-Bus backend implementation.
     پیاده‌سازی بک‌اند مدرن OpenVPN 3 بر بستر D-Bus سیستم‌عامل.
@@ -219,19 +223,22 @@ class OpenVPN3(ConnectionManager):
     def get_name(self) -> str:
         return "openvpn3"
 
-    def to_cffi_string(self, data, decode: bool = False):
-        if data == self.ffi.NULL:
-            return None
-        _str = self.ffi.string(data)
-        if decode:
-            return _str.decode("utf-8")
-        return _str
-
     def start_watch(self):
         if not self.watch:
             self.dbus.set_binding(self)
             self.dbus.subscribe_for_attention()
             self.watch = True
+
+    def stop_watch(self):
+        """
+        Unsubscribes from all OpenVPN 3 D-Bus signals (call on window close).
+        لغو اشتراک همه سیگنال‌های D-Bus سرویس OpenVPN 3 (هنگام بستن پنجره).
+        """
+        if self.watch:
+            try:
+                self.dbus.unsubscribe_all()
+            finally:
+                self.watch = False
 
     def get_session_path(self):
         return self.session_path
@@ -245,12 +252,12 @@ class OpenVPN3(ConnectionManager):
         Imports config and prepares tunnel session on OpenVPN 3 Linux service.
         ایمپورت کانفیگ و آماده‌سازی سشن تونل در سرویس OpenVPN 3 لینوکس.
         """
-        with open(openvpn_config, "r", encoding="utf-8", errors="ignore") as f:
+        with open(openvpn_config, encoding="utf-8", errors="ignore") as f:
             config_content = f.read()
 
         ca = self.get_setting(self.SETTING.CA)
         if ca is not None and os.path.exists(ca):
-            with open(ca, "r", encoding="utf-8", errors="ignore") as caf:
+            with open(ca, encoding="utf-8", errors="ignore") as caf:
                 config_content += f"\n<ca>\n{caf.read()}\n</ca>\n"
 
         config_bytes = config_content.encode('utf-8')
@@ -278,7 +285,7 @@ class OpenVPN3(ConnectionManager):
         self.session_path = None
 
     def pause(self):
-        self.ovpn3.pause_vpn("User Action in eOVPN Pro".encode("utf-8"))
+        self.ovpn3.pause_vpn(b"User Action in eOVPN Pro")
 
     def resume(self):
         self.ovpn3.resume_vpn()

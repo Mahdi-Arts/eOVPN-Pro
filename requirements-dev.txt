@@ -18,3 +18,5 @@ twine>=5.0.0
 
 # Type stubs / فایل‌های نوع (stub)
 types-setuptools>=70.0.0
+# Security audit / ممیزی امنیتی وابستگی‌ها
+pip-audit>=2.7.0

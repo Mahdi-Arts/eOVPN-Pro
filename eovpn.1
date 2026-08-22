@@ -1,0 +1,49 @@
+.TH EOVPN 1 "August 2026" "eOVPN-Pro 1.5.0" "User Commands"
+.SH NAME
+eovpn \- OpenVPN configuration manager and speed tester (GTK4)
+.SH SYNOPSIS
+.B eovpn
+[\fIOPTION\fR...]
+.SH DESCRIPTION
+.B eOVPN-Pro
+is an advanced OpenVPN configuration manager built with GTK4 and Libadwaita.
+It provides concurrent TCP latency testing, dynamic server sorting, live
+bandwidth monitoring, cascading auto-connect, favorites/search/filters, full
+Persian (Farsi) RTL localization, and optional OpenVPN 3 DCO acceleration.
+.PP
+eOVPN-Pro یک مدیریت‌کننده پیشرفته کانفیگ‌های OpenVPN است که با GTK4 و
+Libadwaita ساخته شده و شامل تست سرعت هم‌زمان، مرتب‌سازی پویا، مانیتورینگ
+زنده ترافیک، اتصال آبشاری، جستجو/فیلتر، محلی‌سازی کامل فارسی و پشتیبانی
+اختیاری شتاب‌دهنده DCO سرویس OpenVPN 3 می‌باشد.
+.SH OPTIONS
+.TP
+.B \-d, \-\-debug \fILEVEL\fR
+Show debug messages. \fILEVEL\fR is one of:
+CRITICAL, ERROR, WARNING, INFO, DEBUG, or a numeric level (0\-50).
+.TP
+.B \-h, \-\-help
+Show help and exit.
+.SH BACKENDS
+The application talks to either NetworkManager (with the network-manager-openvpn
+plugin) or the OpenVPN 3 Linux D-Bus service. The active backend is selected in
+the Settings window.
+.SH FILES
+.TP
+.I ~/.config/eovpn/CONFIGS
+Imported OpenVPN configurations (owned by the user).
+.TP
+.I ~/.config/glib-2.0/settings/keyfile
+GSettings storage; credentials are kept in the Secret Service (GNOME Keyring),
+never in dconf.
+.SH ENVIRONMENT
+.TP
+.B EOVPN_DEBUG
+Set to a logging level (e.g. DEBUG) to enable verbose logging on startup.
+.SH EXIT STATUS
+Returns 0 on normal exit.
+.SH BUGS
+Report issues at https://github.com/Mahdi-Arts/eOVPN-Pro/issues
+.SH LICENSE
+GPL-3.0-or-later
+.SH AUTHOR
+Mahdi Bagheban <info@MahdiArts.ir>

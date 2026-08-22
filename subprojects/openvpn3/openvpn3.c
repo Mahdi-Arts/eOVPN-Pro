@@ -28,6 +28,14 @@
 #include "openvpn3.h"
 #include "enums.h"
 
+/*
+ * Every D-Bus call carries a hard timeout so a hung service can never
+ * freeze the client forever (availability hardening).
+ * همه تماس‌های D-Bus دارای مهلت سخت‌گیرانه هستند تا سرویس از کار افتاده
+ * هرگز کلاینت را بی‌نهایت قفل نکند (مقاوم‌سازی در دسترس‌پذیری).
+ */
+#define EOVPN_DBUS_TIMEOUT_MS 15000
+
 static GDBusProxy *UniqueSession = NULL;
 
 GDBusProxy *
@@ -236,7 +244,7 @@ disconnect_all_sessions (void)
                         {
                             g_dbus_proxy_call_sync (
                                 proxy, "Disconnect", g_variant_new ("()"),
-                                G_DBUS_PROXY_FLAGS_NONE, -1, NULL, NULL);
+                                G_DBUS_PROXY_FLAGS_NONE, EOVPN_DBUS_TIMEOUT_MS, NULL, NULL);
                             g_object_unref (proxy);
                             g_debug ("%s disconnected!", path);
                         }
@@ -327,7 +335,7 @@ get_version (void)
         "Get",
         g_variant_new ("(ss)", "net.openvpn.v3.configuration", "version"),
         G_DBUS_PROXY_FLAGS_NONE,
-        -1,
+        EOVPN_DBUS_TIMEOUT_MS,
         NULL,
         &error);
     g_object_unref (proxy);
@@ -380,7 +388,7 @@ import_config (char *name, char *config_str)
         "net.openvpn.v3.configuration.Import",
         params,
         G_DBUS_PROXY_FLAGS_NONE,
-        -1,
+        EOVPN_DBUS_TIMEOUT_MS,
         NULL,
         &error);
     g_object_unref (import_proxy);
@@ -430,7 +438,7 @@ prepare_tunnel (char *config_object)
         "net.openvpn.v3.sessions.NewTunnel",
         params,
         G_DBUS_PROXY_FLAGS_NONE,
-        -1,
+        EOVPN_DBUS_TIMEOUT_MS,
         NULL,
         &error);
     g_object_unref (sessions_proxy);
@@ -507,7 +515,7 @@ set_dco (char *session_object, int state)
         }
 
     g_dbus_proxy_call_sync (
-        sessions_proxy, "Set", params, G_DBUS_PROXY_FLAGS_NONE, -1, NULL, NULL);
+        sessions_proxy, "Set", params, G_DBUS_PROXY_FLAGS_NONE, EOVPN_DBUS_TIMEOUT_MS, NULL, NULL);
     g_object_unref (sessions_proxy);
 }
 
@@ -539,7 +547,7 @@ set_receive_log_events (char *session_object, int set_to)
         }
 
     g_dbus_proxy_call_sync (
-        sessions_proxy, "Set", params, G_DBUS_PROXY_FLAGS_NONE, -1, NULL, NULL);
+        sessions_proxy, "Set", params, G_DBUS_PROXY_FLAGS_NONE, EOVPN_DBUS_TIMEOUT_MS, NULL, NULL);
     g_object_unref (sessions_proxy);
 }
 
@@ -555,7 +563,7 @@ set_log_forward (void)
         "net.openvpn.v3.sessions.LogForward",
         g_variant_new ("(b)", true),
         G_DBUS_PROXY_FLAGS_NONE,
-        -1,
+        EOVPN_DBUS_TIMEOUT_MS,
         NULL,
         &error);
 
@@ -578,7 +586,7 @@ is_ready_to_connect (void)
         "net.openvpn.v3.sessions.Ready",
         NULL,
         G_DBUS_PROXY_FLAGS_NONE,
-        -1,
+        EOVPN_DBUS_TIMEOUT_MS,
         NULL,
         &error);
 
@@ -623,7 +631,7 @@ send_auth (char *session_object, int type, int group, int id, char *value)
 
     GVariant *params = g_variant_new ("(uuus)", type, group, id, value);
     g_dbus_proxy_call_sync (
-        UniqueSession, "UserInputProvide", params, G_DBUS_PROXY_FLAGS_NONE, -1, NULL, NULL);
+        UniqueSession, "UserInputProvide", params, G_DBUS_PROXY_FLAGS_NONE, EOVPN_DBUS_TIMEOUT_MS, NULL, NULL);
 }
 
 void
@@ -633,7 +641,7 @@ connect_vpn (void)
         return;
 
     g_dbus_proxy_call_sync (
-        UniqueSession, "Connect", g_variant_new ("()"), G_DBUS_PROXY_FLAGS_NONE, -1, NULL, NULL);
+        UniqueSession, "Connect", g_variant_new ("()"), G_DBUS_PROXY_FLAGS_NONE, EOVPN_DBUS_TIMEOUT_MS, NULL, NULL);
 }
 
 void
@@ -643,7 +651,7 @@ disconnect_vpn (void)
         return;
 
     g_dbus_proxy_call (
-        UniqueSession, "Disconnect", g_variant_new ("()"), G_DBUS_PROXY_FLAGS_NONE, -1, NULL, NULL, NULL);
+        UniqueSession, "Disconnect", g_variant_new ("()"), G_DBUS_PROXY_FLAGS_NONE, EOVPN_DBUS_TIMEOUT_MS, NULL, NULL, NULL);
     g_object_unref (UniqueSession);
     UniqueSession = NULL;
 }
@@ -655,7 +663,7 @@ pause_vpn (char *reason)
         return;
 
     g_dbus_proxy_call_sync (
-        UniqueSession, "Pause", g_variant_new ("(s)", reason), G_DBUS_PROXY_FLAGS_NONE, -1, NULL, NULL);
+        UniqueSession, "Pause", g_variant_new ("(s)", reason), G_DBUS_PROXY_FLAGS_NONE, EOVPN_DBUS_TIMEOUT_MS, NULL, NULL);
 }
 
 void
@@ -665,7 +673,7 @@ resume_vpn (void)
         return;
 
     g_dbus_proxy_call_sync (
-        UniqueSession, "Resume", g_variant_new ("()"), G_DBUS_PROXY_FLAGS_NONE, -1, NULL, NULL);
+        UniqueSession, "Resume", g_variant_new ("()"), G_DBUS_PROXY_FLAGS_NONE, EOVPN_DBUS_TIMEOUT_MS, NULL, NULL);
 }
 
 char *

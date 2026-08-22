@@ -6,7 +6,7 @@ corresponding .blp file and regenerate this file with blueprint-compiler.
 -->
 <interface>
   <requires lib="gtk" version="4.0"/>
-  <object class="GtkWindow" id="OTpMainWindow">
+  <object class="GtkWindow" id="OTPMainWindow">
     <child>
       <object class="GtkBox" id="MainBox">
         <property name="orientation">1</property>

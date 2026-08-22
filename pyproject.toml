@@ -38,10 +38,11 @@ select = [
 ignore = [
     "E402",  # module-import-not-at-top-of-file
     "E203",  # whitespace-before-punctuation
-    "W503",  # line-before-binary-operator
     "N801",  # class-name (allow lowercase class names for legacy)
     "N802",  # function-name (allow lowercase function names)
     "N803",  # argument-name (allow lowercase args)
+    "N812",  # allow `OVPN3Constants` alias (mirrors upstream openvpn3 docs)
+    "N818",  # NotZipException is a public, tested API name — keep it stable
 ]
 
 [tool.ruff.format]

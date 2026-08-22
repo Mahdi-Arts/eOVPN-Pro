@@ -10,8 +10,8 @@ using encrypted HTTPS endpoints with multiple redundant fallbacks.
 
 import json
 import logging
-import urllib.request
 import urllib.error
+import urllib.request
 
 logger = logging.getLogger(__name__)
 

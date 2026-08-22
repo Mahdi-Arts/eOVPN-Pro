@@ -28,9 +28,26 @@
 #include <NetworkManager.h>
 #include "eovpn_nm.h"
 
+/*
+ * Hard timeout for every synchronous NetworkManager operation so a hung
+ * service can never freeze the UI thread forever (availability hardening).
+ * مهلت سخت برای هر عملیات همزمان NetworkManager تا سرویس از کار افتاده
+ * هرگز نخ رابط کاربری را بی‌نهایت قفل نکند (مقاوم‌سازی در دسترس‌پذیری).
+ */
+#define EOVPN_NM_TIMEOUT_MS 15000
+
 #define NM_OPENVPN_KEY_USERNAME "username"
 #define NM_OPENVPN_KEY_PASSWORD "password"
 #define NM_OPENVPN_KEY_CA "ca"
+
+static gboolean
+eovpn_nm_watchdog (gpointer user_data)
+{
+    g_warning ("[eOVPN] NetworkManager operation timed out after %d ms.",
+               EOVPN_NM_TIMEOUT_MS);
+    g_main_loop_quit ((GMainLoop *) user_data);
+    return G_SOURCE_REMOVE;
+}
 
 static void
 add_cb (NMClient *client, GAsyncResult *result, GMainLoop *loop)
@@ -108,6 +125,20 @@ add_connection (char *config_name, char *username, char *password, char *ca)
             if (password != NULL && strlen (password) > 0)
                 {
                     nm_setting_vpn_add_secret (vpn_settings, NM_OPENVPN_KEY_PASSWORD, password);
+                    /* Keep the password agent-owned: NetworkManager must NOT
+                     * write it to /etc/NetworkManager/system-connections.
+                     * رمز فقط نزد secret agent می‌ماند و NetworkManager نباید آن
+                     * را روی دیسک (system-connections) بنویسد. */
+                    GError *flags_err = NULL;
+                    if (!nm_setting_set_secret_flags (vpn_settings,
+                                                      NM_SETTING_VPN_SECRET_PASSWORD,
+                                                      NM_SETTING_SECRET_FLAG_AGENT_OWNED,
+                                                      &flags_err))
+                        {
+                            g_printerr ("Failed to set password secret flags: %s\n",
+                                        flags_err ? flags_err->message : "unknown");
+                            g_clear_error (&flags_err);
+                        }
                 }
             if (ca != NULL && strlen (ca) > 0)
                 {
@@ -119,7 +150,9 @@ add_connection (char *config_name, char *username, char *password, char *ca)
 
     NMClient *client = nm_client_new (NULL, NULL);
     nm_client_add_connection_async (client, conn, TRUE, NULL, (GAsyncReadyCallback) add_cb, loop);
+    guint watchdog_id = g_timeout_add (EOVPN_NM_TIMEOUT_MS, eovpn_nm_watchdog, loop);
     g_main_loop_run (loop);
+    g_source_remove (watchdog_id);
 
     const char *conn_uuid = nm_connection_get_uuid (conn);
     char *result_uuid = conn_uuid ? g_strdup (conn_uuid) : NULL;
@@ -176,7 +209,9 @@ activate_connection (char *uuid)
     if (target != NULL)
         {
             nm_client_activate_connection_async (client, target, NULL, NULL, NULL, (GAsyncReadyCallback) activate_cb, loop);
+            guint watchdog_id = g_timeout_add (EOVPN_NM_TIMEOUT_MS, eovpn_nm_watchdog, loop);
             g_main_loop_run (loop);
+            g_source_remove (watchdog_id);
         }
 
     g_object_unref (client);
@@ -228,7 +263,9 @@ disconnect (char *uuid)
     if (target != NULL)
         {
             nm_client_deactivate_connection_async (client, target, NULL, (GAsyncReadyCallback) disconnect_cb, loop);
+            guint watchdog_id = g_timeout_add (EOVPN_NM_TIMEOUT_MS, eovpn_nm_watchdog, loop);
             g_main_loop_run (loop);
+            g_source_remove (watchdog_id);
         }
 
     g_object_unref (client);
@@ -280,7 +317,9 @@ delete_connection (char *uuid)
     if (target != NULL)
         {
             nm_remote_connection_delete_async (target, NULL, (GAsyncReadyCallback) delete_cb, loop);
+            guint watchdog_id = g_timeout_add (EOVPN_NM_TIMEOUT_MS, eovpn_nm_watchdog, loop);
             g_main_loop_run (loop);
+            g_source_remove (watchdog_id);
         }
 
     g_object_unref (client);

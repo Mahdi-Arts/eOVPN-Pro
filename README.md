@@ -53,8 +53,8 @@
   - مانیتورینگ زنده و نمایش گرافیکی نرخ دانلود، آپلود و میزان کل مصرف ترافیک اینترنت کارت شبکه VPN به صورت زنده و ثانیه‌ای.
 
 - 🛡️ **Security Hardened Architecture (معماری امن و محافظت‌شده)**:
-  - Zero plaintext password leakage into disk/dconf (GNOME Keyring with volatile RAM fallback), secure temporary file generation (`0o600` permissions), Zip-Slip path traversal protection, and encrypted HTTPS IP lookups.
-  - عدم ذخیره متن خام رمز عبور روی دیسک، ایجاد ایمن فایل‌های موقت با پرمیشن `0600`، جلوگیری از آسیب‌پذیری‌های فایل فشرده (Zip-Slip) و استعلام امن موقعیت مکانی از طریق پروتکل HTTPS.
+  - Zero plaintext password leakage into disk/dconf (GNOME Keyring with volatile RAM fallback + agent-owned NetworkManager secrets), secure temporary file generation (`0o600` permissions), Zip-Slip path traversal protection, zip-bomb/size caps, config import audit for executable OpenVPN directives, and encrypted HTTPS IP lookups.
+  - عدم ذخیره متن خام رمز عبور روی دیسک، ایجاد ایمن فایل‌های موقت با پرمیشن `0600`، جلوگیری از آسیب‌پذیری‌های فایل فشرده (Zip-Slip) و بمب فشرده، ممیزی کانفیگ‌های واردشده از نظر دایرکتیوهای اجرایی و استعلام امن موقعیت مکانی از طریق پروتکل HTTPS.
 
 - 🔌 **Auto-Reconnect (اتصال مجدد خودکار)**:
   - Detects unexpected connection drops and automatically schedules an immediate reconnect attempt within 3 seconds.
@@ -117,7 +117,7 @@ python3 run_program_debug.py
 
 ## 🧪 Testing & Quality Assurance (آزمون و تست نرم‌افزار)
 
-Run the full offline test suite, linting, and byte-compilation:
+Run the full offline test suite, linting, type checking, and metadata validation:
 ```bash
 # Unit tests / تست‌های واحد
 python3 -m unittest discover -s tests -v
@@ -125,16 +125,26 @@ python3 -m unittest discover -s tests -v
 # Linting / بررسی کیفیت کد
 pip install -r requirements-dev.txt
 python3 -m flake8 eovpn tests run_program_debug.py cffi_compile.py meson_post_install.py
+python3 -m ruff check .
 
 # Type checking / بررسی نوع‌ها
 python3 -m mypy --ignore-missing-imports eovpn tests
+
+# Project metadata consistency (versions / schema / resources)
+# بررسی یکپارچگی متادیتا (نسخه‌ها / اسکیما / منابع)
+python3 scripts/check_project_meta.py
+
+# Security audit of dependencies / ممیزی امنیتی وابستگی‌ها
+python3 -m pip_audit -r requirements.txt
 
 # Byte-compile all sources / کامپایل همه فایل‌ها
 python3 -m compileall -q eovpn tests run_program_debug.py cffi_compile.py meson_post_install.py
 ```
 
-These checks run automatically in the CI pipeline (`.github/workflows/ci-cd.yml`) on every push/PR.
-این بررسی‌ها به‌صورت خودکار در خط لوله CI روی هر push/PR اجرا می‌شوند.
+These checks run automatically in the CI pipeline (`.github/workflows/ci-cd.yml`) on every push/PR,
+together with `.deb` / `.rpm` / Flatpak builds and an auto-release on version tags.
+این بررسی‌ها به‌صورت خودکار در خط لوله CI روی هر push/PR اجرا می‌شوند؛ همراه با ساخت
+بسته‌های .deb / .rpm / Flatpak و انتشار خودکار روی تگ‌های نسخه.
 
 ---
 
@@ -142,9 +152,11 @@ These checks run automatically in the CI pipeline (`.github/workflows/ci-cd.yml`
 
 | Document / مستند | Description / شرح |
 |---|---|
+| [CHANGELOG.md](CHANGELOG.md) | Version history — تاریخچه نسخه‌ها |
 | [PACKAGING.md](PACKAGING.md) | Packaging guide (.deb / .rpm / Flatpak / Arch) — راهنمای بسته‌بندی |
 | [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) | Release runbook — راهنمای انتشار نسخه |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Architecture overview — نمای کلی معماری |
+| [docs/ANALYSIS.md](docs/ANALYSIS.md) | Deep technical analysis — تحلیل فنی موشکافانه |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guide — راهنمای مشارکت |
 | [SECURITY.md](SECURITY.md) | Security policy — خط مشی امنیتی |
 | [QA_REPORT.md](QA_REPORT.md) | Latest quality report — آخرین گزارش کیفیت |

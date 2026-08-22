@@ -7,27 +7,29 @@ custom UI list widgets, and secure in-memory session stores.
 شامل تعاریف کلی، مدیریت تنظیمات، سیستم اعلان‌ها، ویجت‌های اختصاصی لیست و حافظه موقت امن برای نشست‌ها.
 """
 
+import contextlib
+import gettext
+import json
+import logging
 import os
 import shutil
-import logging
-import threading
-import json
 import subprocess
-import gettext
+import threading
 from pathlib import Path
+from typing import Any
 
 import gi
+
 gi.require_version('Notify', '0.7')
 gi.require_version('Secret', '1')
 gi.require_version('Gtk', '4.0')
-from gi.repository import GObject, Gtk, Gio, GLib, GdkPixbuf, Notify, Secret
+from gi.repository import GdkPixbuf, Gio, GLib, GObject, Gtk, Notify, Secret
 
-from .utils import download_remote_to_destination
 from .auto_connect import format_proto_badge, parse_ovpn_protocols, proto_badge_css
+from .utils import audit_ovpn_content, download_remote_to_destination
 
 _builder_record: dict[str, Gtk.Builder] = {}
 _storage_record: dict[str, object] = {}
-_settings_backup: dict[str, GLib.Variant] = {}
 _session_secrets: dict[str, str] = {}  # Secure in-RAM password store / ذخیره امن رمز در حافظه
 
 EOVPN_SECRET_SCHEMA = Secret.Schema.new(
@@ -45,7 +47,7 @@ class ConfigItem(GObject.Object):
     آیتم مدل مربوط به یک کانفیگ OpenVPN در ListStore.
     """
     def __init__(self, name: str, **kwargs):
-        super(ConfigItem, self).__init__(**kwargs)
+        super().__init__(**kwargs)
         self.name = name
 
     def __repr__(self) -> str:
@@ -125,7 +127,12 @@ class ConfigRow(Gtk.ListBoxRow):
         self.edit_button.add_css_class("btn-no-dec")
 
         target_file = Path(self.ovpn_dir).joinpath(filename)
-        self.edit_button.connect("clicked", lambda w: subprocess.run(["xdg-open", str(target_file)]))
+        # Launch the editor asynchronously so the UI thread is never blocked.
+        # اجرای غیرمسدودکننده ویرایشگر تا نخ رابط کاربری هرگز قفل نشود.
+        self.edit_button.connect(
+            "clicked",
+            lambda w: subprocess.Popen(["xdg-open", str(target_file)]),
+        )
 
         self.box.append(self.fav_button)
         self.box.append(self.label)
@@ -198,7 +205,7 @@ class Base:
     def __init__(self):
         metadata_path = os.path.join(os.path.dirname(__file__), "metadata.json")
         try:
-            with open(metadata_path, "r", encoding="utf-8") as f:
+            with open(metadata_path, encoding="utf-8") as f:
                 metadata = json.loads(f.read())
         except Exception:
             metadata = {
@@ -242,7 +249,7 @@ class Base:
 
     def get_session_password(self) -> str | None:
         """Retrieves in-memory session password."""
-        return _session_secrets.get("auth_password", None)
+        return _session_secrets.get("auth_password")
 
     def get_builder(self, ui_resource_name: str) -> Gtk.Builder:
         if ui_resource_name not in _builder_record:
@@ -252,10 +259,13 @@ class Base:
             return builder
         return _builder_record[ui_resource_name]
 
-    def store(self, item: str, obj: object):
+    def store(self, item: str, obj: Any):
         _storage_record[item] = obj
 
-    def retrieve(self, item: str) -> object:
+    def retrieve(self, item: str) -> Any:
+        # Deliberately dynamic: the in-memory registry stores heterogeneous
+        # widgets/models, so callers receive ``Any`` (see docs/ARCHITECTURE.md).
+        # عمداً پویا: رجیستری درون‌حافظه، ویجت‌ها/مدل‌های ناهمگون نگه می‌دارد.
         return _storage_record.get(item)
 
     def send_connected_notification(self):
@@ -336,9 +346,11 @@ class Base:
             return v.get_int32()
         elif v_type == 's':
             val = v.get_string()
-            # "null" is the project's sentinel for an unset string key
-            # رشته "null" به‌عنوان نشانگر مقدار تنظیم‌نشده برای کلیدهای متنی است
-            return None if val == "null" else val
+            # "null" is the project's sentinel for an unset string key; an
+            # empty string is also treated as unset for robustness.
+            # رشته "null" نشانگر مقدار تنظیم‌نشده است؛ رشته خالی نیز برای
+            # استحکام بیشتر به‌عنوان «تنظیم‌نشده» در نظر گرفته می‌شود.
+            return None if val in ("null", "") else val
         elif v_type == "d":
             return v.get_double()
         elif v_type == "as":
@@ -370,19 +382,8 @@ class Base:
 
     def reset_all_settings(self):
         for key in self.SETTING.all_settings:
-            try:
-                _settings_backup[key] = self.__settings.get_value(key)
+            with contextlib.suppress(Exception):
                 self.__settings.reset(key)
-            except Exception:
-                pass
-        self.__settings.sync()
-
-    def undo_reset_settings(self):
-        for k, v in _settings_backup.items():
-            try:
-                self.__settings.set_value(k, v)
-            except Exception:
-                pass
         self.__settings.sync()
 
     def reset_paths(self):
@@ -502,13 +503,26 @@ class Base:
         """
         Fetches the configuration source and atomically replaces the configs
         directory, so a failed download never destroys the existing configs.
+
+        All GTK widget updates are deferred to the main loop via
+        ``GLib.idle_add`` — GTK is not thread-safe and the download/swap runs
+        on a worker thread. Freshly imported configs are also audited for
+        dangerous OpenVPN script directives before the UI is refreshed.
         دریافت منبع کانفیگ و جایگزینی اتمی دایرکتوری کانفیگ‌ها؛ در صورت خطا،
-        کانفیگ‌های قبلی کاربر هرگز از بین نمی‌روند.
+        کانفیگ‌های قبلی هرگز از بین نمی‌روند. به‌روزرسانی ویجت‌ها فقط از نخ
+        اصلی انجام می‌شود و کانفیگ‌های تازه از نظر دایرکتیوهای اسکریپتی
+        خطرناک OpenVPN ممیزی می‌شوند.
         """
         remote_source = self.get_setting(self.SETTING.REMOTE)
         if not remote_source:
             logger.error("Configuration source is empty!")
             return
+
+        # Pending main-thread updates (written by the worker, applied by GLib)
+        # به‌روزرسانی‌های معوق نخ اصلی (نوشته‌شده توسط نخ کارگر، اعمال‌شده در GLib)
+        self._pending_ca_label: str | None = None
+        self._pending_ca_setting: tuple[str, str] | None = None
+        audit_results: dict[str, list[str]] = {}
 
         def fade_tick(tick):
             if tick.get_opacity() <= 0:
@@ -526,6 +540,17 @@ class Base:
                     tick.set_opacity(1.0)
                     tick.show()
                     GLib.timeout_add(25, fade_tick, tick)
+            # GTK widgets must only be touched on the main thread.
+            # ویجت‌های GTK فقط باید در نخ اصلی دستکاری شوند.
+            if ca_button is not None and self._pending_ca_label:
+                ca_button.set_label(self._pending_ca_label)
+                self._pending_ca_label = None
+            if self._pending_ca_setting is not None:
+                key, value = self._pending_ca_setting
+                self.set_setting(key, value)
+                self._pending_ca_setting = None
+            if audit_results:
+                self._notify_config_audit(audit_results)
             if spinner is not None:
                 spinner.stop()
             return False
@@ -549,9 +574,23 @@ class Base:
 
                 if cert:
                     ca_path = os.path.join(self.EOVPN_OVPN_CONFIG_DIR, os.path.basename(cert[-1]))
-                    self.set_setting(self.SETTING.CA, ca_path)
-                    if ca_button is not None:
-                        ca_button.set_label(cert[-1])
+                    self._pending_ca_setting = (self.SETTING.CA, ca_path)
+                    self._pending_ca_label = cert[-1]
+
+                # Security audit: warn about executable/script directives in
+                # freshly imported configs (never blocks the import itself).
+                # ممیزی امنیتی: هشدار درباره دایرکتیوهای اجرایی/اسکریپتی در
+                # کانفیگ‌های تازه واردشده (هرگز خودِ ایمپورت را مسدود نمی‌کند).
+                try:
+                    for name in os.listdir(self.EOVPN_OVPN_CONFIG_DIR):
+                        if name.endswith(".ovpn"):
+                            suspicious = audit_ovpn_content(
+                                os.path.join(self.EOVPN_OVPN_CONFIG_DIR, name)
+                            )
+                            if suspicious:
+                                audit_results[name] = suspicious
+                except Exception as exc:
+                    logger.error("Config audit failed: %s", exc)
             except Exception as e:
                 logger.error("Download failed: %s", e)
                 shutil.rmtree(staging_dir, ignore_errors=True)
@@ -563,3 +602,16 @@ class Base:
         thread.start()
         if spinner is not None:
             spinner.start()
+
+    def _notify_config_audit(self, results: dict[str, list[str]]):
+        """
+        Forwards audit findings to the main window (main thread only).
+        ارسال نتایج ممیزی کانفیگ به پنجره اصلی (فقط از نخ اصلی).
+        """
+        main_window = self.retrieve("main_window_instance")
+        handler = getattr(main_window, "notify_config_audit", None)
+        if handler:
+            try:
+                handler(results)
+            except Exception as e:
+                logger.debug("Audit notification handler failed: %s", e)

@@ -6,17 +6,19 @@ Manages user preferences, configuration sources (ZIP/Folder), credentials, and b
 مدیریت ترجیحات کاربر، منابع کانفیگ، نام کاربری و کلمه عبور و گزینه‌های بک‌اند.
 """
 
+import contextlib
+import gettext
 import logging
 import os
 import shutil
-import gettext
 
 import gi
-gi.require_version('Gtk', '4.0')
-from gi.repository import Gtk, Gio, GLib, Secret
 
-from .eovpn_base import Base, StorageItem
+gi.require_version('Gtk', '4.0')
+from gi.repository import Gio, GLib, Gtk, Secret
+
 from .connection_manager import NetworkManager, OpenVPN3
+from .eovpn_base import Base, StorageItem
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +73,20 @@ class SettingsWindow(Base, Gtk.Builder):
         return list_box_row, switch
 
     def setup(self):
+        """
+        Constructs and wires the full settings UI by delegating to
+        focused builder methods (kept small for maintainability).
+        ساخت و اتصال رابط کاربری تنظیمات با تفویض به متدهای سازنده
+        تخصصی (برای نگهداری‌پذیری، هر بخش کوچک نگه داشته شده است).
+        """
+
+        self._build_header()
+        self._build_setup_tab()
+        self._build_general_tab()
+        self._build_backend_tab()
+        self._wire_signals()
+
+    def _build_header(self):
         self.reset_btn = Gtk.Button.new_with_label(gettext.gettext("Reset"))
         self.reset_btn.add_css_class("destructive-action")
         self.header = self.get_object("settings_header_bar")
@@ -91,6 +107,7 @@ class SettingsWindow(Base, Gtk.Builder):
         self.stack_switcher.set_stack(self.stack)
         self.header.set_title_widget(self.stack_switcher)
 
+    def _build_setup_tab(self):
         self.main_box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 4)
         self.main_box.set_valign(Gtk.Align.CENTER)
         self.main_box.add_css_class("m-6")
@@ -109,35 +126,35 @@ class SettingsWindow(Base, Gtk.Builder):
         self.main_box.append(label)
 
         configuration_source_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 4)
-        entry = Gtk.Entry.new()
+        self.config_source_entry = Gtk.Entry.new()
         if (text := self.get_setting(self.SETTING.REMOTE)) is not None:
-            entry.set_text(text)
+            self.config_source_entry.set_text(text)
         else:
-            entry.set_placeholder_text("https://example.com/vpn/configs.zip")
+            self.config_source_entry.set_placeholder_text("https://example.com/vpn/configs.zip")
 
         zip_chooser_btn = Gtk.Button.new_from_icon_name("media-zip-symbolic")
         zip_chooser_btn.set_tooltip_text(gettext.gettext("Choose ZIP File"))
         folder_chooser_btn = Gtk.Button.new_from_icon_name("folder-open-symbolic")
         folder_chooser_btn.set_tooltip_text(gettext.gettext("Choose Local Folder"))
-        entry.set_hexpand(True)
-        configuration_source_hbox.append(entry)
+        self.config_source_entry.set_hexpand(True)
+        configuration_source_hbox.append(self.config_source_entry)
         configuration_source_hbox.append(zip_chooser_btn)
         configuration_source_hbox.append(folder_chooser_btn)
 
-        zip_file_chooser_dialog = Gtk.FileChooserNative(action=Gtk.FileChooserAction.OPEN)
-        zip_file_chooser_dialog.set_transient_for(self.window)
+        self.zip_file_chooser_dialog = Gtk.FileChooserNative(action=Gtk.FileChooserAction.OPEN)
+        self.zip_file_chooser_dialog.set_transient_for(self.window)
         zip_filter = Gtk.FileFilter()
         zip_filter.set_name("ZIP")
         zip_filter.add_mime_type("application/zip")
-        zip_file_chooser_dialog.add_filter(zip_filter)
+        self.zip_file_chooser_dialog.add_filter(zip_filter)
         default_path = Gio.File.new_for_path(GLib.get_home_dir())
-        zip_file_chooser_dialog.set_current_folder(default_path)
-        zip_chooser_btn.connect("clicked", lambda btn: zip_file_chooser_dialog.show())
+        self.zip_file_chooser_dialog.set_current_folder(default_path)
+        zip_chooser_btn.connect("clicked", lambda btn: self.zip_file_chooser_dialog.show())
 
-        folder_file_chooser_dialog = Gtk.FileChooserNative(action=Gtk.FileChooserAction.SELECT_FOLDER)
-        folder_file_chooser_dialog.set_transient_for(self.window)
-        folder_file_chooser_dialog.set_current_folder(default_path)
-        folder_chooser_btn.connect("clicked", lambda btn: folder_file_chooser_dialog.show())
+        self.folder_file_chooser_dialog = Gtk.FileChooserNative(action=Gtk.FileChooserAction.SELECT_FOLDER)
+        self.folder_file_chooser_dialog.set_transient_for(self.window)
+        self.folder_file_chooser_dialog.set_current_folder(default_path)
+        folder_chooser_btn.connect("clicked", lambda btn: self.folder_file_chooser_dialog.show())
 
         self.main_box.append(configuration_source_hbox)
 
@@ -192,15 +209,15 @@ class SettingsWindow(Base, Gtk.Builder):
         self.ca_chooser_btn = Gtk.Button.new_with_label("(None)")
         self.ca_chooser_btn.set_hexpand(True)
 
-        ca_file_chooser_dialog = Gtk.FileChooserNative(action=Gtk.FileChooserAction.OPEN)
-        ca_file_chooser_dialog.set_transient_for(self.window)
+        self.ca_file_chooser_dialog = Gtk.FileChooserNative(action=Gtk.FileChooserAction.OPEN)
+        self.ca_file_chooser_dialog.set_transient_for(self.window)
         ca_filter = Gtk.FileFilter()
         ca_filter.set_name("CA / CRT")
         ca_filter.add_mime_type("application/pkix-cert")
-        ca_file_chooser_dialog.add_filter(ca_filter)
+        self.ca_file_chooser_dialog.add_filter(ca_filter)
         default_path = Gio.File.new_for_path(self.EOVPN_OVPN_CONFIG_DIR)
-        ca_file_chooser_dialog.set_current_folder(default_path)
-        self.ca_chooser_btn.connect("clicked", lambda btn: ca_file_chooser_dialog.show())
+        self.ca_file_chooser_dialog.set_current_folder(default_path)
+        self.ca_chooser_btn.connect("clicked", lambda btn: self.ca_file_chooser_dialog.show())
         ca_box.append(self.ca_chooser_btn)
 
         self.user_pass_ca_box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 4)
@@ -236,6 +253,7 @@ class SettingsWindow(Base, Gtk.Builder):
             if (ca := self.get_setting(self.SETTING.CA)) is not None:
                 self.ca_chooser_btn.set_label(os.path.basename(ca))
 
+    def _build_general_tab(self):
         # General Preferences Tab
         frame = Gtk.Frame.new()
         list_box = Gtk.ListBox.new()
@@ -289,6 +307,7 @@ class SettingsWindow(Base, Gtk.Builder):
         self.pref_box.set_vexpand(True)
         self.window.set_child(self.stack)
 
+    def _build_backend_tab(self):
         # Backend Tab
         backend_frame = Gtk.Frame.new()
         backend_list_box = Gtk.ListBox.new()
@@ -387,24 +406,33 @@ class SettingsWindow(Base, Gtk.Builder):
         self.dco_row.set_visible(manager == "openvpn3")
         self.dco_switch.connect("state-set", self.signals.openvpn3_dco_set)
 
+    def _wire_signals(self):
         # Connect signals
         self.reset_btn.connect(
             "clicked",
             self.signals.on_reset_btn_clicked,
-            [entry, self.username_entry, self.password_entry],
+            [self.config_source_entry, self.username_entry, self.password_entry],
             [self.ca_chooser_btn],
             self.switches,
             self.window
         )
-        entry.connect("changed", self.signals.process_config_entry, self.revealer)
-        zip_file_chooser_dialog.connect("response", self.signals.process_zip, entry, self.revealer)
-        folder_file_chooser_dialog.connect("response", self.signals.process_folder, entry, self.revealer)
+        self.config_source_entry.connect("changed", self.signals.process_config_entry, self.revealer)
+        self.zip_file_chooser_dialog.connect(
+            "response", self.signals.process_zip, self.config_source_entry, self.revealer
+        )
+        self.folder_file_chooser_dialog.connect(
+            "response", self.signals.process_folder, self.config_source_entry, self.revealer
+        )
         self.validate_btn.connect(
-            "clicked", self.signals.on_validate_btn_click, entry, self.ca_chooser_btn, self.spinner
+            "clicked",
+            self.signals.on_validate_btn_click,
+            self.config_source_entry,
+            self.ca_chooser_btn,
+            self.spinner,
         )
         self.username_entry.connect("changed", self.signals.process_username)
         self.password_entry.connect("changed", self.signals.process_password)
-        ca_file_chooser_dialog.connect("response", self.signals.process_ca, self.ca_chooser_btn)
+        self.ca_file_chooser_dialog.connect("response", self.signals.process_ca, self.ca_chooser_btn)
         self.ask_auth_switch.connect("state-set", self.signals.req_auth, self.user_pass_ca_box)
         self.remove_all_vpn_btn.connect("clicked", self.confirm_delete_all_connections)
         self.combobox.connect("changed", self.signals.on_backend_selected)
@@ -554,10 +582,8 @@ class SettingsSignals(Base):
         self.reset_all_settings()
         self.set_session_password(None)
 
-        try:
+        with contextlib.suppress(Exception):
             shutil.rmtree(self.EOVPN_OVPN_CONFIG_DIR)
-        except Exception:
-            pass
 
         for e in entries:
             e.set_text('')

@@ -4,18 +4,22 @@ eOVPN-Pro Configuration & Extraction Unit Tests
 """
 
 import os
-import unittest
-import zipfile
 import shutil
 import tempfile
+import unittest
 import unittest.mock
+import zipfile
 
 from eovpn.utils import (
+    MAX_FOLDER_IMPORT_TOTAL_BYTES,
+    NotZipException,
+    audit_ovpn_content,
     download_remote_to_destination,
+    format_data_size,
+    format_throughput,
+    is_safe_path,
     matches_server_filter,
     ovpn_is_auth_required,
-    is_safe_path,
-    NotZipException,
 )
 
 
@@ -102,9 +106,97 @@ class TestOpenVPNUtils(unittest.TestCase):
         with zipfile.ZipFile(zip_path, "w") as z:
             z.writestr("big.ovpn", "remote x 1194\n" + ("A" * 4096))
 
-        with unittest.mock.patch("eovpn.utils.MAX_ZIP_DOWNLOAD_BYTES", 64):
-            with self.assertRaises(NotZipException):
-                download_remote_to_destination(zip_path, dest_dir)
+        with (
+            unittest.mock.patch("eovpn.utils.MAX_ZIP_DOWNLOAD_BYTES", 64),
+            self.assertRaises(NotZipException),
+        ):
+            download_remote_to_destination(zip_path, dest_dir)
+
+
+class TestConfigAudit(unittest.TestCase):
+    """
+    Tests for the dangerous-directive scanner used on imported configs.
+    تست‌های پویش‌گر دایرکتیوهای خطرناک برای کانفیگ‌های واردشده.
+    """
+
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp(prefix="eovpn_audit_")
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def _write(self, content: str) -> str:
+        path = os.path.join(self.test_dir, "cfg.ovpn")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+        return path
+
+    def test_flags_script_directives(self):
+        path = self._write(
+            "client\ndev tun\nup /etc/openvpn/up.sh\ndown /etc/openvpn/down.sh\nremote vpn.example 1194\n"
+        )
+        self.assertEqual(audit_ovpn_content(path), ["down", "up"])
+
+    def test_flags_script_security_enabler(self):
+        path = self._write("script-security 2\nremote vpn.example\n")
+        self.assertEqual(audit_ovpn_content(path), ["script-security"])
+
+    def test_plain_auth_user_pass_is_safe(self):
+        # The no-argument form is the app's normal Keyring-backed flow.
+        # شکل بدون آرگومان، جریان عادی احراز هویت از طریق Keyring است.
+        path = self._write("auth-user-pass\nremote vpn.example\n")
+        self.assertEqual(audit_ovpn_content(path), [])
+
+    def test_auth_user_pass_with_file_is_flagged(self):
+        path = self._write("auth-user-pass /home/user/creds.txt\nremote vpn.example\n")
+        self.assertEqual(audit_ovpn_content(path), ["auth-user-pass"])
+
+    def test_safe_config_returns_empty(self):
+        path = self._write("client\ndev tun\nproto udp\nremote vpn.example 1194\ncipher AES-256-GCM\n")
+        self.assertEqual(audit_ovpn_content(path), [])
+
+    def test_missing_file_returns_empty(self):
+        self.assertEqual(audit_ovpn_content(os.path.join(self.test_dir, "nope.ovpn")), [])
+
+
+class TestFolderImportCap(unittest.TestCase):
+    """
+    Tests the size cap for local folder imports.
+    تست‌های سقف حجم ایمپورت پوشه محلی.
+    """
+
+    def test_oversized_folder_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "source")
+            dest = os.path.join(tmp, "dest")
+            os.makedirs(source)
+            with open(os.path.join(source, "big.ovpn"), "w") as f:
+                f.write("remote x 1194\n" + ("A" * 4096))
+            with unittest.mock.patch(
+                "eovpn.utils.MAX_FOLDER_IMPORT_TOTAL_BYTES", 64
+            ), self.assertRaises(ValueError):
+                download_remote_to_destination(source, dest)
+
+    def test_cap_constant_is_sane(self):
+        self.assertGreaterEqual(MAX_FOLDER_IMPORT_TOTAL_BYTES, 64 * 1024 * 1024)
+
+
+class TestFormattingHelpers(unittest.TestCase):
+    """
+    Tests for the shared human-readable formatting helpers.
+    تست‌های کمک‌های قالب‌بندی خوانا و مشترک.
+    """
+
+    def test_throughput(self):
+        self.assertEqual(format_throughput(512.0), "512.0 B/s")
+        self.assertEqual(format_throughput(2048.0), "2.0 KB/s")
+        self.assertEqual(format_throughput(5 * 1024 * 1024), "5.0 MB/s")
+
+    def test_data_size(self):
+        self.assertEqual(format_data_size(512), "512 B")
+        self.assertEqual(format_data_size(2048), "2.0 KB")
+        self.assertEqual(format_data_size(3 * 1024 * 1024), "3.0 MB")
+        self.assertEqual(format_data_size(2 * 1024 * 1024 * 1024), "2.0 GB")
 
 
 class TestServerFilter(unittest.TestCase):

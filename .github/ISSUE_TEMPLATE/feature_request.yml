@@ -1,0 +1,37 @@
+name: Feature Request
+description: Suggest an improvement or new feature / پیشنهاد بهبود یا قابلیت جدید
+title: "[Feature] "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for your idea! / از ایده شما سپاسگزاریم!
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or motivation / مشکل یا انگیزه
+      description: What is missing today? / چه چیزی امروز کم است؟
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution / راه‌حل پیشنهادی
+      description: How should it work? / باید چگونه کار کند؟
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered / راه‌حل‌های جایگزین
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope / دامنه
+      options:
+        - label: UI/UX (interface) / رابط کاربری
+        - label: Backend (NetworkManager / OpenVPN 3)
+        - label: Performance / کارایی
+        - label: Security / امنیت
+        - label: Packaging / بسته‌بندی

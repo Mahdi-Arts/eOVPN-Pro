@@ -4,7 +4,8 @@ eOVPN-Pro IP Lookup Unit Tests
 """
 
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
 from eovpn.ip_lookup.lookup import Lookup
 
 

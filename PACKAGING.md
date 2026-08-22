@@ -76,8 +76,9 @@ rpmdev-setuptree
 # ساخت آرشیو سورس (پوشه ریشه باید با %{name}-%{version} یکسان باشد)
 git archive --prefix=eovpn-pro-1.5.0/ -o ~/rpmbuild/SOURCES/eovpn-pro-1.5.0.tar.gz HEAD
 
-# Build binary and source RPMs
-rpmbuild -ba eovpn-pro.spec
+# Copy the canonical spec (single source of truth) and build
+cp dist/rpm/eovpn-pro.spec ~/rpmbuild/SPECS/
+rpmbuild -ba ~/rpmbuild/SPECS/eovpn-pro.spec
 
 # The resulting package will be in ~/rpmbuild/RPMS/x86_64/
 ```
@@ -161,19 +162,22 @@ package() {
 
 ## 5. Automated CI/CD Deployment
 
-The repository ships two active GitHub Actions workflows that automatically:
+The repository ships one active GitHub Actions workflow — `.github/workflows/ci-cd.yml` —
+with the following jobs (all run automatically on every push/PR):
 
-### Test & Build Pipeline (`.github/workflows/ci-cd.yml`)
-1. **test**: Runs unit tests, flake8/ruff/mypy linting, metadata validation and byte-compilation on every commit/PR.
-2. **build-deb**: Builds native `.deb` packages in Ubuntu runner environments.
-3. **build-flatpak**: Builds the Flatpak bundle on version tags (and manual dispatch).
-4. **release**: Attaches the `.deb` installer to new GitHub Releases upon creating version tags
-   (e.g. `git tag v1.5.0 && git push origin v1.5.0`).
+1. **test**: unit tests, flake8/ruff/mypy linting, `pip-audit` CVE scanning, metadata
+   consistency checks and byte-compilation on every commit/PR.
+2. **build-deb**: builds the native `.deb` package on Ubuntu runners.
+3. **build-rpm**: builds the native `.rpm` package inside a Fedora container.
+4. **build-flatpak**: builds the Flatpak bundle on version tags (and manual dispatch).
+5. **release**: attaches both `.deb` and `.flatpak` artifacts to a new GitHub Release
+   when a version tag is pushed (e.g. `git tag v1.5.0 && git push origin v1.5.0`).
 
-### Release Pipeline (`.github/workflows/release.yml`)
-- Triggered by version tags (`v*`) only.
-- Builds both `.deb` and Flatpak packages.
-- Creates a GitHub Release with both artifacts and auto-generated release notes.
+Dependabot (`.github/dependabot.yml`) keeps GitHub Actions and Python dependencies
+updated weekly.
+
+مخزن یک وورک‌فلو فعال گیت‌هاب اکشن دارد — `.github/workflows/ci-cd.yml` — با وظایف:
+تست/لینت/ممیزی CVE، ساخت .deb، ساخت .rpm، ساخت Flatpak و انتشار خودکار بسته‌ها روی تگ.
 
 See `docs/RELEASE_CHECKLIST.md` for the full release runbook.
 راهنمای کامل انتشار در `docs/RELEASE_CHECKLIST.md` موجود است.
@@ -182,15 +186,17 @@ See `docs/RELEASE_CHECKLIST.md` for the full release runbook.
 
 ## 6. AppImage status
 
-**Not ready.** There is no AppDir, `linuxdeploy` recipe or CI job for AppImage.
-eOVPN-Pro talks to the **system** NetworkManager / OpenVPN 3 D-Bus services, so a
-portable AppImage would still require those host services (and the OpenVPN NM
-plugin) to be installed. A GTK4 + PyGObject + CFFI native-library bundle is a
-separate engineering task, not a packaging-file tweak.
+**Experimental scaffold — not production-ready.** See `dist/appimage/` for the
+`linuxdeploy` recipe and build script. eOVPN-Pro talks to the **system**
+NetworkManager / OpenVPN 3 D-Bus services, so even a portable AppImage would still
+require those host services (and the OpenVPN NM plugin) to be installed. A GTK4 +
+PyGObject + CFFI native-library bundle is a separate engineering task, not a
+packaging-file tweak; it is not wired into CI yet.
 
-**آماده نیست.** هیچ AppDir، دستور `linuxdeploy` یا جاب CI برای AppImage وجود ندارد.
-برنامه با سرویس‌های سیستمی NetworkManager / OpenVPN 3 صحبت می‌کند؛ بنابراین حتی
-یک AppImage قابل‌حمل هم به نصب بودن آن سرویس‌ها روی میزبان نیاز دارد.
+**زیرساخت آزمایشی — آماده تولید نیست.** دستور `linuxdeploy` و اسکریپت ساخت در
+`dist/appimage/` قرار دارد. برنامه با سرویس‌های سیستمی NetworkManager / OpenVPN 3
+صحبت می‌کند؛ بنابراین حتی یک AppImage قابل‌حمل هم به نصب بودن آن سرویس‌ها روی
+میزبان نیاز دارد و هنوز به CI متصل نشده است.
 
 ---
 

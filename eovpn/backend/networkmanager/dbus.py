@@ -4,9 +4,11 @@ eOVPN-Pro NetworkManager D-Bus Listener
 """
 
 import gi
+
 gi.require_version("NM", "1.0")
-from gi.repository import GLib, Gio, NM
 import logging
+
+from gi.repository import NM, Gio, GLib
 
 logger = logging.getLogger(__name__)
 
