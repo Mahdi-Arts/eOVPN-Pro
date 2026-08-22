@@ -165,3 +165,15 @@ margin: 6px;
     background-color: alpha(@warning_color, 0.18);
     color: @warning_color;
 }
+
+/* Favorite (star) button / دکمه ستاره کانفیگ‌های مورد علاقه */
+.server-fav-btn {
+    min-width: 22px;
+    min-height: 22px;
+    padding: 2px;
+    border-radius: 999px;
+}
+
+.server-fav-btn:checked {
+    color: #f2c200;
+}

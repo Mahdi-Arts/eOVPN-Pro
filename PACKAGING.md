@@ -14,6 +14,12 @@ This guide provides step-by-step instructions for building and packaging **eOVPN
 4. [Arch Linux / Manjaro (PKGBUILD)](#4-arch-linux--manjaro-pkgbuild)
 5. [Automated CI/CD Deployment](#5-automated-cicd-deployment)
 
+> **Note:** The OpenVPN 3 (DCO) backend is optional (`-Dopenvpn3=false` by default).
+> Building with `-Dopenvpn3=true` additionally requires the Python `openvpn3` bindings
+> installed in the *build* environment (`pip install openvpn3`).
+> **نکته:** بک‌اند OpenVPN 3 (DCO) اختیاری است (پیش‌فرض `-Dopenvpn3=false`). ساخت با
+> `-Dopenvpn3=true` نیازمند نصب بایندینگ پایتون `openvpn3` در محیط ساخت است.
+
 ---
 
 ## 1. Debian / Ubuntu / Linux Mint (.deb)
@@ -24,7 +30,7 @@ sudo apt update
 sudo apt install -y build-essential debhelper dh-python meson ninja-build \
     pkg-config python3-all python3-cffi python3-gi libnm-dev libglib2.0-dev \
     libgtk-4-dev libadwaita-1-dev libsecret-1-dev libnotify-dev gettext \
-    network-manager-openvpn openvpn
+    desktop-file-utils network-manager-openvpn openvpn
 ```
 
 ### Build .deb Package (ساخت بسته دبیان)
@@ -41,6 +47,11 @@ dpkg-buildpackage -us -uc -b
 ```bash
 sudo dpkg -i ../eovpn-pro_1.5.0-1_amd64.deb
 sudo apt install -f  # Resolve any missing dependencies if needed
+```
+
+### Uninstall (حذف نصب)
+```bash
+sudo dpkg -r eovpn-pro
 ```
 
 ---
@@ -60,8 +71,9 @@ sudo dnf install -y rpm-build rpmdevtools meson ninja-build gcc \
 # Setup RPM build tree
 rpmdev-setuptree
 
-# Create source archive
-tar --exclude-vcs -czf ~/rpmbuild/SOURCES/eovpn-pro-1.5.0.tar.gz .
+# Create source archive (top-level dir must match %{name}-%{version})
+# ساخت آرشیو سورس (پوشه ریشه باید با %{name}-%{version} یکسان باشد)
+git archive --prefix=eovpn-pro-1.5.0/ -o ~/rpmbuild/SOURCES/eovpn-pro-1.5.0.tar.gz HEAD
 
 # Build binary and source RPMs
 rpmbuild -ba eovpn-pro.spec
@@ -88,8 +100,9 @@ Flatpak provides an isolated, sandboxed container ensuring compatibility across 
 sudo apt install flatpak flatpak-builder # Ubuntu/Debian
 # sudo dnf install flatpak flatpak-builder # Fedora
 
-# Install GNOME Sdk and Platform runtimes
-flatpak install flathub org.gnome.Sdk//46 org.gnome.Platform//46
+# Install GNOME Sdk and Platform runtimes (match the manifest's runtime-version)
+# نصب رانتایم‌های GNOME (هماهنگ با runtime-version در مانیفست)
+flatpak install flathub org.gnome.Sdk//50 org.gnome.Platform//50
 ```
 
 ### Build Flatpak (ساخت فلت‌پک)
@@ -97,17 +110,21 @@ flatpak install flathub org.gnome.Sdk//46 org.gnome.Platform//46
 cd dist/flatpak
 
 # Build application locally
-flatpak-builder --user --install --force-clean build-dir com.github.mahdi-bagheban.eovpn-pro.yml
+flatpak-builder --user --install --force-clean build-dir com.github.mahdi-arts.eovpn-pro.yml
 
 # Run the installed Flatpak
-flatpak run com.github.mahdi-bagheban.eovpn-pro
+flatpak run com.github.mahdi-arts.eovpn-pro
 ```
 
 ### Export Single-File Bundle (.flatpak)
 ```bash
-flatpak-builder --repo=repo --force-clean build-dir com.github.mahdi-bagheban.eovpn-pro.yml
-flatpak build-bundle repo eovpn-pro.flatpak com.github.mahdi-bagheban.eovpn-pro
+flatpak-builder --repo=repo --force-clean build-dir com.github.mahdi-arts.eovpn-pro.yml
+flatpak build-bundle repo eovpn-pro.flatpak com.github.mahdi-arts.eovpn-pro
 ```
+
+> The manifest builds NetworkManager, libnma and OpenVPN 3 from source; the first build
+> takes a long time and requires the `flatpak-builder` caches to be warm.
+> مانیفست NetworkManager و OpenVPN 3 را از سورس می‌سازد؛ ساخت اول زمان‌بر است.
 
 ---
 
@@ -143,10 +160,17 @@ package() {
 
 ## 5. Automated CI/CD Deployment
 
-The repository includes a ready-to-use GitHub Actions workflow template (`dist/ci/ci-cd.yml`) that can be placed in `.github/workflows/ci-cd.yml` to automatically:
-1. Run full offline test suite on pull requests and commits.
-2. Build native `.deb` packages in Ubuntu runner environments.
-3. Automatically attach the `.deb` installer to new GitHub Releases upon creating version tags (e.g. `git tag v1.5.0 && git push origin v1.5.0`).
+The repository ships an active GitHub Actions workflow (`.github/workflows/ci-cd.yml`,
+also mirrored in `dist/ci/ci-cd.yml`) that automatically:
+
+1. Runs the full offline test suite, flake8 linting and metadata validation on every commit/PR.
+2. Builds native `.deb` packages in Ubuntu runner environments.
+3. Builds the Flatpak bundle on version tags (and manual dispatch).
+4. Attaches the `.deb` installer to new GitHub Releases upon creating version tags
+   (e.g. `git tag v1.5.0 && git push origin v1.5.0`).
+
+See `docs/RELEASE_CHECKLIST.md` for the full release runbook.
+راهنمای کامل انتشار در `docs/RELEASE_CHECKLIST.md` موجود است.
 
 ---
 

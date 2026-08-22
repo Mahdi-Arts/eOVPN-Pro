@@ -30,7 +30,7 @@ class SettingsWindow(Base, Gtk.Builder):
     def __init__(self):
         super().__init__()
         Gtk.Builder.__init__(self)
-        self.signals = Signals()
+        self.signals = SettingsSignals()
 
         self.add_from_resource(self.EOVPN_GRESOURCE_PREFIX + "/ui/" + "settings.ui")
         self.window = self.get_object("settings_window")
@@ -229,7 +229,9 @@ class SettingsWindow(Base, Gtk.Builder):
                     if pwd:
                         self.password_entry.set_text(pwd)
 
-                Secret.password_lookup(self.EOVPN_SECRET_SCHEMA, {"username": username}, None, on_password_lookup)
+                Secret.password_lookup(
+                    self.EOVPN_SECRET_SCHEMA, {"username": username}, None, on_password_lookup
+                )
 
             if (ca := self.get_setting(self.SETTING.CA)) is not None:
                 self.ca_chooser_btn.set_label(os.path.basename(ca))
@@ -242,22 +244,34 @@ class SettingsWindow(Base, Gtk.Builder):
 
         self.switches = [self.ask_auth_switch]
 
-        row, switch = self.generate_option_row(gettext.gettext("Notifications"), "user-available-symbolic", bool(self.get_setting(self.SETTING.NOTIFICATIONS)))
+        row, switch = self.generate_option_row(
+            gettext.gettext("Notifications"), "user-available-symbolic",
+            bool(self.get_setting(self.SETTING.NOTIFICATIONS))
+        )
         switch.connect("state-set", self.signals.notification_set)
         self.switches.append(switch)
         list_box.append(row)
 
-        row, switch = self.generate_option_row(gettext.gettext("Flag"), "preferences-desktop-locale-symbolic", bool(self.get_setting(self.SETTING.SHOW_FLAG)))
+        row, switch = self.generate_option_row(
+            gettext.gettext("Flag"), "preferences-desktop-locale-symbolic",
+            bool(self.get_setting(self.SETTING.SHOW_FLAG))
+        )
         switch.connect("state-set", self.signals.show_flag_set)
         self.switches.append(switch)
         list_box.append(row)
 
-        row, switch = self.generate_option_row(gettext.gettext("Dark Theme"), "weather-clear-night-symbolic", bool(self.get_setting(self.SETTING.DARK_THEME)))
+        row, switch = self.generate_option_row(
+            gettext.gettext("Dark Theme"), "weather-clear-night-symbolic",
+            bool(self.get_setting(self.SETTING.DARK_THEME))
+        )
         switch.connect("state-set", self.signals.dark_theme_set)
         self.switches.append(switch)
         list_box.append(row)
 
-        row, switch = self.generate_option_row(gettext.gettext("Auto Reconnect"), "network-wired-symbolic", bool(self.get_setting(self.SETTING.AUTO_RECONNECT)))
+        row, switch = self.generate_option_row(
+            gettext.gettext("Auto Reconnect"), "network-wired-symbolic",
+            bool(self.get_setting(self.SETTING.AUTO_RECONNECT))
+        )
         switch.connect("state-set", self.signals.auto_reconnect_set)
         self.switches.append(switch)
         list_box.append(row)
@@ -339,7 +353,12 @@ class SettingsWindow(Base, Gtk.Builder):
         label2.set_halign(Gtk.Align.START)
         label2.add_css_class("bold")
 
-        sub_label2 = Gtk.Label.new(gettext.gettext("Offloads VPN data processing directly to the Linux kernel for maximum speed and lower CPU usage."))
+        sub_label2 = Gtk.Label.new(
+            gettext.gettext(
+                "Offloads VPN data processing directly to the Linux kernel "
+                "for maximum speed and lower CPU usage."
+            )
+        )
         sub_label2.set_halign(Gtk.Align.START)
         sub_label2.add_css_class("dim-label")
         sub_label2.add_css_class("caption")
@@ -380,20 +399,58 @@ class SettingsWindow(Base, Gtk.Builder):
         entry.connect("changed", self.signals.process_config_entry, self.revealer)
         zip_file_chooser_dialog.connect("response", self.signals.process_zip, entry, self.revealer)
         folder_file_chooser_dialog.connect("response", self.signals.process_folder, entry, self.revealer)
-        self.validate_btn.connect("clicked", self.signals.on_validate_btn_click, entry, self.ca_chooser_btn, self.spinner)
+        self.validate_btn.connect(
+            "clicked", self.signals.on_validate_btn_click, entry, self.ca_chooser_btn, self.spinner
+        )
         self.username_entry.connect("changed", self.signals.process_username)
         self.password_entry.connect("changed", self.signals.process_password)
         ca_file_chooser_dialog.connect("response", self.signals.process_ca, self.ca_chooser_btn)
         self.ask_auth_switch.connect("state-set", self.signals.req_auth, self.user_pass_ca_box)
-        self.remove_all_vpn_btn.connect("clicked", lambda _: NetworkManager(None).delete_all_connections())
+        self.remove_all_vpn_btn.connect("clicked", self.confirm_delete_all_connections)
         self.combobox.connect("changed", self.signals.on_backend_selected)
+
+    def confirm_delete_all_connections(self, button: Gtk.Button):
+        """
+        Asks for explicit confirmation before removing ALL VPN profiles from
+        NetworkManager, because profiles created by other applications would
+        also be deleted. This action cannot be undone.
+        درخواست تأیید صریح پیش از حذف تمام پروفایل‌های VPN از NetworkManager؛
+        زیرا پروفایل‌های ساخته‌شده توسط سایر برنامه‌ها نیز حذف می‌شوند و این
+        عمل قابل بازگشت نیست.
+        """
+        dialog = Gtk.AlertDialog.new(
+            gettext.gettext("Delete All VPN Connections?")
+        )
+        dialog.set_detail(
+            gettext.gettext(
+                "This will permanently remove ALL VPN profiles from NetworkManager, "
+                "including profiles created by other applications. "
+                "This action cannot be undone."
+            )
+        )
+        dialog.set_buttons([
+            gettext.gettext("Cancel"),
+            gettext.gettext("Delete All"),
+        ])
+        dialog.set_cancel_button(0)
+        dialog.set_default_button(1)
+        dialog.choose(self.window, None, self._on_delete_all_confirmed, None)
+
+    def _on_delete_all_confirmed(self, dialog: Gtk.AlertDialog, result, *args):
+        """Deletes all VPN connections only if the destructive button was chosen."""
+        try:
+            if dialog.choose_finish(result) == 1:
+                NetworkManager(None).delete_all_connections()
+                logger.info("All VPN connections were deleted by user confirmation.")
+        except Exception as e:
+            logger.error("Delete-all confirmation failed: %s", e)
 
     def show(self):
         self.setup()
         self.window.show()
 
 
-class Signals(Base):
+class SettingsSignals(Base):
     """
     Signals handler for settings UI actions.
     مدیریت سیگنال‌ها و رویدادهای پنجره تنظیمات.

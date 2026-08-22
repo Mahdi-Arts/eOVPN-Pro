@@ -22,7 +22,7 @@ if os.getenv("EOVPN_DEBUG") is not None:
 if __name__ == "__main__":
 
     try:
-        settings = Gio.Settings.new("com.github.mahdi-bagheban.eovpn-pro")
+        settings = Gio.Settings.new("com.github.mahdi-arts.eovpn-pro")
         lang = settings.get_string("language")
     except Exception:
         lang = "en"
@@ -35,7 +35,7 @@ if __name__ == "__main__":
     gettext.bindtextdomain('eovpn', localedir)
     gettext.textdomain('eovpn')
 
-    resource = Gio.resource_load(os.path.join(pkgdatadir, 'com.github.mahdi-bagheban.eovpn-pro.gresource'))
+    resource = Gio.resource_load(os.path.join(pkgdatadir, 'com.github.mahdi-arts.eovpn-pro.gresource'))
     Gio.Resource._register(resource)
     
     exit_status = launch_eovpn()

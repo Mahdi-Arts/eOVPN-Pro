@@ -8,7 +8,6 @@ and Right-to-Left (RTL) layout direction.
 """
 
 import sys
-import argparse
 import logging
 
 import gi
@@ -69,7 +68,7 @@ def launch_eovpn() -> int:
     نقطه ورود اصلی فراخوانی‌شده توسط فایل اجرایی برنامه.
     """
     app = Gtk.Application(
-        application_id='com.github.mahdi-bagheban.eovpn-pro',
+        application_id='com.github.mahdi-arts.eovpn-pro',
         flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE
     )
 
@@ -81,14 +80,12 @@ def launch_eovpn() -> int:
     app.connect('activate', on_activate)
     app.connect('command-line', do_command_line)
 
-    parser = argparse.ArgumentParser(prog="eovpn", add_help=False)
-    args, _ = parser.parse_known_args(sys.argv[1:])
-
-    # Clean legacy command args unsupported by standard glib options
-    if "-c" in sys.argv:
-        sys.argv.remove("-c")
-    if "--config" in sys.argv:
-        sys.argv.remove("--config")
+    # Strip legacy command-line flags that GLib option parsing does not
+    # understand, so they cannot cause a startup failure.
+    # حذف آرگومان‌های قدیمی که پارسر GLib آن‌ها را نمی‌شناسد تا باعث خطای راه‌اندازی نشوند
+    for legacy_flag in ("-c", "--config"):
+        if legacy_flag in sys.argv:
+            sys.argv.remove(legacy_flag)
 
     return app.run(sys.argv)
 
@@ -103,9 +100,13 @@ def do_command_line(app: Gtk.Application, args: Gio.ApplicationCommandLine) -> b
             if debug_lvl.isnumeric():
                 lvl_int = int(debug_lvl)
                 if lvl_int <= 50:
-                    logging.basicConfig(level=lvl_int, format='%(levelname)s:%(name)s.py:%(funcName)s:%(message)s')
+                    logging.basicConfig(
+                        level=lvl_int, format='%(levelname)s:%(name)s.py:%(funcName)s:%(message)s'
+                    )
             elif debug_lvl in ["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"]:
-                logging.basicConfig(level=debug_lvl, format='%(levelname)s:%(name)s.py:%(funcName)s:%(message)s')
+                logging.basicConfig(
+                    level=debug_lvl, format='%(levelname)s:%(name)s.py:%(funcName)s:%(message)s'
+                )
 
     app.activate()
     return True

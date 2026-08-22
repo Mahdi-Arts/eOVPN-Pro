@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+  eOVPN-Pro GSettings Schema / اسکیمای تنظیمات eOVPN-Pro
+  Keep this file in sync with `Settings.all_settings` in eovpn/eovpn_base.py
+  این فایل باید با لیست `Settings.all_settings` هماهنگ بماند
+-->
 <schemalist>
-   <schema path="/com/github/mahdi-bagheban/eovpn-pro/" id="com.github.mahdi-bagheban.eovpn-pro">
+   <schema path="/com/github/mahdi-arts/eovpn-pro/" id="com.github.mahdi-arts.eovpn-pro">
       <key type="b" name="notifications">
          <default>true</default>
       </key>
@@ -13,22 +18,10 @@
       <key type="s" name="ca">
          <default>"null"</default>
       </key>
-      <key type="b" name="ca-set-explicit">
-         <default>false</default>
-      </key>	  
-      <key type="s" name="remote-type">
-         <default>"null"</default>
-      </key>
       <key type="s" name="remote">
          <default>"null"</default>
       </key>
-      <key type="s" name="remote-savepath">
-         <default>"null"</default>
-      </key>
       <key type="s" name="auth-user">
-         <default>"null"</default>
-      </key>
-      <key type="s" name="auth-pass">
          <default>"null"</default>
       </key>
       <key type="s" name="nm-active-uuid">
@@ -39,15 +32,6 @@
       </key>
       <key type="i" name="last-connected-cursor">
          <default>-1</default>
-      </key>
-      <key type="s" name="current-connected">
-         <default>"null"</default>
-      </key>
-      <key type="b" name="update-on-start">
-         <default>false</default>
-      </key>
-      <key type="b" name="connect-on-launch">
-         <default>false</default>
       </key>
       <key type="b" name="show-flag">
          <default>false</default>
@@ -66,6 +50,9 @@
       </key>
       <key type="b" name="auto-reconnect">
          <default>false</default>
+      </key>
+      <key type="as" name="favorite-configs">
+         <default>[]</default>
       </key>
       <key type="s" name="language">
          <default>"en"</default>

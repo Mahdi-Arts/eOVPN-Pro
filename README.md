@@ -43,6 +43,10 @@
   - Instantly sorts your VPN configuration list from lowest to highest latency, moving failed servers to the bottom automatically, and auto-selects the fastest server with one click.
   - مرتب‌سازی آنی لیست کانفیگ‌ها از سریع‌ترین (کمترین پینگ) به سنگین‌ترین سرورها به صورت کاملاً خودکار و انتخاب سریع‌ترین سرور فعال در کل لیست تنها با یک کلیک.
 
+- 🔎 **Live Search, Filter & Favorites (جستجوی زنده، فیلتر هوشمند و ستاره‌دار کردن سرورها)**:
+  - Real-time server search (`Ctrl+F`), smart filtering (All / Favorites / Online / Offline), star-marked favorite servers with persistent storage, and a live visible/total counter.
+  - جستجوی زنده سرورها (`Ctrl+F`)، فیلتر هوشمند (همه / مورد علاقه‌ها / آنلاین / آفلاین)، نشان‌کردن سرورهای محبوب با ستاره و ذخیره دائمی آن‌ها، به همراه شمارنده زنده تعداد سرورهای نمایش‌داده‌شده.
+
 - 📊 **Real-time Bandwidth Monitor (نمایشگر زنده پهنای باند و ترافیک)**:
   - Monitors and displays live download speed, upload speed, and total traffic usage from `/proc/net/dev` once connected.
   - مانیتورینگ زنده و نمایش گرافیکی نرخ دانلود، آپلود و میزان کل مصرف ترافیک اینترنت کارت شبکه VPN به صورت زنده و ثانیه‌ای.
@@ -75,8 +79,8 @@ sudo apt install -f
 ### Option 2: Flatpak (Universal Sandbox)
 ```bash
 cd dist/flatpak
-flatpak-builder --user --install --force-clean build-dir com.github.mahdi-bagheban.eovpn-pro.yml
-flatpak run com.github.mahdi-bagheban.eovpn-pro
+flatpak-builder --user --install --force-clean build-dir com.github.mahdi-arts.eovpn-pro.yml
+flatpak run com.github.mahdi-arts.eovpn-pro
 ```
 
 ---
@@ -112,10 +116,34 @@ python3 run_program_debug.py
 
 ## 🧪 Testing & Quality Assurance (آزمون و تست نرم‌افزار)
 
-Run the full offline test suite:
+Run the full offline test suite, linting, and byte-compilation:
 ```bash
+# Unit tests / تست‌های واحد
 python3 -m unittest discover -s tests -v
+
+# Linting / بررسی کیفیت کد
+pip install flake8
+python3 -m flake8 eovpn tests run_program_debug.py cffi_compile.py meson_post_install.py
+
+# Byte-compile all sources / کامپایل همه فایل‌ها
+python3 -m compileall -q eovpn tests run_program_debug.py cffi_compile.py meson_post_install.py
 ```
+
+These checks run automatically in CI (`.github/workflows/ci-cd.yml`) on every push/PR.
+این بررسی‌ها به‌صورت خودکار در CI روی هر push/PR اجرا می‌شوند.
+
+---
+
+## 📚 Documentation (مستندات)
+
+| Document / مستند | Description / شرح |
+|---|---|
+| [PACKAGING.md](PACKAGING.md) | Packaging guide (.deb / .rpm / Flatpak / Arch) — راهنمای بسته‌بندی |
+| [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) | Release runbook — راهنمای انتشار نسخه |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Architecture overview — نمای کلی معماری |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guide — راهنمای مشارکت |
+| [SECURITY.md](SECURITY.md) | Security policy — خط مشی امنیتی |
+| [QA_REPORT.md](QA_REPORT.md) | Latest quality report — آخرین گزارش کیفیت |
 
 ---
 
@@ -123,7 +151,7 @@ python3 -m unittest discover -s tests -v
 
 - **Application Display Name (نام نمایشی برنامه)**: eOVPN Pro
 - **Repository Name (نام مخزن)**: eOVPN-Pro
-- **Application ID (شناسه برنامه)**: `com.github.mahdi-bagheban.eovpn-pro`
+- **Application ID (شناسه برنامه)**: `com.github.mahdi-arts.eovpn-pro`
 - **Repository (آدرس مخزن پروژه)**: [github.com/Mahdi-Arts/eOVPN-Pro](https://github.com/Mahdi-Arts/eOVPN-Pro)
 - **Issue Tracker (گزارش مشکلات)**: [github.com/Mahdi-Arts/eOVPN-Pro/issues](https://github.com/Mahdi-Arts/eOVPN-Pro/issues)
 - **Current Version (نسخه)**: 1.5.0

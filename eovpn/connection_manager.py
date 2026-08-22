@@ -4,16 +4,16 @@ eOVPN-Pro Connection Manager Module
 
 Provides an abstract interface and concrete implementations for connecting,
 disconnecting, and monitoring VPN tunnels via NetworkManager and OpenVPN 3 Linux.
-ارائه‌دهنده ساختار انتزاعی و پیاده‌سازی‌های عملیاتی جهت مدیریت تونل‌های OpenVPN از طریق NetworkManager و OpenVPN 3.
+ارائه‌دهنده ساختار انتزاعی و پیاده‌سازی‌های عملیاتی جهت مدیریت تونل‌های
+OpenVPN از طریق NetworkManager و OpenVPN 3.
 """
 
 import os
 import logging
 import tempfile
-from pathlib import Path
 from abc import ABC, abstractmethod
 
-from gi.repository import Secret, GLib
+from gi.repository import Secret
 
 from .eovpn_base import Base
 from .backend.networkmanager import _libeovpn_nm

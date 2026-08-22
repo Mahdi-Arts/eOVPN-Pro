@@ -56,7 +56,10 @@ class NMDbus:
             self.conn.signal_unsubscribe(self.conn_id)
             self.conn_id = None
 
-    def sub_callback(self, connection, sender_name, object_path, interface_name, signal_name, parameters, update_callback):
+    def sub_callback(
+        self, connection, sender_name, object_path, interface_name,
+        signal_name, parameters, update_callback,
+    ):
         logger.debug("NM Signal: %s %s", signal_name, parameters)
 
         x = GLib.Variant("(uu)", parameters)
@@ -69,7 +72,9 @@ class NMDbus:
         elif status in (NM.VpnConnectionState.DISCONNECTED, NM.VpnConnectionState.FAILED):
             logger.debug("NetworkManager VPN disconnected (reason: %d).", reason)
             is_connection_deletion_required = reason in [5, 6, 7, 8, 9, 10]
-            reason_msg = error_reasons[reason] if (reason < len(error_reasons) and is_connection_deletion_required) else None
+            reason_msg = None
+            if is_connection_deletion_required and reason < len(error_reasons):
+                reason_msg = error_reasons[reason]
             GLib.timeout_add_seconds(1, update_callback, False, reason_msg)
         else:
             update_callback([status, reason])

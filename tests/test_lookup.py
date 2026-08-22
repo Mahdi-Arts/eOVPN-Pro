@@ -30,7 +30,9 @@ class TestLookup(unittest.TestCase):
     @patch('urllib.request.urlopen')
     def test_ipapi_co_success(self, mock_urlopen):
         mock_response = MagicMock()
-        mock_response.read.return_value = b'{"ip": "203.0.113.10", "country_code": "FR", "country_name": "France"}'
+        mock_response.read.return_value = (
+            b'{"ip": "203.0.113.10", "country_code": "FR", "country_name": "France"}'
+        )
         mock_response.__enter__.return_value = mock_response
         mock_urlopen.return_value = mock_response
 

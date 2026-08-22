@@ -1,14 +1,14 @@
 project('eovpn',
-  version: '1.5',
+  version: '1.5.0',
   meson_version: '>= 0.60.0'
 )
 
 i18n = import('i18n')
 python = import('python')
-python_instllation = python.find_installation()
+python_installation = python.find_installation()
 
 gnome = import('gnome')
-project_id = 'com.github.mahdi-bagheban.eovpn-pro'
+project_id = 'com.github.mahdi-arts.eovpn-pro'
 
 
 prefix = get_option('prefix') # should be /usr
@@ -16,7 +16,7 @@ bindir = get_option('bindir') # should be bin
 datadir = get_option('datadir') # should be /usr/share
 pkg_datadir = join_paths(prefix, datadir, meson.project_name())
 schemas_dir = get_option('prefix') / get_option('datadir') / 'glib-2.0' / 'schemas'
-python_dir = python_instllation.get_install_dir()
+python_dir = python_installation.get_install_dir()
 
 message(prefix)
 message(python_dir)
