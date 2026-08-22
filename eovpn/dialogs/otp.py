@@ -3,10 +3,14 @@ eOVPN-Pro 2FA / OTP Verification Dialog
 پنجره ورود رمز یکبار مصرف دو مرحله‌ای (2FA OTP) در eOVPN-Pro
 """
 
+from collections.abc import Callable
+
 import gi
+
 gi.require_version('Gtk', '4.0')
 from gi.repository import Gtk
-from eovpn.eovpn_base import Base, StorageItem
+
+from ..eovpn_base import Base, StorageItem
 
 
 class OTPInputWindow(Base):
@@ -15,7 +19,7 @@ class OTPInputWindow(Base):
     پنجره ورود کد احراز هویت دومرحله‌ای برای سناریوهای چالش پویا و ایستا.
     """
 
-    def __init__(self, input_callback: callable, error_callback: callable) -> None:
+    def __init__(self, input_callback: Callable, error_callback: Callable) -> None:
         super().__init__()
         self.callback = input_callback
         self.error_callback = error_callback
@@ -23,7 +27,7 @@ class OTPInputWindow(Base):
         self.builder = Gtk.Builder()
         self.builder.add_from_resource(self.EOVPN_GRESOURCE_PREFIX + "/ui/" + "otp.ui")
 
-        self.window = self.builder.get_object("OTpMainWindow")
+        self.window = self.builder.get_object("OTPMainWindow")
         self.window.connect("close-request", self.manual_close)
         self.window.set_title("2FA OTP Verification")
         self.window.set_default_size(600, 200)

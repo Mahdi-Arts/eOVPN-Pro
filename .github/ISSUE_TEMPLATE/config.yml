@@ -1,0 +1,9 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security issues / مشکلات امنیتی
+    url: mailto:info@MahdiArts.ir
+    about: "Report vulnerabilities privately — do NOT open a public issue.
+      / آسیب‌پذیری‌ها را خصوصی گزارش دهید — ایسوی عمومی باز نکنید."
+  - name: Official website / وب‌سایت رسمی
+    url: https://www.MahdiArts.ir
+    about: "Project website / وب‌سایت پروژه"

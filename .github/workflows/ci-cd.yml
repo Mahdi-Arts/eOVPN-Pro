@@ -1,14 +1,17 @@
 # eOVPN-Pro CI/CD Pipeline
 # خط لوله یکپارچه‌سازی و استقرار مداوم eOVPN-Pro
 #
-# Jobs:
-#   1. test          - unit tests, linting, metadata validation
+# Jobs / وظایف:
+#   1. test          - unit tests, linting (flake8/ruff/mypy), pip-audit, metadata checks
 #   2. build-deb     - native .deb package (Ubuntu)
-#   3. build-flatpak - sandboxed Flatpak package (tags / manual dispatch)
-#   4. release       - attach .deb to GitHub Releases on version tags
+#   3. build-rpm     - native .rpm package (Fedora container)
+#   4. build-flatpak - sandboxed Flatpak bundle (tags / manual dispatch)
+#   5. release       - attach .deb + .flatpak to GitHub Releases on version tags
 #
-# Only run flatpak job on tags / manual dispatch (builds NetworkManager from source)
-# اجرای ساخت فلت‌پک تنها روی تگ‌ها/اجرای دستی (چون NetworkManager از سورس ساخته می‌شود)
+# The Flatpak job builds NetworkManager and OpenVPN 3 from source, so it only
+# runs on tags or manual dispatch to keep normal pushes fast.
+# جاب فلت‌پک NetworkManager و OpenVPN 3 را از سورس می‌سازد؛ برای سرعت بخشیدن
+# به پوش‌های عادی، تنها روی تگ‌ها یا اجرای دستی فعال می‌شود.
 
 name: eOVPN-Pro CI/CD Pipeline
 
@@ -20,6 +23,13 @@ on:
   pull_request:
     branches: [master, main]
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -46,21 +56,40 @@ jobs:
             libsecret-1-dev \
             libnotify-dev \
             desktop-file-utils \
-            appstream
+            appstream \
+            python3-dev \
+            libcairo2-dev \
+            pkg-config
 
       - name: Install Python dependencies
         run: |
           pip install --upgrade pip
-          pip install flake8 cffi PyGObject
+          pip install flake8 ruff mypy pip-audit cffi PyGObject
 
       - name: Validate desktop and metainfo files
         run: |
           desktop-file-validate data/com.github.mahdi-arts.eovpn-pro.desktop
-          appstreamcli validate data/com.github.mahdi-arts.eovpn-pro.metainfo.xml || true
+          appstreamcli validate --no-net data/com.github.mahdi-arts.eovpn-pro.metainfo.xml
+
+      - name: Verify project metadata consistency
+        run: |
+          python3 scripts/check_project_meta.py
 
       - name: Lint with flake8
         run: |
           python3 -m flake8 eovpn tests run_program_debug.py cffi_compile.py meson_post_install.py
+
+      - name: Lint with ruff
+        run: |
+          python3 -m ruff check .
+
+      - name: Type check with mypy
+        run: |
+          python3 -m mypy --ignore-missing-imports eovpn tests
+
+      - name: Audit Python dependencies for known CVEs
+        run: |
+          python3 -m pip_audit -r requirements.txt --progress-spinner off
 
       - name: Compile all Python sources
         run: |
@@ -116,6 +145,48 @@ jobs:
           name: eovpn-pro-deb
           path: dist/packages/*.deb
 
+  build-rpm:
+    name: Build RPM Package
+    runs-on: ubuntu-24.04
+    needs: test
+    container: fedora:latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install RPM build toolchain
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            rpm-build meson ninja-build gcc pkgconfig \
+            libnm-devel glib2-devel gtk4-devel libadwaita-devel \
+            libsecret-devel libnotify-devel python3-devel python3-cffi \
+            python3-gobject gettext desktop-file-utils appstream
+
+      - name: Prepare rpmbuild tree
+        run: |
+          VERSION=$(sed -n "s/^  version: '\([0-9.]*\)'.*/\1/p" meson.build)
+          mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+          git archive --prefix=eovpn-pro-${VERSION}/ -o /root/rpmbuild/SOURCES/eovpn-pro-${VERSION}.tar.gz HEAD
+          cp dist/rpm/eovpn-pro.spec /root/rpmbuild/SPECS/
+          echo "Source archive: eovpn-pro-${VERSION}.tar.gz"
+
+      - name: Build RPM
+        run: |
+          rpmbuild -ba /root/rpmbuild/SPECS/eovpn-pro.spec
+
+      - name: Collect RPMs
+        run: |
+          mkdir -p dist/packages
+          cp /root/rpmbuild/RPMS/*/*.rpm dist/packages/ || true
+          cp /root/rpmbuild/SRPMS/*.rpm dist/packages/ || true
+          ls -la dist/packages/
+
+      - name: Upload .rpm Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: eovpn-pro-rpm
+          path: dist/packages/*.rpm
+
   build-flatpak:
     name: Build Flatpak Package
     runs-on: ubuntu-24.04
@@ -143,7 +214,7 @@ jobs:
   release:
     name: Publish Release Assets
     runs-on: ubuntu-24.04
-    needs: build-deb
+    needs: [build-deb, build-flatpak]
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
@@ -154,9 +225,17 @@ jobs:
           name: eovpn-pro-deb
           path: dist/packages
 
+      - name: Download Flatpak Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: eovpn-pro-flatpak
+          path: dist/packages
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/packages/*.deb
+          files: |
+            dist/packages/*.deb
+            dist/packages/*.flatpak
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -120,3 +120,68 @@
 ---
 
 *این چرخه بازبینی (Code Review → بازنویسی → تأیید) تا رسیدن به وضعیت سبز کامل (تست، لینت، XML، امنیت) تکرار شد. یا علی مدد 💚*
+
+---
+
+# 🔁 Round 2 — Executed Action Plan (2026-08-22)
+# دور دوم — اجرای کامل طرح اقدام (2026-08-22)
+
+Based on `docs/ANALYSIS.md`, all P0/P1 items and the feasible P2 items were
+implemented in this round. **All quality gates are green locally:**
+بر اساس `docs/ANALYSIS.md`، تمام موارد P0/P1 و موارد ممکن P2 در این دور پیاده‌سازی شدند.
+**همه گیت‌های کیفیت به‌صورت محلی سبز هستند:**
+
+| Check / بررسی | Result / نتیجه |
+|---|---|
+| `python3 -m unittest discover -s tests` | ✅ 35/35 OK |
+| `flake8` (کل کدبیس) | ✅ 0 هشدار |
+| `ruff check .` | ✅ 0 خطا |
+| `mypy --ignore-missing-imports eovpn tests` | ✅ 0 خطا در 25 فایل |
+| `scripts/check_project_meta.py` | ✅ نسخه‌ها/اسکیما/منابع هماهنگ |
+| `compileall` | ✅ بدون خطا |
+
+## ✅ اعمال‌شده (P0 — امنیت)
+1. **`subprojects/networkmanager/eovpn_nm.c`**: پرچم `NM_SETTING_SECRET_FLAG_AGENT_OWNED` — رمز
+   دیگر توسط NetworkManager روی دیسک نوشته نمی‌شود + وُچ‌داگ ۱۵ ثانیه‌ای برای همه عملیات همزمان.
+2. **`eovpn/utils.py`**: تابع `audit_ovpn_content()` (اسکن دایرکتیوهای اجرایی OpenVPN) +
+   سقف حجم برای ایمپورت پوشه محلی + توابع `format_throughput`/`format_data_size`.
+3. **`eovpn/eovpn_base.py`**: نخ‌امنی GTK در `validate_and_load` (همه به‌روزرسانی ویجت‌ها با
+   `GLib.idle_add`) + اتصال نتایج ممیزی به هشدار کاربر + حذف کد مرده `undo_reset_settings` +
+   سانتینل «null» سازگار با رشته خالی.
+4. **`subprojects/openvpn3/openvpn3.c`**: تایم‌اوت ۱۵ ثانیه‌ای روی هر ۱۳ تماس D-Bus.
+5. **`eovpn/main_window.py`**: متد `stop_watch()` بک‌اندها هنگام بستن پنجره (بدون نشت سیگنال D-Bus).
+6. **CI**: استپ `pip-audit` + Dependabot هفتگی.
+
+## ✅ اعمال‌شده (P0 — CI/CD)
+7. **`.github/workflows/ci-cd.yml`** (جدید): jobs — test (unittest/flake8/ruff/mypy/pip-audit/
+   check_project_meta/appstream) → build-deb → build-rpm (Fedora container) → build-flatpak
+   (تگ/دستی) → release (پیوست .deb + .flatpak). `dist/ci/ci-cd.yml` حذف شد.
+8. **`.github/dependabot.yml`** (جدید) — github-actions + pip هفتگی.
+9. **README/PACKAGING** اصلاح شدند تا وضعیت واقعی CI را منعکس کنند.
+
+## ✅ اعمال‌شده (P1 — کیفیت کد و معماری)
+10. پارسر یکپارچه `.ovpn` (DRY): `speed_test.parse_ovpn_remote` به `auto_connect.parse_ovpn_endpoints` واگذار شد.
+11. میکسین مشترک `eovpn/backend/_base.py` (CFFIStringMixin) — حذف تکرار `to_cffi_string`.
+12. `MainWindow.setup()` (~۱۰۰۰ خط) به ۱۰ متد تخصصی شکسته شد (تأیید خط‌به‌خط با اسکن نشانه‌ای).
+13. `SettingsWindow.setup()` (~۳۴۰ خط) به ۵ متد تخصصی شکسته شد.
+14. `eovpn/cascade.py` (جدید): توابع خالص پیشرفت/متادیتا/برچسب دلیل آبشار + تست.
+15. spec تکراری ریشه حذف شد؛ `dist/rpm/eovpn-pro.spec` منبع واحد است (+ man page در %files).
+16. ایمپورت‌های نسبی یکسان شدند (`otp.py`, `backend/openvpn3/dbus.py`).
+17. کد مرده حذف شد؛ تست‌ها به tempfile منتقل شدند.
+18. `format_*` به utils منتقل و fallback مانیتور ترافیک اصلاح شد (تشخیص «بدون اینترفیس VPN»).
+19. `sys.argv` به‌صورت امن بازسازی می‌شود؛ `OTpMainWindow` → `OTPMainWindow`.
+20. `meson test` اضافه شد؛ `eovpn.1` (man page) ساخته و در Meson نصب می‌شود.
+21. `scripts/check_project_meta.py` (جدید): بررسی هماهنگی نسخه/اسکیما/منابع در CI.
+
+## ✅ اعمال‌شده (P2)
+22. `dist/appimage/` — اسکریپت linuxdeploy + مستندات صادقانه (تجربی، خارج از CI).
+23. `CHANGELOG.md` (جدید)؛ قالب‌های Issue (bug/feature/config)؛ FUNDING.yml پاک‌سازی شد.
+24. `SECURITY.md`/`PACKAGING.md`/`README.md`/`docs/RELEASE_CHECKLIST.md` به‌روزرسانی شدند.
+
+## ⚠️ باقی‌مانده برای دورهای بعد
+- بیلد واقعی Flatpak در CI (ساخت اول ~۱ ساعت؛ روی تگ اجرا می‌شود) و اثبات مسیر system bus.
+- بیلد واقعی .rpm روی Fedora و .deb روی Ubuntu (جاب‌های CI آماده‌اند).
+- جایگزینی تدریجی Service-Locator با تزریق وابستگی و انتقال UI به Blueprint (استراتژیک).
+- انتشار تگ `v1.5.0` پس از سبز شدن CI.
+
+*یا علی مدد 💚*

@@ -66,7 +66,7 @@ python3 run_program_debug.py   # requires a desktop session / نیازمند ن�
 
 ## 📦 Packaging Contributions / مشارکت در بسته‌بندی
 
-- Debian packaging lives in `debian/`, RPM spec in `eovpn-pro.spec`, Flatpak in `dist/flatpak/`.
+- Debian packaging lives in `debian/`, RPM spec in `dist/rpm/eovpn-pro.spec`, Flatpak in `dist/flatpak/`.
 - Every packaging change must be documented bilingually in `PACKAGING.md` and validated in CI.
   هر تغییر بسته‌بندی باید به‌صورت دوزبانه در `PACKAGING.md` مستند و در CI اعتبارسنجی شود.
 

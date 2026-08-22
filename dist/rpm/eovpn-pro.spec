@@ -56,8 +56,9 @@ appstreamcli validate --no-net %{buildroot}%{_datadir}/metainfo/com.github.mahdi
 
 %files -f eovpn.lang
 %license LICENSE
-%doc README.md PACKAGING.md
+%doc README.md PACKAGING.md CHANGELOG.md
 %{_bindir}/eovpn
+%{_mandir}/man1/eovpn.1*
 %{python3_sitelib}/eovpn/
 %{_datadir}/eovpn/
 %{_datadir}/applications/com.github.mahdi-arts.eovpn-pro.desktop

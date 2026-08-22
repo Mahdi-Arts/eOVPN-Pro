@@ -1,7 +1,11 @@
-from gi.repository import Gio, GLib, Secret
 import logging
-from eovpn.eovpn_base import Base
-from eovpn.dialogs.otp import OTPInputWindow
+from collections.abc import Callable
+from typing import Any
+
+from gi.repository import Gio, GLib, Secret
+
+from ...dialogs.otp import OTPInputWindow
+from ...eovpn_base import Base
 
 logger = logging.getLogger(__name__)
 
@@ -15,9 +19,9 @@ class OVPN3Dbus(Base):
 
     def __init__(self):
         super().__init__()
-        self.dbus_connection = None
-        self.module = None
-        self.subscriptions = []
+        self.dbus_connection: Any = None
+        self.module: Any = None
+        self.subscriptions: list[int] = []
 
         self.dbus_connection = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
 
@@ -39,7 +43,7 @@ class OVPN3Dbus(Base):
     def set_binding(self, binding):
         self.module = binding
 
-    def subscribe_for_attention(self, session_path: str = None):
+    def subscribe_for_attention(self, session_path: str | None = None):
         # receive signals for ex: auth!
         sid = self.dbus_connection.signal_subscribe(
             "net.openvpn.v3.sessions",
@@ -54,7 +58,7 @@ class OVPN3Dbus(Base):
             "subscribed to AttentionRequired on %s (id = %s)", session_path, sid
         )
 
-    def subscribe_for_events(self, callback: callable, session_path: str = None):
+    def subscribe_for_events(self, callback: Callable, session_path: str | None = None):
         sid = self.dbus_connection.signal_subscribe(
             "net.openvpn.v3.log",
             "net.openvpn.v3.backends",
@@ -95,7 +99,7 @@ class OVPN3Dbus(Base):
         g = OVPN3Constants.ClientAttentionGroup.CHALLENGE_STATIC
         i = 0
 
-        otp = "".join(otp).encode("utf-8")
+        otp_bytes = "".join(str(digit) for digit in otp).encode("utf-8")
         # Security: never log one-time passwords / نکته امنیتی: هرگز کد یکبارمصرف را لاگ نکنید
         logger.info("sending OTP for challenge group %s", g)
 
@@ -104,7 +108,7 @@ class OVPN3Dbus(Base):
             t.value,
             g.value,
             i,
-            otp,
+            otp_bytes,
         )
         self.try_to_connect()
 
@@ -196,13 +200,12 @@ class OVPN3Dbus(Base):
         reason = status.get_child_value(2).get_string()
 
         logger.debug(
-            "AttentionRequired: {}({}) {}({}) {}".format(
-                major,
-                status.get_child_value(0).get_uint32(),
-                minor,
-                status.get_child_value(1).get_uint32(),
-                reason,
-            )
+            "AttentionRequired: %s(%s) %s(%s) %s",
+            major,
+            status.get_child_value(0).get_uint32(),
+            minor,
+            status.get_child_value(1).get_uint32(),
+            reason,
         )
 
         attention = self.get_attention()
@@ -255,13 +258,12 @@ class OVPN3Dbus(Base):
         minor = OVPN3Constants.StatusMinor(status.get_child_value(1).get_uint32())
         reason = status.get_child_value(2).get_string()
         logger.debug(
-            "StatusChange: {}({}) {}({}) {}".format(
-                major,
-                status.get_child_value(0).get_uint32(),
-                minor,
-                status.get_child_value(1).get_uint32(),
-                reason,
-            )
+            "StatusChange: %s(%s) %s(%s) %s",
+            major,
+            status.get_child_value(0).get_uint32(),
+            minor,
+            status.get_child_value(1).get_uint32(),
+            reason,
         )
 
         if (

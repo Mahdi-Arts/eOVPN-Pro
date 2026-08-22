@@ -58,4 +58,14 @@ install_subdir(
   install_dir: python_dir
 )
 
+# Manual page / صفحه راهنما
+install_data(
+  'eovpn.1',
+  install_dir: join_paths(get_option('mandir'), 'man1')
+)
+
+# Offline unit tests runnable via `meson test` as well
+# تست‌های واحد آفلاین؛ با دستور meson test نیز قابل اجرا هستند
+test('unit', python_installation, args: ['-m', 'unittest', 'discover', '-s', 'tests', '-v'])
+
 meson.add_install_script('meson_post_install.py')

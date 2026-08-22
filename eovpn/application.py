@@ -7,13 +7,14 @@ and Right-to-Left (RTL) layout direction.
 راه‌اندازی محیط GTK4/Adwaita، پارامترهای خط فرمان، چندزبانه بودن و تنظیم چیدمان راست‌به‌چپ (RTL).
 """
 
-import sys
 import logging
+import sys
 
 import gi
+
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Gtk, GLib, Gio, Gdk
+from gi.repository import Gdk, Gio, GLib, Gtk
 
 from .eovpn_base import Base
 from .main_window import MainWindow
@@ -28,7 +29,7 @@ class Eovpn(Base):
     """
 
     def __init__(self, app: Gtk.Application):
-        super(Eovpn, self).__init__()
+        super().__init__()
         self.app = app
 
     def start(self) -> None:
@@ -84,11 +85,11 @@ def launch_eovpn() -> int:
     app.connect('command-line', do_command_line)
 
     # Strip legacy command-line flags that GLib option parsing does not
-    # understand, so they cannot cause a startup failure.
-    # حذف آرگومان‌های قدیمی که پارسر GLib آن‌ها را نمی‌شناسد تا باعث خطای راه‌اندازی نشوند
-    for legacy_flag in ("-c", "--config"):
-        while legacy_flag in sys.argv:
-            sys.argv.remove(legacy_flag)
+    # understand, so they cannot cause a startup failure. The list is rebuilt
+    # instead of mutated while iterating (safer and avoids index skips).
+    # حذف آرگومان‌های قدیمی که پارسر GLib آن‌ها را نمی‌شناسد تا باعث خطای
+    # راه‌اندازی نشوند. فهرست بازسازی می‌شود (به‌جای تغییر حین پیمایش).
+    sys.argv[:] = [arg for arg in sys.argv if arg not in ("-c", "--config")]
 
     return app.run(sys.argv)
 

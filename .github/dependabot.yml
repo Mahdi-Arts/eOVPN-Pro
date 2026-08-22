@@ -1,0 +1,29 @@
+# eOVPN-Pro Dependabot Configuration
+# پیکربندی Dependabot برای به‌روزرسانی خودکار وابستگی‌ها و کشف CVE
+
+version: 2
+updates:
+  # GitHub Actions workflows / وورک‌فلوهای اکشن‌های گیت‌هاب
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+
+  # Python dependencies (runtime + dev) / وابستگی‌های پایتون
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "deps"
+    # Runtime pins are intentionally loose; Dependabot keeps them current.
+    # پین‌های زمان اجرا عمداً باز هستند؛ Dependabot آن‌ها را به‌روز نگه می‌دارد.
+    ignore:
+      - dependency-name: "cffi"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "PyGObject"
+        update-types: ["version-update:semver-major"]

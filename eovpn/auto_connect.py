@@ -99,7 +99,7 @@ def parse_ovpn_endpoints(file_path: str) -> list[tuple[str, int, str]]:
     endpoints: list[tuple[str, int, str]] = []
     file_proto = DEFAULT_OVPN_PROTO
     try:
-        with open(file_path, "r", encoding="utf-8", errors="ignore") as handle:
+        with open(file_path, encoding="utf-8", errors="ignore") as handle:
             for raw in handle:
                 line = raw.strip()
                 if not line or line.startswith("#") or line.startswith(";"):

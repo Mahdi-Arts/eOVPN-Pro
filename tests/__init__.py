@@ -1,5 +1,5 @@
-import sys
 import os
+import sys
 
 # Add repo root and eovpn package to Python path for unit testing
 # افزودن مسیر پکیج به پایتون جهت اجرای تست‌های خودکار

@@ -7,34 +7,46 @@ concurrent speed tests, latency-based sorting, and connection orchestration.
 مدیریت لیست کانفیگ‌ها، مانیتورینگ زنده ترافیک کارت شبکه، تست پینگ همزمان و اتصال به VPN.
 """
 
+import contextlib
+import gettext
+import logging
 import os
 import sys
-import time
-import logging
-import gettext
-import webbrowser
 import threading
+import time
+import webbrowser
 
-from gi.repository import Gtk, Gio, GLib, Gdk, Adw, Pango
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango
 
-from .settings_window import SettingsWindow
-from .connection_manager import NetworkManager, OpenVPN3
-from .ip_lookup.lookup import Lookup
-from .utils import matches_server_filter, ovpn_is_auth_required
-from .eovpn_base import Base, StorageItem, ConfigRow
 from .auto_connect import (
-    CascadePhase,
     DISCONNECT_SETTLE_SECONDS,
     MAX_CASCADE_CANDIDATES,
     PROGRESS_TICK_MS,
     PROTO_ALL,
     PROTO_TCP,
     PROTO_UDP,
+    CascadePhase,
     build_cascade_queue,
     collect_visible_filenames,
     compute_attempt_timeout,
     format_proto_badge,
     parse_ovpn_protocols,
+)
+from .cascade import (
+    cascade_banner_meta,
+    cascade_progress_fraction,
+    cascade_reason_label,
+    cascade_remaining_seconds,
+)
+from .connection_manager import NetworkManager, OpenVPN3
+from .eovpn_base import Base, ConfigRow, StorageItem
+from .ip_lookup.lookup import Lookup
+from .settings_window import SettingsWindow
+from .utils import (
+    format_data_size,
+    format_throughput,
+    matches_server_filter,
+    ovpn_is_auth_required,
 )
 
 logger = logging.getLogger(__name__)
@@ -60,6 +72,10 @@ class MainWindow(Base, Gtk.Builder):
         self.window.set_title(self.APP_NAME)
         self.window.set_icon_name(self.APP_ID)
 
+        # Release D-Bus subscriptions when the window closes (no signal leaks).
+        # آزادسازی اشتراک‌های D-Bus هنگام بستن پنجره (بدون نشت سیگنال).
+        self.window.connect("close-request", self._on_window_close)
+
         self.toast_overlay = Adw.ToastOverlay()
 
         self.app.add_window(self.window)
@@ -78,6 +94,14 @@ class MainWindow(Base, Gtk.Builder):
         self.search_text: str = ""
         self.filter_mode: str = "all"
         self.proto_mode: str = PROTO_ALL
+        # Favorites are cached once per refresh instead of reading GSettings
+        # for every row on every filter pass.
+        # موردعلاقه‌ها به‌جای خواندن GSettings برای هر ردیف، در هر بازسازی کش می‌شوند.
+        self._favorites_cache: set[str] = set()
+
+        # Declared here so mypy knows the type before builder methods run.
+        # اعلام نوع در اینجا تا mypy پیش از اجرای متدهای سازنده، نوع را بداند.
+        self.spinner: Gtk.Spinner
 
         # Cascading auto-connect state / وضعیت اتصال آبشاری به سریع‌ترین‌ها
         self._cascade_active = False
@@ -110,6 +134,54 @@ class MainWindow(Base, Gtk.Builder):
 
         self.lookup = Lookup()
 
+    def _on_window_close(self, *args) -> bool:
+        """
+        Cleans up D-Bus signal subscriptions before the window closes.
+        پاک‌سازی اشتراک‌های سیگنال D-Bus پیش از بسته‌شدن پنجره.
+        """
+        try:
+            cm = self.retrieve("CM")["instance"]
+            stop = getattr(cm, "stop_watch", None)
+            if callable(stop):
+                stop()
+        except Exception as e:
+            logger.debug("Failed to stop connection watch on close: %s", e)
+        return False  # allow the window to close / اجازه بسته‌شدن پنجره داده می‌شود
+
+    def notify_config_audit(self, results: dict[str, list[str]]):
+        """
+        Shows a non-blocking security warning listing imported configs that
+        contain executable OpenVPN directives (called from the main thread).
+        نمایش هشدار امنیتی غیرمسدودکننده درباره کانفیگ‌های واردشده‌ای که
+        دایرکتیوهای اجرایی OpenVPN دارند (فقط از نخ اصلی فراخوانی شود).
+
+        :param results: Mapping config filename -> sorted suspicious directives.
+        """
+        if not results:
+            return
+        total = len(results)
+        lines = [
+            gettext.gettext(
+                "{} imported configuration(s) contain executable OpenVPN "
+                "directives. Only connect to configs from trusted sources."
+            ).format(total),
+            "",
+        ]
+        for name, directives in list(results.items())[:5]:
+            lines.append("• {}: {}".format(name, ", ".join(directives)))
+        if total > 5:
+            lines.append(gettext.gettext("… and {} more").format(total - 5))
+
+        dialog = Gtk.AlertDialog.new(
+            gettext.gettext("Security Warning — Executable Config Directives")
+        )
+        dialog.set_detail("\n".join(lines))
+        dialog.set_buttons([gettext.gettext("I Understand")])
+        try:
+            dialog.choose(self.window, None, None, None)
+        except Exception as e:
+            logger.debug("Failed to show audit dialog: %s", e)
+
     def get_selected_config(self) -> str | None:
         """
         Retrieves the filename of the currently selected configuration.
@@ -130,22 +202,20 @@ class MainWindow(Base, Gtk.Builder):
         مدیریت تغییر ردیف انتخابی و بررسی نیازمندی‌های نام کاربری و کلمه عبور.
         """
         if self.selected_row and hasattr(self.selected_row, "set_edit_visible"):
-            try:
+            with contextlib.suppress(Exception):
                 self.selected_row.set_edit_visible(False)
-            except Exception:
-                pass
 
         self.selected_row = row
         if row and hasattr(row, "set_edit_visible"):
             row.set_edit_visible(True)
 
-        if (selected := self.get_selected_config()) is not None:
-            if self.get_setting(self.SETTING.REQ_AUTH) is True:
-                config_path = os.path.join(self.EOVPN_OVPN_CONFIG_DIR, selected)
-                if ovpn_is_auth_required(config_path) and self.get_setting(self.SETTING.AUTH_USER) is None:
-                    self.connect_btn.set_sensitive(False)
-                    self.connect_btn.set_tooltip_text(gettext.gettext("Authentication Required!"))
-                    return
+        selected = self.get_selected_config()
+        if selected is not None and self.get_setting(self.SETTING.REQ_AUTH) is True:
+            config_path = os.path.join(self.EOVPN_OVPN_CONFIG_DIR, selected)
+            if ovpn_is_auth_required(config_path) and self.get_setting(self.SETTING.AUTH_USER) is None:
+                self.connect_btn.set_sensitive(False)
+                self.connect_btn.set_tooltip_text(gettext.gettext("Authentication Required!"))
+                return
 
         self.connect_btn.set_sensitive(True)
         self.connect_btn.set_tooltip_text("")
@@ -177,29 +247,48 @@ class MainWindow(Base, Gtk.Builder):
 
     def setup(self):
         """
-        Constructs and wires the full user interface.
-        ساخت و اتصال اجزای رابط کاربری.
+        Constructs and wires the full user interface by delegating
+        to focused builder methods (kept small for maintainability).
+        ساخت و اتصال اجزای رابط کاربری با تفویض به متدهای سازنده
+        تخصصی (برای نگهداری‌پذیری، هر بخش کوچک نگه داشته شده است).
         """
+
+        self._build_layout()
+        self._build_config_list()
+        self._build_pro_toolbar()
+        self._build_filter_bar()
+        self._build_cascade_banner()
+        self._build_status_panel()
+        self._init_progress_bar()
+        self._build_actions_and_menu()
+        self._restore_last_cursor()
+        self._finalize_layout()
+
+    def _build_layout(self):
         self.box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
         self.inner_left = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
         self.inner_right = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
         self.paned = Gtk.Paned.new(Gtk.Orientation.HORIZONTAL)
 
-        def update_layout():
-            if self.get_setting(self.SETTING.LAYOUT) == "card-h":
-                self.paned.set_orientation(Gtk.Orientation.HORIZONTAL)
-                self.inner_left.set_size_request(220, -1)
-                self.window.set_default_size(800, 400)
-            else:
-                self.paned.set_orientation(Gtk.Orientation.VERTICAL)
-                self.inner_left.set_size_request(-1, 120)
-                self.window.set_default_size(400, 800)
-
-        update_layout()
+        self._update_layout()
         self.paned.set_start_child(self.inner_left)
         self.paned.set_end_child(self.inner_right)
 
-        # ---------------------------------------------------------
+    def _update_layout(self):
+        """
+        Applies the saved layout mode (card-h: side-by-side, card-v: stacked).
+        اعمال حالت چیدمان ذخیره‌شده (افقی یا عمودی).
+        """
+        if self.get_setting(self.SETTING.LAYOUT) == "card-h":
+            self.paned.set_orientation(Gtk.Orientation.HORIZONTAL)
+            self.inner_left.set_size_request(220, -1)
+            self.window.set_default_size(800, 400)
+        else:
+            self.paned.set_orientation(Gtk.Orientation.VERTICAL)
+            self.inner_left.set_size_request(-1, 120)
+            self.window.set_default_size(400, 800)
+
+    def _build_config_list(self):
         # Left Panel (Configurations & Speed Test Toolbar)
         # پنل سمت چپ (لیست کانفیگ‌ها و نوار ابزار تست سرعت)
         # ---------------------------------------------------------
@@ -242,6 +331,7 @@ class MainWindow(Base, Gtk.Builder):
         # Set up sorting function / مرتب‌سازی هوشمند
         self.list_box.set_sort_func(self.list_box_sort_func)
 
+    def _build_pro_toolbar(self):
         # Pro Features Toolbar / نوار ابزار قابلیت‌های حرفه‌ای
         self.pro_box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 6)
         self.pro_box.set_margin_start(10)
@@ -270,6 +360,7 @@ class MainWindow(Base, Gtk.Builder):
         self.pro_box.append(self.sort_btn)
         self.pro_box.append(self.fastest_btn)
 
+    def _build_filter_bar(self):
         # ---------------------------------------------------------
         # Search & Filter Toolbar / نوار ابزار جستجو و فیلتر سرورها
         # ---------------------------------------------------------
@@ -322,6 +413,7 @@ class MainWindow(Base, Gtk.Builder):
         self.filter_bar.append(self.proto_dropdown)
         self.filter_bar.append(self.filter_count)
 
+    def _build_cascade_banner(self):
         # Cascade status banner / بنر وضعیت اتصال آبشاری
         self.cascade_revealer = Gtk.Revealer.new()
         self.cascade_revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_DOWN)
@@ -368,6 +460,7 @@ class MainWindow(Base, Gtk.Builder):
         self.inner_left.append(self.cascade_revealer)
         self.inner_left.append(self.scrolled_window)
 
+    def _build_status_panel(self):
         # ---------------------------------------------------------
         # Right Panel (Status, IP, Traffic Card, and Connect Button)
         # پنل سمت راست (وضعیت، آدرس آی‌پی، کارت مانیتورینگ و دکمه اتصال)
@@ -389,15 +482,15 @@ class MainWindow(Base, Gtk.Builder):
         self.ip_addr.set_valign(Gtk.Align.CENTER)
         self.ip_addr.add_css_class("ip_text")
         self.ip_addr.set_vexpand(True)
-        cpy_btn = Gtk.Button.new_from_icon_name("edit-copy-symbolic")
-        cpy_btn.set_valign(Gtk.Align.CENTER)
-        cpy_btn.set_halign(Gtk.Align.CENTER)
-        cpy_btn.set_tooltip_text(gettext.gettext("Copy IP Address"))
-        cpy_btn.add_css_class("flat")
+        self.copy_ip_btn = Gtk.Button.new_from_icon_name("edit-copy-symbolic")
+        self.copy_ip_btn.set_valign(Gtk.Align.CENTER)
+        self.copy_ip_btn.set_halign(Gtk.Align.CENTER)
+        self.copy_ip_btn.set_tooltip_text(gettext.gettext("Copy IP Address"))
+        self.copy_ip_btn.add_css_class("flat")
 
         h_box.append(self.ip_text)
         h_box.append(self.ip_addr)
-        h_box.append(cpy_btn)
+        h_box.append(self.copy_ip_btn)
         self.inner_right.append(h_box)
 
         # Traffic & Speed Card Panel / کادر مدرن مانیتورینگ ترافیک زنده
@@ -484,6 +577,7 @@ class MainWindow(Base, Gtk.Builder):
         self.connect_box.append(self.pause_resume_btn)
         self.inner_right.append(self.connect_box)
 
+    def _init_progress_bar(self):
         # ---------------------------------------------------------
         # Bottom Progress Bar / نوار پیشرفت پایین
         # ---------------------------------------------------------
@@ -497,6 +591,7 @@ class MainWindow(Base, Gtk.Builder):
         else:
             self.progress_bar.add_css_class("progress-yellow")
 
+    def _build_actions_and_menu(self):
         def open_about_dialog(widget, data):
             about = Gtk.AboutDialog.new()
             about.set_logo_icon_name(self.APP_ID)
@@ -528,7 +623,7 @@ class MainWindow(Base, Gtk.Builder):
             logger.info("Layout updated to: %s", value)
             action.set_state(value)
             self.set_setting(self.SETTING.LAYOUT, str(value).replace("'", ""))
-            update_layout()
+            self._update_layout()
 
         action = Gio.SimpleAction.new_stateful(
             "radiogroup",
@@ -649,6 +744,7 @@ class MainWindow(Base, Gtk.Builder):
         self.spinner = Gtk.Spinner()
         header_bar.pack_end(self.spinner)
 
+    def _restore_last_cursor(self):
         if (cur := self.get_setting(self.SETTING.LAST_CONNECTED_CURSOR)) != -1:
             try:
                 rows = self.retrieve(StorageItem.LISTBOX_ROWS)
@@ -661,6 +757,7 @@ class MainWindow(Base, Gtk.Builder):
             except Exception as e:
                 logger.error("Error restoring cursor: %s", e)
 
+    def _finalize_layout(self):
         self.box.append(self.paned)
         self.box.append(self.progress_bar)
         self.toast_overlay.set_child(self.box)
@@ -674,7 +771,7 @@ class MainWindow(Base, Gtk.Builder):
                 clipboard.set(self.ip_addr.get_label())
             self.toast_overlay.add_toast(toast)
 
-        cpy_btn.connect("clicked", copy_ip)
+        self.copy_ip_btn.connect("clicked", copy_ip)
 
     def list_box_sort_func(self, row1: Gtk.ListBoxRow, row2: Gtk.ListBoxRow, *args) -> int:
         """
@@ -721,7 +818,7 @@ class MainWindow(Base, Gtk.Builder):
             filename,
             search=self.search_text,
             mode=self.filter_mode,
-            favorites=self.get_favorites(),
+            favorites=self._favorites_cache,
             latencies=self.latencies,
             proto_mode=self.proto_mode,
             protocols=self._protocols_for(filename),
@@ -771,6 +868,7 @@ class MainWindow(Base, Gtk.Builder):
 
     def _refresh_filter(self):
         """Notifies the filter model and updates the visible counter."""
+        self._favorites_cache = self.get_favorites()
         f = getattr(self, "list_filter", None)
         if f is not None:
             f.changed(Gtk.FilterChange.DIFFERENT)
@@ -888,7 +986,7 @@ class MainWindow(Base, Gtk.Builder):
         valid_latencies = {k: v for k, v in self.latencies.items() if v is not None}
         if not valid_latencies:
             return None
-        fastest_file = min(valid_latencies, key=valid_latencies.get)
+        fastest_file = min(valid_latencies, key=valid_latencies.__getitem__)
         if self._select_server_by_name(fastest_file):
             return fastest_file
         return None
@@ -1102,7 +1200,7 @@ class MainWindow(Base, Gtk.Builder):
         name = self._cascade_current or ""
         rtt = (self.latencies or {}).get(name)
         proto = format_proto_badge(self._protocols_for(name)) if name else ""
-        remaining = max(0, int(round(self._cascade_deadline - time.monotonic())))
+        remaining = cascade_remaining_seconds(self._cascade_deadline, time.monotonic())
 
         if status:
             self.cascade_title.set_text(status)
@@ -1112,17 +1210,20 @@ class MainWindow(Base, Gtk.Builder):
             self.cascade_title.set_text(
                 gettext.gettext("Trying {}{}").format(name, suffix)
             )
-        self.cascade_meta.set_text(
-            gettext.gettext("{}/{}  ·  {}s left").format(idx, len(self._cascade_queue) or total, remaining)
-        )
+        self.cascade_meta.set_text(cascade_banner_meta(idx - 1, total, remaining))
 
         attempt_timeout = compute_attempt_timeout(rtt)
         elapsed = attempt_timeout - max(0.0, self._cascade_deadline - time.monotonic())
-        frac_this = min(1.0, max(0.0, elapsed / max(attempt_timeout, 0.001)))
-        overall = (self._cascade_index + frac_this) / total
-        self.cascade_bar.set_fraction(min(1.0, overall))
+        overall = cascade_progress_fraction(self._cascade_index, total, elapsed, attempt_timeout)
+        self.cascade_bar.set_fraction(overall)
         if hasattr(self, "progress_bar") and self._cascade_phase == CascadePhase.CONNECTING:
-            self.progress_bar.set_fraction(min(0.92, (self._cascade_index + 0.4) / total))
+            # Keep the historical 0.92 ceiling so the bar never looks "done"
+            # while attempts are still running.
+            # حفظ سقف تاریخی 0.92 تا نوار هرگز هنگام تلاش‌های در جریان «کامل» دیده نشود.
+            self.progress_bar.set_fraction(min(
+                0.92,
+                cascade_progress_fraction(self._cascade_index, total, 0.4 * attempt_timeout, attempt_timeout),
+            ))
 
     def _arm_timeout_and_ticks(self):
         self._disarm_cascade_timers(keep_settle=False)
@@ -1138,10 +1239,8 @@ class MainWindow(Base, Gtk.Builder):
         for attr in attrs:
             source_id = getattr(self, attr, None)
             if source_id:
-                try:
+                with contextlib.suppress(Exception):
                     GLib.source_remove(source_id)
-                except Exception:
-                    pass
                 setattr(self, attr, None)
 
     def _on_cascade_tick(self, gen: int) -> bool:
@@ -1186,10 +1285,8 @@ class MainWindow(Base, Gtk.Builder):
 
     def _arm_settle(self, callback):
         if self._cascade_settle_id:
-            try:
+            with contextlib.suppress(Exception):
                 GLib.source_remove(self._cascade_settle_id)
-            except Exception:
-                pass
             self._cascade_settle_id = None
         gen = self._cascade_gen
 
@@ -1214,7 +1311,7 @@ class MainWindow(Base, Gtk.Builder):
         self._disarm_cascade_timers()
         self._toast(
             gettext.gettext("Could not connect to {} ({}) — next server…").format(
-                current or "?", self._cascade_reason_label(reason)
+                current or "?", cascade_reason_label(reason)
             )
         )
 
@@ -1232,17 +1329,6 @@ class MainWindow(Base, Gtk.Builder):
             logger.debug("Cascade disconnect on advance: %s", exc)
 
         self._arm_settle(self._try_current_server)
-
-    def _cascade_reason_label(self, reason: str) -> str:
-        labels = {
-            "timeout": gettext.gettext("timed out"),
-            "error": gettext.gettext("error"),
-            "auth": gettext.gettext("authentication failed"),
-            "disconnect": gettext.gettext("disconnected"),
-            "missing": gettext.gettext("file missing"),
-            "unreachable": gettext.gettext("unreachable"),
-        }
-        return labels.get(reason, reason)
 
     def _cascade_on_connection_event(self, result, error=None) -> bool:
         """
@@ -1411,31 +1497,41 @@ class MainWindow(Base, Gtk.Builder):
         """
         Reads kernel network statistics from /proc/net/dev and calculates live throughput.
         محاسبه نرخ لحظه‌ای دانلود و آپلود از شمارنده‌های هسته لینوکس.
+
+        The fallback to all non-loopback interfaces only kicks in when no VPN
+        interface exists at all — a present-but-idle VPN interface must show
+        real zeroes instead of borrowing other interfaces' counters.
+        بازگشت به همه اینترفیس‌های غیر loopback فقط وقتی انجام می‌شود که هیچ
+        اینترفیس VPN وجود نداشته باشد؛ اینترفیس VPNِ موجود ولی بی‌ترافیک باید
+        صفر واقعی نشان دهد، نه شمارنده اینترفیس‌های دیگر.
         """
         try:
             rx, tx = 0, 0
+            vpn_interface_found = False
             if os.path.exists("/proc/net/dev"):
-                with open("/proc/net/dev", "r") as f:
+                with open("/proc/net/dev") as f:
                     for line in f:
                         if ":" in line:
                             parts = line.split(":")
-                            if len(parts) == 2:
-                                if any(x in parts[0] for x in ["tun", "tap", "ovpn", "ppp", "wg"]):
-                                    stats = parts[1].split()
-                                    rx += int(stats[0])
-                                    tx += int(stats[8])
+                            if len(parts) == 2 and any(
+                                x in parts[0] for x in ("tun", "tap", "ovpn", "ppp", "wg")
+                            ):
+                                vpn_interface_found = True
+                                stats = parts[1].split()
+                                rx += int(stats[0])
+                                tx += int(stats[8])
 
-            if rx == 0 and tx == 0:
-                if os.path.exists("/proc/net/dev"):
-                    with open("/proc/net/dev", "r") as f:
-                        for line in f:
-                            if ":" in line:
-                                parts = line.split(":")
-                                if len(parts) == 2:
-                                    if "lo" not in parts[0]:
-                                        stats = parts[1].split()
-                                        rx += int(stats[0])
-                                        tx += int(stats[8])
+            if not vpn_interface_found and os.path.exists("/proc/net/dev"):
+                # No VPN interface on this system: fall back to overall traffic.
+                # اینترفسی VPN وجود ندارد: بازگشت به ترافیک کلی سیستم.
+                with open("/proc/net/dev") as f:
+                    for line in f:
+                        if ":" in line:
+                            parts = line.split(":")
+                            if len(parts) == 2 and "lo" not in parts[0]:
+                                stats = parts[1].split()
+                                rx += int(stats[0])
+                                tx += int(stats[8])
 
             now = time.time()
             dt = now - getattr(self, "last_time", now - 1.0)
@@ -1448,28 +1544,9 @@ class MainWindow(Base, Gtk.Builder):
             if last_rx > 0 and last_tx > 0:
                 dl_speed = (rx - last_rx) / dt
                 ul_speed = (tx - last_tx) / dt
-
-                def format_speed(bytes_per_sec: float) -> str:
-                    if bytes_per_sec < 1024:
-                        return f"{bytes_per_sec:.1f} B/s"
-                    elif bytes_per_sec < 1024 * 1024:
-                        return f"{bytes_per_sec / 1024:.1f} KB/s"
-                    else:
-                        return f"{bytes_per_sec / (1024 * 1024):.1f} MB/s"
-
-                def format_size(bytes_total: float) -> str:
-                    if bytes_total < 1024:
-                        return f"{bytes_total} B"
-                    elif bytes_total < 1024 * 1024:
-                        return f"{bytes_total / 1024:.1f} KB"
-                    elif bytes_total < 1024 * 1024 * 1024:
-                        return f"{bytes_total / (1024 * 1024):.1f} MB"
-                    else:
-                        return f"{bytes_total / (1024 * 1024 * 1024):.1f} GB"
-
-                self.dl_speed_label.set_text(format_speed(dl_speed))
-                self.ul_speed_label.set_text(format_speed(ul_speed))
-                self.total_traffic_label.set_text(format_size(rx + tx))
+                self.dl_speed_label.set_text(format_throughput(dl_speed))
+                self.ul_speed_label.set_text(format_throughput(ul_speed))
+                self.total_traffic_label.set_text(format_data_size(rx + tx))
 
             self.last_rx = rx
             self.last_tx = tx
@@ -1533,9 +1610,8 @@ class MainWindow(Base, Gtk.Builder):
         Handles connection status transitions and D-Bus signals.
         مدیریت تغییرات وضعیت تونل VPN و پردازش رویدادهای D-Bus.
         """
-        if getattr(self, "_cascade_active", False):
-            if self._cascade_on_connection_event(result, error):
-                return
+        if getattr(self, "_cascade_active", False) and self._cascade_on_connection_event(result, error):
+            return
 
         if error is not None:
             logger.error("Connection error: %s", error)
@@ -1591,9 +1667,8 @@ class MainWindow(Base, Gtk.Builder):
 
             self.swap_pause_btn_signal_resume_to_pause()
 
-            if self.CM().get_name().lower() == "openvpn3":
-                if self.CM().config_path is not None:
-                    self.pause_resume_btn.set_visible(True)
+            if self.CM().get_name().lower() == "openvpn3" and self.CM().config_path is not None:
+                self.pause_resume_btn.set_visible(True)
 
         else:
             self.stop_network_monitor()

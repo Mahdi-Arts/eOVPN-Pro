@@ -6,10 +6,10 @@ Measures socket-level round-trip time (TCP latency) to remote OpenVPN endpoints 
 محاسبه همزمان و چندنخی میزان تأخیر دست‌دهی شبکه (TCP RTT) به سرورهای OpenVPN.
 """
 
+import logging
 import os
 import socket
 import time
-import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 logger = logging.getLogger(__name__)
@@ -18,29 +18,21 @@ logger = logging.getLogger(__name__)
 def parse_ovpn_remote(file_path: str) -> list[tuple[str, int]]:
     """
     Parses an .ovpn file and extracts the list of (host, port) from remote directives.
+
+    Delegates to the single shared parser in :mod:`eovpn.auto_connect` so the
+    endpoint grammar (remote/proto tokens, UDP default) is defined exactly once
+    (DRY). The return type is unchanged for backward compatibility.
     پارس کردن فایل .ovpn و استخراج آدرس سرورها و پورت‌های مقصد از خطوط remote.
+    این تابع به پارسر مشترک در ماژول auto_connect واگذار می‌شود تا گرامر
+    اندپوینت‌ها فقط یک بار تعریف شود (اصل DRY)؛ نوع خروجی برای سازگاری
+    با کدهای قبلی تغییری نکرده است.
 
     :param file_path: Path to the .ovpn configuration file.
     :return: List of (host, port) tuples.
     """
-    remotes = []
-    try:
-        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#") or line.startswith(";"):
-                    continue
-                parts = line.split()
-                if parts and parts[0] == "remote":
-                    if len(parts) > 1:
-                        host = parts[1]
-                        port = 1194  # Standard default OpenVPN port / پورت پیش‌فرض
-                        if len(parts) > 2 and parts[2].isdigit():
-                            port = int(parts[2])
-                        remotes.append((host, port))
-    except Exception as e:
-        logger.error("Error parsing %s: %s", file_path, e)
-    return remotes
+    from .auto_connect import parse_ovpn_endpoints  # Deferred to avoid cycles
+
+    return [(host, port) for host, port, _proto in parse_ovpn_endpoints(file_path)]
 
 
 def ping_host(host: str, port: int, timeout: float = 1.5) -> float | None:
@@ -82,9 +74,8 @@ def test_single_ovpn(file_path: str, timeout: float = 1.5) -> float | None:
     best_rtt = None
     for host, port in remotes:
         rtt = ping_host(host, port, timeout=timeout)
-        if rtt is not None:
-            if best_rtt is None or rtt < best_rtt:
-                best_rtt = rtt
+        if rtt is not None and (best_rtt is None or rtt < best_rtt):
+            best_rtt = rtt
     return best_rtt
 
 

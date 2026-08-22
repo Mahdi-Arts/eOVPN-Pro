@@ -1,13 +1,8 @@
 # These are supported funding model platforms / پلتفرم‌های حمایت مالی پشتیبانی‌شده
+#
+# eOVPN-Pro is developed with love and is free forever. If you would like to
+# support the project, please use the direct donation link below.
+# eOVPN-Pro با عشق توسعه می‌یابد و همیشه رایگان می‌ماند؛ برای حمایت مالی از
+# لینک مستقیم زیر استفاده کنید.
 
-github: # Replace with up to 4 GitHub Sponsors-enabled usernames e.g., [user1, user2]
-patreon: # Replace with a single Patreon username
-open_collective: # Replace with a single Open Collective username
-tidelift: # Replace with a single Tidelift platform-name/package-name e.g., npm/babel
-community_bridge: # Replace with a single Community Bridge project-name e.g., cloud-foundry
-liberapay: # Replace with a single Liberapay username
-issuehunt: # Replace with a single IssueHunt username
-otechie: # Replace with a single Otechie username
-
-# Direct donation link of the project / لینک مستقیم حمایت مالی پروژه
 custom: ["https://www.MahdiArts.ir/donate"]

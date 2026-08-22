@@ -12,13 +12,19 @@ with `.deb` and Flatpak artifacts.
 
 - [ ] `python3 -m unittest discover -s tests -v` — all green / همه تست‌ها سبز
 - [ ] `python3 -m flake8 eovpn tests run_program_debug.py cffi_compile.py meson_post_install.py` — zero warnings / بدون هشدار
+- [ ] `python3 -m ruff check .` — clean / تمیز
+- [ ] `python3 -m mypy --ignore-missing-imports eovpn tests` — clean / تمیز
+- [ ] `python3 scripts/check_project_meta.py` — versions/schema/resources in sync
+  بررسی خودکار هماهنگی نسخه‌ها، اسکیما و منابع
+- [ ] `python3 -m pip_audit -r requirements.txt` — no known CVEs / بدون CVE شناخته‌شده
 - [ ] `desktop-file-validate data/com.github.mahdi-arts.eovpn-pro.desktop`
-- [ ] `appstreamcli validate data/com.github.mahdi-arts.eovpn-pro.metainfo.xml`
+- [ ] `appstreamcli validate --no-net data/com.github.mahdi-arts.eovpn-pro.metainfo.xml`
 - [ ] `po/*.po` translations up-to-date / ترجمه‌ها به‌روز
-- [ ] Version bumped in: `meson.build` (single source), `debian/changelog`, `eovpn-pro.spec`, `dist/rpm/eovpn-pro.spec`
-  نسخه در این فایل‌ها هماهنگ شده باشد (منبع اصلی `meson.build` است)
-- [ ] New changelog entry added to `metainfo.xml` `<releases>`
-- [ ] `REVIEW.md` / `QA_REPORT.md` re-checked for unresolved P0/P1 items
+- [ ] Version bumped in: `meson.build` (single source), `debian/changelog`, `dist/rpm/eovpn-pro.spec`,
+  `data/*.metainfo.xml`, `README.md` badge — then run `scripts/check_project_meta.py`
+  نسخه در این فایل‌ها هماهنگ شود (منبع اصلی `meson.build` است) و سپس بررسی خودکار اجرا شود
+- [ ] New changelog entry added to `metainfo.xml` `<releases>` and `CHANGELOG.md`
+- [ ] `QA_REPORT.md` re-checked for unresolved P0/P1 items
 
 ## 📦 Build .deb Locally / ساخت بسته دبیان به‌صورت محلی
 

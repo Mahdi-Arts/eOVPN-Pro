@@ -1,0 +1,71 @@
+name: Bug Report
+description: Report a bug in eOVPN-Pro / گزارش خطا در eOVPN-Pro
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! / از گزارش شما سپاسگزاریم!
+        **Security issues must NOT be filed here** — email info@MahdiArts.ir instead.
+        **مشکلات امنیتی را اینجا ثبت نکنید** — به‌جای آن به info@MahdiArts.ir ایمیل بزنید.
+  - type: dropdown
+    id: package
+    attributes:
+      label: Installation method / روش نصب
+      options:
+        - .deb
+        - .rpm
+        - Flatpak
+        - Meson (source)
+        - Python (run_program_debug.py)
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: eOVPN-Pro version / نسخه
+      placeholder: "1.5.0"
+    validations:
+      required: true
+  - type: input
+    id: distro
+    attributes:
+      label: Distribution & desktop / توزیع و دسکتاپ
+      placeholder: "Ubuntu 24.04, GNOME 46 (Wayland)"
+    validations:
+      required: true
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Connection backend / بک‌اند اتصال
+      options:
+        - NetworkManager
+        - OpenVPN 3
+        - Both / هر دو
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce / مراحل بازتولید
+      description: What did you do? / چه کاری انجام دادید؟
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour / رفتار مورد انتظار
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour / رفتار مشاهده‌شده
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs (eovpn --debug DEBUG) / لاگ‌های مرتبط
+      render: text
