@@ -22,6 +22,10 @@ class OVPN3Dbus(Base):
         self.dbus_connection = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
 
     def get_auth_password(self):
+        """
+        Retrieves authentication password securely from Keyring or volatile RAM session.
+        دریافت امن کلمه عبور از سرویس Keyring یا حافظه موقت پروسس.
+        """
         try:
             return Secret.password_lookup_sync(
                 self.EOVPN_SECRET_SCHEMA,
@@ -29,8 +33,8 @@ class OVPN3Dbus(Base):
                 None,
             )
         except Exception as e:
-            logger.error(e)
-            self.password = self.get_setting(self.SETTING.AUTH_PASS)
+            logger.debug("Keyring lookup failed, falling back to session memory: %s", e)
+            return self.get_session_password()
 
     def set_binding(self, binding):
         self.module = binding

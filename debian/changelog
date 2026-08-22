@@ -1,0 +1,11 @@
+eovpn-pro (1.5.0-1) unstable; urgency=medium
+
+  * Release version 1.5.0.
+  * Added full Persian (Farsi) RTL localization and dynamic switching.
+  * Added concurrent multi-threaded TCP latency test & dynamic sorting.
+  * Redesigned connection statistics card with live /proc/net/dev bandwidth monitoring.
+  * Added OpenVPN 3 Data Channel Offload (DCO) toggle.
+  * Security hardening: Removed plaintext password fallback, secured temp files with 0600 umask.
+  * Added debian packaging support and GitHub Actions CI/CD workflows.
+
+ -- Mahdi Bagheban <info@MahdiArts.ir>  Sat, 22 Aug 2026 12:00:00 +0330

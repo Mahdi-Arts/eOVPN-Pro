@@ -1,20 +1,35 @@
-import logging
-from time import sleep
-from .settings_window import SettingsWindow
-from .connection_manager import NetworkManager, OpenVPN3
-from gi.repository import Gtk, Gio, GLib, Gdk, Adw
-from .ip_lookup.lookup import Lookup
-from .utils import ovpn_is_auth_required
+"""
+eOVPN-Pro Primary Main Window Controller
+کنترلر اصلی پنجره رابط کاربری در eOVPN-Pro
+
+Manages VPN configuration list presentation, live bandwidth monitoring,
+concurrent speed tests, latency-based sorting, and connection orchestration.
+مدیریت لیست کانفیگ‌ها، مانیتورینگ زنده ترافیک کارت شبکه، تست پینگ همزمان و اتصال به VPN.
+"""
+
 import os
+import logging
 import gettext
 import webbrowser
 import threading
+from time import sleep
 
+from gi.repository import Gtk, Gio, GLib, Gdk, Adw
+
+from .settings_window import SettingsWindow
+from .connection_manager import NetworkManager, OpenVPN3
+from .ip_lookup.lookup import Lookup
+from .utils import ovpn_is_auth_required
 from .eovpn_base import Base, StorageItem
+
 logger = logging.getLogger(__name__)
 
 
 class MainWindow(Base, Gtk.Builder):
+    """
+    Main application window combining configuration selector and traffic monitor.
+    پنجره اصلی برنامه شامل لیست کانفیگ‌ها، کارت آمار مصرف ترافیک و گزینه‌های اتصال.
+    """
     def __init__(self, app):
         super().__init__()
         Gtk.Builder.__init__(self)

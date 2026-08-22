@@ -1,3 +1,8 @@
+"""
+eOVPN-Pro 2FA / OTP Verification Dialog
+پنجره ورود رمز یکبار مصرف دو مرحله‌ای (2FA OTP) در eOVPN-Pro
+"""
+
 import gi
 gi.require_version('Gtk', '4.0')
 from gi.repository import Gtk
@@ -5,6 +10,11 @@ from eovpn.eovpn_base import Base, StorageItem
 
 
 class OTPInputWindow(Base):
+    """
+    Two-Factor Authentication (OTP) entry dialog for static/dynamic challenge.
+    پنجره ورود کد احراز هویت دومرحله‌ای برای سناریوهای چالش پویا و ایستا.
+    """
+
     def __init__(self, input_callback: callable, error_callback: callable) -> None:
         super().__init__()
         self.callback = input_callback
@@ -15,10 +25,13 @@ class OTPInputWindow(Base):
 
         self.window = self.builder.get_object("OTpMainWindow")
         self.window.connect("close-request", self.manual_close)
-        self.window.set_title("2FA OTP Input")
+        self.window.set_title("2FA OTP Verification")
         self.window.set_default_size(600, 200)
         self.window.set_resizable(False)
-        self.window.set_transient_for(self.retrieve(StorageItem.MAIN_WINDOW))
+
+        parent = self.retrieve(StorageItem.MAIN_WINDOW)
+        if parent and isinstance(parent, Gtk.Window):
+            self.window.set_transient_for(parent)
         self.window.set_modal(True)
 
         self.submit_btn = self.builder.get_object("submit")
@@ -28,9 +41,9 @@ class OTPInputWindow(Base):
         for i in range(1, 7):
             entry = self.builder.get_object(f"O{i}")
             entry.set_max_length(1)
-            next_entry = self.builder.get_object(f"O{i+1}") if i <= 6 else None
+            next_entry = self.builder.get_object(f"O{i+1}") if i < 6 else None
             entry.connect("changed", self.on_entry_changed, next_entry)
-    
+
     def on_entry_changed(self, entry, next_entry):
         text: str = entry.get_text()
         if not text.isnumeric():
@@ -39,25 +52,26 @@ class OTPInputWindow(Base):
         if len(text) == 1 and next_entry is not None:
             next_entry.grab_focus()
 
-        # check weather if we can enable submit btn.
+        # Enable submit button when all 6 digits are populated
+        # فعال‌سازی دکمه تأیید با تکمیل هر ۶ رقم کد
         if len(self.gather_otp()) == 6:
             self.submit_btn.set_sensitive(True)
         else:
             self.submit_btn.set_sensitive(False)
 
-    def gather_otp(self):
+    def gather_otp(self) -> list[str]:
         otp = []
         for i in range(1, 7):
             entry = self.builder.get_object(f"O{i}")
             text = entry.get_text()
             if len(text) == 1:
-                otp.append(entry.get_text())
+                otp.append(text)
         return otp
 
     def return_and_destroy(self):
         self.window.destroy()
         self.callback(self.gather_otp())
-    
+
     def manual_close(self, window):
         self.error_callback()
 
