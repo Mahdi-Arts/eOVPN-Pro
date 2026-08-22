@@ -1,0 +1,43 @@
+Source: eovpn-pro
+Section: net
+Priority: optional
+Maintainer: Mahdi Bagheban <info@MahdiArts.ir>
+Build-Depends: debhelper-compat (= 13),
+               meson (>= 0.60.0),
+               ninja-build,
+               pkg-config,
+               python3-all,
+               python3-cffi,
+               libnm-dev,
+               libglib2.0-dev,
+               libgtk-4-dev,
+               libadwaita-1-dev,
+               libsecret-1-dev,
+               libnotify-dev,
+               gettext,
+               desktop-file-utils
+Standards-Version: 4.6.2
+Homepage: https://github.com/Mahdi-Arts/eOVPN-Pro
+Vcs-Browser: https://github.com/Mahdi-Arts/eOVPN-Pro
+Vcs-Git: https://github.com/Mahdi-Arts/eOVPN-Pro.git
+
+Package: eovpn-pro
+Architecture: any
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         ${python3:Depends},
+         python3-gi (>= 3.42),
+         gir1.2-gtk-4.0,
+         gir1.2-adw-1,
+         gir1.2-secret-1,
+         gir1.2-notify-0.7,
+         gir1.2-nm-1.0,
+         python3-cffi,
+         network-manager-openvpn,
+         openvpn
+Recommends: openvpn-dco-dkms
+Description: Modern and high-performance OpenVPN GUI Client for Linux
+ eOVPN-Pro is an advanced OpenVPN client built with GTK4 and Libadwaita.
+ It features concurrent multi-threaded TCP latency testing, dynamic server
+ sorting, real-time network bandwidth monitoring, OpenVPN 3 DCO acceleration,
+ and full Persian (RTL) localization.

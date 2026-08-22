@@ -1,0 +1,114 @@
+name: eOVPN-Pro CI/CD Pipeline
+
+on:
+  push:
+    branches: [ master, main, arena/* ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ master, main ]
+
+jobs:
+  test:
+    name: Run Unit Tests & Quality Checks
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgirepository1.0-dev \
+            libnm-dev \
+            libglib2.0-dev \
+            libgtk-4-dev \
+            libadwaita-1-dev \
+            libsecret-1-dev \
+            libnotify-dev \
+            desktop-file-utils \
+            appstream
+
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          pip install flake8 pytest cffi PyGObject
+
+      - name: Validate desktop and metainfo files
+        run: |
+          desktop-file-validate data/com.github.mahdi-bagheban.eovpn-pro.desktop
+          appstreamcli validate data/com.github.mahdi-bagheban.eovpn-pro.metainfo.xml || true
+
+      - name: Run Unit Tests
+        run: |
+          python3 -m unittest discover -s tests -v
+
+  build-deb:
+    name: Build Debian (.deb) Package
+    runs-on: ubuntu-24.04
+    needs: test
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            debhelper \
+            dh-python \
+            meson \
+            ninja-build \
+            pkg-config \
+            python3-all \
+            python3-cffi \
+            python3-gi \
+            libnm-dev \
+            libglib2.0-dev \
+            libgtk-4-dev \
+            libadwaita-1-dev \
+            libsecret-1-dev \
+            libnotify-dev \
+            gettext
+
+      - name: Build Debian Package
+        run: |
+          dpkg-buildpackage -us -uc -b
+
+      - name: List built packages
+        run: |
+          mkdir -p dist/packages
+          cp ../*.deb dist/packages/ || true
+          ls -la dist/packages/
+
+      - name: Upload .deb Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: eovpn-pro-deb
+          path: dist/packages/*.deb
+
+  release:
+    name: Publish Release Assets
+    runs-on: ubuntu-24.04
+    needs: build-deb
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download .deb Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: eovpn-pro-deb
+          path: dist/packages
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/packages/*.deb
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
