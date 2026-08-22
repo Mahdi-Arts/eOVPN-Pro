@@ -23,6 +23,7 @@ gi.require_version('Gtk', '4.0')
 from gi.repository import GObject, Gtk, Gio, GLib, GdkPixbuf, Notify, Secret
 
 from .utils import download_remote_to_destination
+from .auto_connect import format_proto_badge, parse_ovpn_protocols, proto_badge_css
 
 _builder_record: dict[str, Gtk.Builder] = {}
 _storage_record: dict[str, object] = {}
@@ -59,11 +60,14 @@ class ConfigRow(Gtk.ListBoxRow):
     """
     def __init__(self, filename: str, ovpn_dir: str,
                  favorites: set[str] | None = None,
-                 on_favorite_toggled=None, **kwargs):
+                 on_favorite_toggled=None,
+                 protocols: set[str] | frozenset[str] | None = None,
+                 **kwargs):
         super().__init__(**kwargs)
         self.filename: str = filename
         self.ovpn_dir: str = ovpn_dir
         self.on_favorite_toggled = on_favorite_toggled
+        self.protocols: frozenset[str] = frozenset(protocols or ())
         is_favorite = bool(favorites and filename in favorites)
 
         self.box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
@@ -93,6 +97,20 @@ class ConfigRow(Gtk.ListBoxRow):
         self.label.set_hexpand(True)
         self.label.set_xalign(0.0)
 
+        # Protocol badge (TCP / UDP) / نشان پروتکل
+        badge_text = format_proto_badge(self.protocols)
+        self.proto_badge = Gtk.Label.new(badge_text)
+        self.proto_badge.add_css_class("proto-badge")
+        badge_css = proto_badge_css(self.protocols)
+        if badge_css:
+            self.proto_badge.add_css_class(badge_css)
+        self.proto_badge.set_visible(bool(badge_text))
+        self.proto_badge.set_valign(Gtk.Align.CENTER)
+        if badge_text:
+            self.proto_badge.set_tooltip_text(
+                gettext.gettext("OpenVPN protocol: {}").format(badge_text)
+            )
+
         # Latency label / برچسب نمایش پینگ
         self.latency_label = Gtk.Label.new("")
         self.latency_label.set_halign(Gtk.Align.END)
@@ -111,6 +129,7 @@ class ConfigRow(Gtk.ListBoxRow):
 
         self.box.append(self.fav_button)
         self.box.append(self.label)
+        self.box.append(self.proto_badge)
         self.box.append(self.latency_label)
         self.box.append(self.edit_button)
         self.set_child(self.box)
@@ -166,7 +185,7 @@ class Settings:
         "last-connected", "last-connected-cursor", "notifications", "manager",
         "req-auth", "ca", "remote", "auth-user", "nm-active-uuid", "show-flag",
         "listbox-v-adjust", "layout", "dark-theme", "auto-reconnect",
-        "favorite-configs", "language"
+        "favorite-configs", "language", "openvpn3-dco"
     ]
 
 
@@ -402,6 +421,7 @@ class Base:
 
     def load_only(self) -> int | None:
         self.store("latency_labels", {})
+        self.store("proto_cache", {})
 
         # Read favorites once per (re)load to avoid repeated GSettings access
         # خواندن یک‌باره لیست موردعلاقه‌ها در هر بار بارگذاری جهت کاهش دسترسی به GSettings
@@ -409,11 +429,20 @@ class Base:
 
         def widget_factory(item):
             filename = str(item)
+            proto_cache = self.retrieve("proto_cache")
+            if not isinstance(proto_cache, dict):
+                proto_cache = {}
+                self.store("proto_cache", proto_cache)
+            if filename not in proto_cache:
+                proto_cache[filename] = parse_ovpn_protocols(
+                    str(Path(self.EOVPN_OVPN_CONFIG_DIR).joinpath(filename))
+                )
             row = ConfigRow(
                 filename,
                 self.EOVPN_OVPN_CONFIG_DIR,
                 favorites=favorites,
                 on_favorite_toggled=self.retrieve("favorite_toggled_cb"),
+                protocols=proto_cache[filename],
             )
 
             latency_dict = self.retrieve("latency_labels")

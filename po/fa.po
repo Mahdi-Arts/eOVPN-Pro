@@ -131,8 +131,95 @@ msgstr "مرتب‌سازی سرورها بر اساس کمترین تاخیر"
 msgid "Select Fastest"
 msgstr "انتخاب سریع‌ترین"
 
+msgid "Connect Fastest"
+msgstr "اتصال به سریع‌ترین"
+
 msgid "Auto-select server with the lowest latency"
 msgstr "انتخاب خودکار سرور با کمترین تاخیر"
+
+msgid "Connect to the first server in the current sorted and filtered list. If the handshake times out or fails, automatically try the next one."
+msgstr "به اولین سرور در لیست مرتب و فیلترشده فعلی متصل می‌شود. اگر دست‌دهی زمان‌بندی شود یا شکست بخورد، به‌صورت خودکار سرور بعدی را امتحان می‌کند."
+
+msgid "All Protocols"
+msgstr "همه پروتکل‌ها"
+
+msgid "Filter by OpenVPN protocol (TCP / UDP)"
+msgstr "فیلتر بر اساس پروتکل OpenVPN (TCP / UDP)"
+
+msgid "OpenVPN protocol: {}"
+msgstr "پروتکل OpenVPN: {}"
+
+msgid "No servers match the current filters."
+msgstr "هیچ سروری با فیلترهای فعلی مطابقت ندارد."
+
+msgid "No reachable servers in the current list."
+msgstr "هیچ سرور در دسترسی‌ای در لیست فعلی نیست."
+
+msgid "Already connected to the first server in the list: {}"
+msgstr "از قبل به اولین سرور لیست متصل هستید: {}"
+
+msgid "Auto-connect will try the first {} of {} visible servers."
+msgstr "اتصال خودکار نخستین {} سرور از {} سرور نمایان را امتحان می‌کند."
+
+msgid "Measuring latency before auto-connect…"
+msgstr "اندازه‌گیری تأخیر پیش از اتصال خودکار…"
+
+msgid "Disconnecting current session…"
+msgstr "در حال قطع نشست فعلی…"
+
+msgid "Auto-connect started — {} server(s) in the current list."
+msgstr "اتصال خودکار آغاز شد — {} سرور در لیست فعلی."
+
+msgid "Trying {}{}"
+msgstr "تلاش برای {}{}"
+
+msgid "{}/{}  ·  {}s left"
+msgstr "{}/{}  ·  {}ثانیه مانده"
+
+msgid "Could not connect to {} ({}) — next server…"
+msgstr "اتصال به {} ممکن نشد ({}) — سرور بعدی…"
+
+msgid "timed out"
+msgstr "اتمام زمان"
+
+msgid "error"
+msgstr "خطا"
+
+msgid "authentication failed"
+msgstr "احراز هویت ناموفق"
+
+msgid "disconnected"
+msgstr "قطع شد"
+
+msgid "file missing"
+msgstr "فایل موجود نیست"
+
+msgid "unreachable"
+msgstr "غیرقابل دسترس"
+
+msgid "Connected to {}"
+msgstr "متصل شد به {}"
+
+msgid "Connected to {} ({} ms)"
+msgstr "متصل شد به {} ({} میلی‌ثانیه)"
+
+msgid "Attempt {}/{}"
+msgstr "تلاش {}/{}"
+
+msgid "Auto-connect cancelled"
+msgstr "اتصال خودکار لغو شد"
+
+msgid "Could not connect to any server in the list"
+msgstr "به هیچ سروری در لیست متصل نشد"
+
+msgid "{} attempt(s) failed"
+msgstr "{} تلاش ناموفق بود"
+
+msgid "Auto-connect failed — no server in the current list accepted the handshake."
+msgstr "اتصال خودکار ناموفق بود — هیچ سروری در لیست فعلی دست‌دهی را نپذیرفت."
+
+msgid "Cancel auto-connect"
+msgstr "لغو اتصال خودکار"
 
 msgid "Testing..."
 msgstr "در حال تست..."

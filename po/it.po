@@ -109,3 +109,27 @@ msgstr "Mostra Bandiera"
 #: eovpn/settings_window.py:250
 msgid "Delete All VPN Connections!"
 msgstr "Elimina tutte le connessioni VPN!"
+
+msgid "Connect Fastest"
+msgstr "Connetti al più veloce"
+
+msgid "All Protocols"
+msgstr "Tutti i protocolli"
+
+msgid "Cancel"
+msgstr "Annulla"
+
+msgid "Auto-connect cancelled"
+msgstr "Connessione automatica annullata"
+
+msgid "Speed Test"
+msgstr "Test velocità"
+
+msgid "Sort"
+msgstr "Ordina"
+
+msgid "TCP"
+msgstr "TCP"
+
+msgid "UDP"
+msgstr "UDP"

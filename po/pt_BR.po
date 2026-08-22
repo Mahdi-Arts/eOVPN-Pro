@@ -141,3 +141,21 @@ msgstr "* As alterações terão efeito SOMENTE após a reinicialização."
 
 msgid "Configuration Source MUST be a ZIP file."
 msgstr "A origem da configuração DEVE ser um arquivo ZIP."
+
+msgid "Connect Fastest"
+msgstr "Conectar ao mais rápido"
+
+msgid "All Protocols"
+msgstr "Todos os protocolos"
+
+msgid "Cancel"
+msgstr "Cancelar"
+
+msgid "Auto-connect cancelled"
+msgstr "Conexão automática cancelada"
+
+msgid "Speed Test"
+msgstr "Teste de velocidade"
+
+msgid "Sort"
+msgstr "Ordenar"

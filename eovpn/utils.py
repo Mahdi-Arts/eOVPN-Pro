@@ -97,6 +97,8 @@ def matches_server_filter(
     mode: str = "all",
     favorites: set[str] | None = None,
     latencies: dict[str, float | None] | None = None,
+    proto_mode: str = "all",
+    protocols: set[str] | frozenset[str] | None = None,
 ) -> bool:
     """
     Pure predicate for the server-list search/filter feature (testable without GTK).
@@ -107,18 +109,23 @@ def matches_server_filter(
     :param mode: One of ``all``, ``favorites``, ``online``, ``offline``.
     :param favorites: Set of favorite configuration filenames.
     :param latencies: Mapping filename -> RTT in ms (``None`` = unreachable).
+    :param proto_mode: One of ``all``, ``tcp``, ``udp``.
+    :param protocols: Transports declared by the .ovpn file (``tcp`` / ``udp``).
     :return: True if the server should stay visible.
     """
     name = name or ""
     if search and search.lower() not in name.lower():
         return False
 
-    if mode == "favorites":
-        return name in (favorites or set())
-    if mode == "online":
-        return (latencies or {}).get(name) is not None
-    if mode == "offline":
-        return (latencies or {}).get(name) is None
+    if mode == "favorites" and name not in (favorites or set()):
+        return False
+    if mode == "online" and (latencies or {}).get(name) is None:
+        return False
+    if mode == "offline" and (latencies or {}).get(name) is not None:
+        return False
+
+    if proto_mode in ("tcp", "udp") and proto_mode not in (protocols or set()):
+        return False
     return True
 
 

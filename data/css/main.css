@@ -177,3 +177,61 @@ margin: 6px;
 .server-fav-btn:checked {
     color: #f2c200;
 }
+
+/* Protocol badges on each server row / نشان پروتکل روی ردیف سرور */
+.proto-badge {
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    border-radius: 999px;
+    padding: 1px 7px;
+    min-width: 34px;
+}
+
+.proto-tcp {
+    background-color: alpha(#1a5fb4, 0.18);
+    color: #1a5fb4;
+}
+
+.proto-udp {
+    background-color: alpha(#0f7b6c, 0.18);
+    color: #0f7b6c;
+}
+
+.proto-both {
+    background-color: alpha(@accent_bg_color, 0.16);
+    color: @accent_color;
+}
+
+/* Cascading auto-connect banner / بنر اتصال آبشاری */
+.cascade-banner {
+    background-color: alpha(@accent_bg_color, 0.12);
+    border: 1px solid alpha(@accent_bg_color, 0.22);
+    border-radius: 12px;
+    padding: 8px 10px;
+}
+
+.cascade-banner.cascade-success {
+    background-color: alpha(@success_color, 0.14);
+    border-color: alpha(@success_color, 0.28);
+}
+
+.cascade-banner.cascade-fail {
+    background-color: alpha(@error_color, 0.12);
+    border-color: alpha(@error_color, 0.26);
+}
+
+.cascade-title {
+    font-weight: 600;
+    font-size: 0.88rem;
+}
+
+.cascade-meta {
+    font-family: monospace, Courier, monospace;
+    font-size: 0.78rem;
+}
+
+.cascade-progress trough {
+    min-height: 4px;
+    border-radius: 999px;
+}

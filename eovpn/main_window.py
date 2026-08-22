@@ -15,13 +15,27 @@ import gettext
 import webbrowser
 import threading
 
-from gi.repository import Gtk, Gio, GLib, Gdk, Adw
+from gi.repository import Gtk, Gio, GLib, Gdk, Adw, Pango
 
 from .settings_window import SettingsWindow
 from .connection_manager import NetworkManager, OpenVPN3
 from .ip_lookup.lookup import Lookup
 from .utils import matches_server_filter, ovpn_is_auth_required
 from .eovpn_base import Base, StorageItem, ConfigRow
+from .auto_connect import (
+    CascadePhase,
+    DISCONNECT_SETTLE_SECONDS,
+    MAX_CASCADE_CANDIDATES,
+    PROGRESS_TICK_MS,
+    PROTO_ALL,
+    PROTO_TCP,
+    PROTO_UDP,
+    build_cascade_queue,
+    collect_visible_filenames,
+    compute_attempt_timeout,
+    format_proto_badge,
+    parse_ovpn_protocols,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +77,22 @@ class MainWindow(Base, Gtk.Builder):
         # Search / Filter state / وضعیت جستجو و فیلتر لیست
         self.search_text: str = ""
         self.filter_mode: str = "all"
+        self.proto_mode: str = PROTO_ALL
+
+        # Cascading auto-connect state / وضعیت اتصال آبشاری به سریع‌ترین‌ها
+        self._cascade_active = False
+        self._cascade_gen = 0
+        self._cascade_queue: list[str] = []
+        self._cascade_index = 0
+        self._cascade_phase = CascadePhase.IDLE
+        self._cascade_deadline = 0.0
+        self._cascade_timeout_id = None
+        self._cascade_tick_id = None
+        self._cascade_settle_id = None
+        self._cascade_expect_disconnect = False
+        self._cascade_current: str | None = None
+        self._cascade_failures: list[tuple[str, str]] = []
+        self.auto_cascade_after_test = False
 
         ###########################################################
         # Initialize and setup Connection Manager (CM)
@@ -228,9 +258,13 @@ class MainWindow(Base, Gtk.Builder):
         self.sort_btn.set_tooltip_text(gettext.gettext("Sort servers by lowest latency"))
         self.sort_btn.connect("toggled", self.on_sort_toggled)
 
-        self.fastest_btn = Gtk.Button.new_with_label(gettext.gettext("Select Fastest"))
-        self.fastest_btn.set_tooltip_text(gettext.gettext("Auto-select server with the lowest latency"))
-        self.fastest_btn.connect("clicked", self.select_fastest)
+        self.fastest_btn = Gtk.Button.new_with_label(gettext.gettext("Connect Fastest"))
+        self.fastest_btn.set_tooltip_text(gettext.gettext(
+            "Connect to the first server in the current sorted and filtered list. "
+            "If the handshake times out or fails, automatically try the next one."
+        ))
+        self.fastest_btn.add_css_class("suggested-action")
+        self.fastest_btn.connect("clicked", self.on_fastest_clicked)
 
         self.pro_box.append(self.speed_test_btn)
         self.pro_box.append(self.sort_btn)
@@ -263,6 +297,20 @@ class MainWindow(Base, Gtk.Builder):
         self.filter_dropdown.set_tooltip_text(gettext.gettext("Filter servers"))
         self.filter_dropdown.connect("notify::selected", self.on_filter_changed)
 
+        self.proto_dropdown = Gtk.DropDown.new(
+            Gtk.StringList.new([
+                gettext.gettext("All Protocols"),
+                "TCP",
+                "UDP",
+            ]),
+            None,
+        )
+        self.proto_dropdown.set_selected(0)
+        self.proto_dropdown.set_tooltip_text(
+            gettext.gettext("Filter by OpenVPN protocol (TCP / UDP)")
+        )
+        self.proto_dropdown.connect("notify::selected", self.on_proto_filter_changed)
+
         self.filter_count = Gtk.Label.new("")
         self.filter_count.add_css_class("dim-label")
         self.filter_count.set_tooltip_text(
@@ -271,10 +319,53 @@ class MainWindow(Base, Gtk.Builder):
 
         self.filter_bar.append(self.search_entry)
         self.filter_bar.append(self.filter_dropdown)
+        self.filter_bar.append(self.proto_dropdown)
         self.filter_bar.append(self.filter_count)
+
+        # Cascade status banner / بنر وضعیت اتصال آبشاری
+        self.cascade_revealer = Gtk.Revealer.new()
+        self.cascade_revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_DOWN)
+        self.cascade_revealer.set_transition_duration(220)
+        self.cascade_revealer.set_reveal_child(False)
+
+        self.cascade_banner = Gtk.Box.new(Gtk.Orientation.VERTICAL, 4)
+        self.cascade_banner.add_css_class("cascade-banner")
+        self.cascade_banner.set_margin_start(10)
+        self.cascade_banner.set_margin_end(10)
+        self.cascade_banner.set_margin_bottom(6)
+
+        cascade_row = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+        self.cascade_spinner = Gtk.Spinner.new()
+        self.cascade_spinner.set_valign(Gtk.Align.CENTER)
+        self.cascade_title = Gtk.Label.new("")
+        self.cascade_title.set_hexpand(True)
+        self.cascade_title.set_halign(Gtk.Align.START)
+        self.cascade_title.set_xalign(0.0)
+        self.cascade_title.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
+        self.cascade_title.add_css_class("cascade-title")
+        self.cascade_meta = Gtk.Label.new("")
+        self.cascade_meta.add_css_class("dim-label")
+        self.cascade_meta.add_css_class("cascade-meta")
+        self.cascade_cancel_btn = Gtk.Button.new_with_label(gettext.gettext("Cancel"))
+        self.cascade_cancel_btn.add_css_class("destructive-action")
+        self.cascade_cancel_btn.set_valign(Gtk.Align.CENTER)
+        self.cascade_cancel_btn.connect("clicked", lambda *_: self.cancel_cascade(user=True))
+        cascade_row.append(self.cascade_spinner)
+        cascade_row.append(self.cascade_title)
+        cascade_row.append(self.cascade_meta)
+        cascade_row.append(self.cascade_cancel_btn)
+
+        self.cascade_bar = Gtk.ProgressBar.new()
+        self.cascade_bar.add_css_class("cascade-progress")
+        self.cascade_bar.set_hexpand(True)
+
+        self.cascade_banner.append(cascade_row)
+        self.cascade_banner.append(self.cascade_bar)
+        self.cascade_revealer.set_child(self.cascade_banner)
 
         self.inner_left.append(self.pro_box)
         self.inner_left.append(self.filter_bar)
+        self.inner_left.append(self.cascade_revealer)
         self.inner_left.append(self.scrolled_window)
 
         # ---------------------------------------------------------
@@ -507,6 +598,12 @@ class MainWindow(Base, Gtk.Builder):
         self.app.add_action(action)
         self.app.set_accels_for_action("app.toggle-favorites", ["<Primary><Shift>F"])
 
+        # Cascading connect-to-fastest / اتصال آبشاری به سریع‌ترین سرور
+        action = Gio.SimpleAction.new("connect-fastest", None)
+        action.connect("activate", lambda *_: self.on_fastest_clicked(None))
+        self.app.add_action(action)
+        self.app.set_accels_for_action("app.connect-fastest", ["<Primary><Shift>C"])
+
         menu = Gio.Menu()
         layout_menu = Gio.Menu()
         item = Gio.MenuItem.new(gettext.gettext("Vertical"), "card-v")
@@ -619,12 +716,15 @@ class MainWindow(Base, Gtk.Builder):
         text, the selected filter mode and the favorites set.
         تابع فیلتر لیست که جستجوی زنده، حالت فیلتر و مجموعه موردعلاقه‌ها را ترکیب می‌کند.
         """
+        filename = str(item)
         return matches_server_filter(
-            str(item),
+            filename,
             search=self.search_text,
             mode=self.filter_mode,
             favorites=self.get_favorites(),
             latencies=self.latencies,
+            proto_mode=self.proto_mode,
+            protocols=self._protocols_for(filename),
         )
 
     def on_search_changed(self, entry: Gtk.SearchEntry):
@@ -639,6 +739,25 @@ class MainWindow(Base, Gtk.Builder):
         if idx < len(modes):
             self.filter_mode = modes[idx]
         self._refresh_filter()
+
+    def on_proto_filter_changed(self, dropdown: Gtk.DropDown, *args):
+        """Applies the TCP / UDP protocol filter / اعمال فیلتر پروتکل TCP یا UDP."""
+        modes = (PROTO_ALL, PROTO_TCP, PROTO_UDP)
+        idx = dropdown.get_selected()
+        self.proto_mode = modes[idx] if 0 <= idx < len(modes) else PROTO_ALL
+        self._refresh_filter()
+
+    def _protocols_for(self, filename: str) -> frozenset[str]:
+        """Cached proto set for a configuration / مجموعه پروتکل کش‌شده برای یک کانفیگ."""
+        cache = self.retrieve("proto_cache")
+        if not isinstance(cache, dict):
+            cache = {}
+            self.store("proto_cache", cache)
+        if filename not in cache:
+            cache[filename] = parse_ovpn_protocols(
+                os.path.join(self.EOVPN_OVPN_CONFIG_DIR, filename)
+            )
+        return cache[filename]
 
     def toggle_favorites_filter(self):
         """Quickly toggles the favorites-only filter."""
@@ -738,6 +857,11 @@ class MainWindow(Base, Gtk.Builder):
         self.speed_test_btn.set_label(gettext.gettext("Speed Test"))
         self.spinner.stop()
 
+        if getattr(self, "auto_cascade_after_test", False):
+            self.auto_cascade_after_test = False
+            if self._cascade_active and self._cascade_phase == CascadePhase.PREPARING:
+                self._start_cascade_from_visible_list()
+                return
         if getattr(self, "auto_select_after_test", False):
             self.auto_select_after_test = False
             self.select_fastest(None)
@@ -758,50 +882,516 @@ class MainWindow(Base, Gtk.Builder):
 
     def select_fastest(self, button: Gtk.Button | None):
         """
-        Finds and auto-selects the server configuration with the lowest latency.
-        شناسایی و انتخاب خودکار سریع‌ترین سرور در لیست کانفیگ‌ها.
+        Selects (does not connect) the lowest-latency visible server.
+        انتخاب (بدون اتصال) سرور با کمترین تأخیر در لیست نمایان.
         """
-        if not self.latencies:
-            self.auto_select_after_test = True
-            self.trigger_speed_test()
-            return
-
         valid_latencies = {k: v for k, v in self.latencies.items() if v is not None}
         if not valid_latencies:
-            toast = Adw.Toast.new(gettext.gettext("No reachable servers found! Please run speed test."))
-            self.toast_overlay.add_toast(toast)
+            return None
+        fastest_file = min(valid_latencies, key=valid_latencies.get)
+        if self._select_server_by_name(fastest_file):
+            return fastest_file
+        return None
+
+    # ------------------------------------------------------------------
+    # Cascading connect-to-fastest / اتصال آبشاری به سریع‌ترین سرور
+    # ------------------------------------------------------------------
+
+    def on_fastest_clicked(self, button: Gtk.Button | None):
+        """
+        Starts or cancels the cascading auto-connect run.
+        شروع یا لغو اتصال آبشاری به سرورهای لیست فعلی.
+        """
+        if self._cascade_active or getattr(self, "auto_cascade_after_test", False):
+            self.cancel_cascade(user=True)
+            return
+        self.start_cascade()
+
+    def start_cascade(self):
+        """
+        Connects from the first visible (sorted + filtered) server and walks
+        down the list with a professional per-attempt handshake timeout.
+        اتصال از اولین سرور نمایان و ادامه روی سرور بعدی در صورت شکست.
+        """
+        if self._cascade_active:
             return
 
-        fastest_file = min(valid_latencies, key=valid_latencies.get)
+        visible = collect_visible_filenames(getattr(self, "list_box", None))
+        if not visible:
+            self._toast(gettext.gettext("No servers match the current filters."))
+            return
+
+        if not self.latencies:
+            # Measure first so Sort can put the true fastest at the top
+            # ابتدا تست سرعت تا در صورت فعال بودن مرتب‌سازی، سریع‌ترین بالا باشد
+            self.auto_cascade_after_test = True
+            self._show_cascade_preparing()
+            if not self.sort_by_speed_active and hasattr(self, "sort_btn"):
+                self.sort_btn.set_active(True)
+            else:
+                self.trigger_speed_test()
+            return
+
+        self._start_cascade_from_visible_list()
+
+    def _start_cascade_from_visible_list(self):
+        visible = collect_visible_filenames(getattr(self, "list_box", None))
+        queue = build_cascade_queue(visible, self.latencies, skip_unreachable=True)
+        if not queue:
+            if self._cascade_active:
+                self._finish_cascade(CascadePhase.EXHAUSTED)
+            else:
+                self._toast(gettext.gettext("No reachable servers in the current list."))
+            return
+
+        current = self.get_selected_config()
+        try:
+            already = bool(self.CM().status())
+        except Exception:
+            already = False
+        if already and current == queue[0]:
+            if self._cascade_active:
+                self._cascade_current = current
+                self._finish_cascade(CascadePhase.SUCCEEDED)
+            else:
+                self._toast(
+                    gettext.gettext(
+                        "Already connected to the first server in the list: {}"
+                    ).format(current)
+                )
+            return
+
+        if len(visible) > MAX_CASCADE_CANDIDATES:
+            self._toast(
+                gettext.gettext("Auto-connect will try the first {} of {} visible servers.").format(
+                    len(queue), len(visible)
+                )
+            )
+
+        self._begin_cascade(queue)
+
+    def _show_cascade_preparing(self):
+        self._cascade_active = True
+        self._cascade_gen += 1
+        self._cascade_phase = CascadePhase.PREPARING
+        self._cascade_queue = []
+        self._cascade_index = 0
+        self._cascade_current = None
+        if hasattr(self, "cascade_banner"):
+            self.cascade_banner.remove_css_class("cascade-success")
+            self.cascade_banner.remove_css_class("cascade-fail")
+            self.cascade_title.set_text(gettext.gettext("Measuring latency before auto-connect…"))
+            self.cascade_meta.set_text("")
+            self.cascade_bar.set_fraction(0.0)
+            self.cascade_spinner.start()
+            self.cascade_revealer.set_reveal_child(True)
+        self._set_fastest_button_cancel(True)
+
+    def _begin_cascade(self, queue: list[str]):
+        self._cascade_gen += 1
+        self._cascade_active = True
+        self._cascade_queue = list(queue)
+        self._cascade_index = 0
+        self._cascade_failures = []
+        self._cascade_expect_disconnect = False
+        self._cascade_disconnect_retries = 0
+        self._cascade_phase = CascadePhase.CONNECTING
+        self._cascade_current = None
+        self.manual_disconnect = False
+
+        self._set_cascade_controls_locked(True)
+        self._set_fastest_button_cancel(True)
+        if hasattr(self, "cascade_banner"):
+            self.cascade_banner.remove_css_class("cascade-success")
+            self.cascade_banner.remove_css_class("cascade-fail")
+            self.cascade_spinner.start()
+            self.cascade_revealer.set_reveal_child(True)
+
+        self._toast(
+            gettext.gettext("Auto-connect started — {} server(s) in the current list.").format(
+                len(self._cascade_queue)
+            )
+        )
 
         try:
-            # Locate the row by filename so selection stays correct even when
-            # the list is sorted by latency or filtered (search/favorites).
-            # انتخاب ردیف بر اساس نام فایل تا در حالت مرتب‌سازی/فیلتر هم دقیق بماند
-            rows = self.retrieve(StorageItem.LISTBOX_ROWS) or []
-            row_to_select = next(
-                (r for r in rows if getattr(r, "filename", None) == fastest_file),
-                None,
+            if self.CM().status():
+                self._cascade_expect_disconnect = True
+                self.manual_disconnect = True
+                self._cascade_phase = CascadePhase.SETTLING
+                self._update_cascade_banner(
+                    status=gettext.gettext("Disconnecting current session…")
+                )
+                self.CM().start_watch()
+                self.CM().disconnect()
+                self._arm_settle(self._try_current_server)
+                return
+        except Exception as exc:
+            logger.error("Cascade pre-disconnect failed: %s", exc)
+
+        self._try_current_server()
+
+    def _try_current_server(self):
+        if not self._cascade_active:
+            return False
+        if self._cascade_index >= len(self._cascade_queue):
+            self._finish_cascade(CascadePhase.EXHAUSTED)
+            return False
+
+        filename = self._cascade_queue[self._cascade_index]
+        self._cascade_current = filename
+        self._cascade_phase = CascadePhase.CONNECTING
+        rtt = (self.latencies or {}).get(filename)
+        timeout = compute_attempt_timeout(rtt)
+        self._cascade_deadline = time.monotonic() + timeout
+        self._cascade_expect_disconnect = False
+        self.manual_disconnect = False
+
+        self._select_server_by_name(filename)
+        self._update_cascade_banner()
+        self._arm_timeout_and_ticks()
+
+        manager = self.CM()
+        try:
+            manager.start_watch()
+            if manager.status():
+                retries = getattr(self, "_cascade_disconnect_retries", 0) + 1
+                self._cascade_disconnect_retries = retries
+                if retries > 3:
+                    logger.warning("Cascade: still connected after disconnect retries")
+                    self._advance_cascade("disconnect")
+                    return False
+                self._cascade_expect_disconnect = True
+                self.manual_disconnect = True
+                self._cascade_phase = CascadePhase.SETTLING
+                manager.disconnect()
+                self._arm_settle(self._try_current_server)
+                return False
+            self._cascade_disconnect_retries = 0
+            path = os.path.join(self.EOVPN_CONFIG_DIR, "CONFIGS", filename)
+            if not os.path.isfile(path):
+                logger.warning("Cascade: missing config %s", path)
+                self._advance_cascade("missing")
+                return False
+            manager.connect(path)
+        except Exception as exc:
+            logger.error("Cascade connect error for %s: %s", filename, exc)
+            self._advance_cascade("error")
+        return False
+
+    def _select_server_by_name(self, filename: str) -> bool:
+        """Selects a list row by filename and scrolls it into view."""
+        rows = self.retrieve(StorageItem.LISTBOX_ROWS) or []
+        row = next((r for r in rows if getattr(r, "filename", None) == filename), None)
+        if row is None:
+            return False
+        try:
+            self.list_box.select_row(row)
+            alloc = row.get_allocation()
+            adj = self.scrolled_window.get_vadjustment()
+            if adj and alloc:
+                adj.set_value(max(0, alloc.y - 24))
+        except Exception as exc:
+            logger.debug("Could not scroll to %s: %s", filename, exc)
+        return True
+
+    def _update_cascade_banner(self, status: str | None = None):
+        if not hasattr(self, "cascade_title"):
+            return
+        total = max(1, len(self._cascade_queue))
+        idx = min(self._cascade_index + 1, total)
+        name = self._cascade_current or ""
+        rtt = (self.latencies or {}).get(name)
+        proto = format_proto_badge(self._protocols_for(name)) if name else ""
+        remaining = max(0, int(round(self._cascade_deadline - time.monotonic())))
+
+        if status:
+            self.cascade_title.set_text(status)
+        else:
+            extras = [part for part in (proto, f"{rtt} ms" if rtt is not None else "") if part]
+            suffix = f"  ·  {' · '.join(extras)}" if extras else ""
+            self.cascade_title.set_text(
+                gettext.gettext("Trying {}{}").format(name, suffix)
             )
-            if row_to_select is not None:
-                self.list_box.select_row(row_to_select)
-                toast = Adw.Toast.new(
-                    gettext.gettext("Selected fastest server: {} ({} ms)").format(
-                        fastest_file, valid_latencies[fastest_file]
+        self.cascade_meta.set_text(
+            gettext.gettext("{}/{}  ·  {}s left").format(idx, len(self._cascade_queue) or total, remaining)
+        )
+
+        attempt_timeout = compute_attempt_timeout(rtt)
+        elapsed = attempt_timeout - max(0.0, self._cascade_deadline - time.monotonic())
+        frac_this = min(1.0, max(0.0, elapsed / max(attempt_timeout, 0.001)))
+        overall = (self._cascade_index + frac_this) / total
+        self.cascade_bar.set_fraction(min(1.0, overall))
+        if hasattr(self, "progress_bar") and self._cascade_phase == CascadePhase.CONNECTING:
+            self.progress_bar.set_fraction(min(0.92, (self._cascade_index + 0.4) / total))
+
+    def _arm_timeout_and_ticks(self):
+        self._disarm_cascade_timers(keep_settle=False)
+        remaining_ms = max(250, int((self._cascade_deadline - time.monotonic()) * 1000))
+        gen = self._cascade_gen
+        self._cascade_timeout_id = GLib.timeout_add(remaining_ms, self._on_cascade_timeout, gen)
+        self._cascade_tick_id = GLib.timeout_add(PROGRESS_TICK_MS, self._on_cascade_tick, gen)
+
+    def _disarm_cascade_timers(self, keep_settle: bool = False):
+        attrs = ["_cascade_timeout_id", "_cascade_tick_id"]
+        if not keep_settle:
+            attrs.append("_cascade_settle_id")
+        for attr in attrs:
+            source_id = getattr(self, attr, None)
+            if source_id:
+                try:
+                    GLib.source_remove(source_id)
+                except Exception:
+                    pass
+                setattr(self, attr, None)
+
+    def _on_cascade_tick(self, gen: int) -> bool:
+        if not self._cascade_active or gen != self._cascade_gen:
+            return False
+        if self._cascade_user_is_busy():
+            # Freeze the deadline while an OTP / modal dialog is open
+            # توقف شمارش معکوس وقتی دیالوگ OTP یا مودال باز است
+            self._cascade_deadline += PROGRESS_TICK_MS / 1000.0
+            return True
+        self._update_cascade_banner()
+        return True
+
+    def _on_cascade_timeout(self, gen: int) -> bool:
+        self._cascade_timeout_id = None
+        if not self._cascade_active or gen != self._cascade_gen:
+            return False
+        if self._cascade_user_is_busy():
+            self._cascade_deadline = time.monotonic() + 4.0
+            self._arm_timeout_and_ticks()
+            return False
+        try:
+            if self.CM().status():
+                # Handshake landed in the same tick as the timeout
+                # دست‌دهی درست همزمان با اتمام تایم‌اوت موفق شده است
+                return False
+        except Exception:
+            pass
+        logger.info("Cascade handshake timeout on %s", self._cascade_current)
+        self._advance_cascade("timeout")
+        return False
+
+    def _cascade_user_is_busy(self) -> bool:
+        """True when a modal dialog (OTP, etc.) is waiting for the user."""
+        try:
+            for win in self.app.get_windows():
+                if win is not self.window and win.get_mapped() and win.get_modal():
+                    return True
+        except Exception:
+            pass
+        return False
+
+    def _arm_settle(self, callback):
+        if self._cascade_settle_id:
+            try:
+                GLib.source_remove(self._cascade_settle_id)
+            except Exception:
+                pass
+            self._cascade_settle_id = None
+        gen = self._cascade_gen
+
+        def _fire():
+            self._cascade_settle_id = None
+            if self._cascade_active and gen == self._cascade_gen:
+                callback()
+            return False
+
+        self._cascade_settle_id = GLib.timeout_add(
+            int(DISCONNECT_SETTLE_SECONDS * 1000), _fire
+        )
+
+    def _advance_cascade(self, reason: str):
+        if not self._cascade_active:
+            return
+        current = self._cascade_current
+        if current:
+            self._cascade_failures.append((current, reason))
+            logger.info("Cascade skip %s (%s)", current, reason)
+
+        self._disarm_cascade_timers()
+        self._toast(
+            gettext.gettext("Could not connect to {} ({}) — next server…").format(
+                current or "?", self._cascade_reason_label(reason)
+            )
+        )
+
+        self._cascade_index += 1
+        self._cascade_phase = CascadePhase.SETTLING
+        self._cascade_expect_disconnect = True
+        self.manual_disconnect = True
+
+        try:
+            if self.CM().status():
+                self.CM().disconnect()
+                self._arm_settle(self._try_current_server)
+                return
+        except Exception as exc:
+            logger.debug("Cascade disconnect on advance: %s", exc)
+
+        self._arm_settle(self._try_current_server)
+
+    def _cascade_reason_label(self, reason: str) -> str:
+        labels = {
+            "timeout": gettext.gettext("timed out"),
+            "error": gettext.gettext("error"),
+            "auth": gettext.gettext("authentication failed"),
+            "disconnect": gettext.gettext("disconnected"),
+            "missing": gettext.gettext("file missing"),
+            "unreachable": gettext.gettext("unreachable"),
+        }
+        return labels.get(reason, reason)
+
+    def _cascade_on_connection_event(self, result, error=None) -> bool:
+        """
+        Consumes D-Bus connection events while a cascade is running.
+        Returns True when the regular UI handler must be skipped.
+        رویدادهای D-Bus را هنگام اتصال آبشاری مصرف می‌کند.
+        """
+        if result is True:
+            self._disarm_cascade_timers()
+            self._cascade_expect_disconnect = False
+            self._finish_cascade(CascadePhase.SUCCEEDED, restore_connect_ui=False)
+            return False
+
+        error_text = str(error).lower() if error else ""
+        failed = result is False or error is not None
+        if not failed:
+            return False
+
+        if self._cascade_phase == CascadePhase.SETTLING and self._cascade_expect_disconnect:
+            self._cascade_expect_disconnect = False
+            self.manual_disconnect = True
+            return True
+
+        if self._cascade_phase == CascadePhase.CONNECTING:
+            reason = "auth" if "auth" in error_text else ("error" if error else "disconnect")
+            self._advance_cascade(reason)
+            return True
+
+        return True
+
+    def _finish_cascade(self, phase: CascadePhase, restore_connect_ui: bool = True):
+        gen_was = self._cascade_gen
+        self._disarm_cascade_timers()
+        was_preparing = self._cascade_phase == CascadePhase.PREPARING
+        self._cascade_active = False
+        self._cascade_phase = phase
+        self._cascade_expect_disconnect = False
+        self.auto_cascade_after_test = False
+
+        self._set_cascade_controls_locked(False)
+        self._set_fastest_button_cancel(False)
+        if hasattr(self, "cascade_spinner"):
+            self.cascade_spinner.stop()
+
+        if phase == CascadePhase.SUCCEEDED:
+            name = self._cascade_current or self.get_selected_config() or ""
+            rtt = (self.latencies or {}).get(name)
+            if rtt is not None:
+                msg = gettext.gettext("Connected to {} ({} ms)").format(name, rtt)
+            else:
+                msg = gettext.gettext("Connected to {}").format(name)
+            if hasattr(self, "cascade_title"):
+                self.cascade_title.set_text(msg)
+                self.cascade_meta.set_text(
+                    gettext.gettext("Attempt {}/{}").format(
+                        self._cascade_index + 1, max(1, len(self._cascade_queue))
                     )
                 )
-                self.toast_overlay.add_toast(toast)
-            else:
-                logger.info(
-                    "Fastest server '%s' is hidden by the current search/filter.",
-                    fastest_file,
-                )
-                toast = Adw.Toast.new(
-                    gettext.gettext("Fastest server is hidden by the current filter")
-                )
-                self.toast_overlay.add_toast(toast)
-        except Exception as e:
-            logger.error("Error selecting fastest server: %s", e)
+                self.cascade_banner.add_css_class("cascade-success")
+                self.cascade_bar.set_fraction(1.0)
+                self.cascade_revealer.set_reveal_child(True)
+            self._toast(msg)
+            GLib.timeout_add_seconds(3, self._hide_cascade_banner, gen_was)
+            return
+
+        if phase == CascadePhase.CANCELLED:
+            if hasattr(self, "cascade_revealer"):
+                self.cascade_revealer.set_reveal_child(False)
+            self._toast(gettext.gettext("Auto-connect cancelled"))
+            if restore_connect_ui and not was_preparing:
+                try:
+                    if self.CM().status():
+                        self.manual_disconnect = True
+                        self.CM().disconnect()
+                except Exception:
+                    pass
+            return
+
+        n_fail = len(self._cascade_failures)
+        if hasattr(self, "cascade_title"):
+            self.cascade_title.set_text(
+                gettext.gettext("Could not connect to any server in the list")
+            )
+            self.cascade_meta.set_text(
+                gettext.gettext("{} attempt(s) failed").format(n_fail)
+            )
+            self.cascade_banner.add_css_class("cascade-fail")
+            self.cascade_bar.set_fraction(1.0)
+            self.cascade_revealer.set_reveal_child(True)
+        self._toast(
+            gettext.gettext(
+                "Auto-connect failed — no server in the current list accepted the handshake."
+            ),
+            timeout=4,
+        )
+        GLib.timeout_add_seconds(5, self._hide_cascade_banner, gen_was)
+
+    def _hide_cascade_banner(self, gen: int) -> bool:
+        if not self._cascade_active and hasattr(self, "cascade_revealer"):
+            self.cascade_revealer.set_reveal_child(False)
+            self.cascade_banner.remove_css_class("cascade-success")
+            self.cascade_banner.remove_css_class("cascade-fail")
+        return False
+
+    def cancel_cascade(self, user: bool = True):
+        """Aborts a running cascade or the pre-connect speed test."""
+        if not self._cascade_active and not getattr(self, "auto_cascade_after_test", False):
+            return
+        logger.info("Cascade cancelled (user=%s)", user)
+        self.auto_cascade_after_test = False
+        self._cascade_gen += 1
+        self._finish_cascade(CascadePhase.CANCELLED)
+
+    def _set_fastest_button_cancel(self, cancel: bool):
+        if not hasattr(self, "fastest_btn"):
+            return
+        if cancel:
+            self.fastest_btn.set_label(gettext.gettext("Cancel"))
+            self.fastest_btn.remove_css_class("suggested-action")
+            self.fastest_btn.add_css_class("destructive-action")
+            self.fastest_btn.set_tooltip_text(gettext.gettext("Cancel auto-connect"))
+        else:
+            self.fastest_btn.set_label(gettext.gettext("Connect Fastest"))
+            self.fastest_btn.remove_css_class("destructive-action")
+            self.fastest_btn.add_css_class("suggested-action")
+            self.fastest_btn.set_tooltip_text(gettext.gettext(
+                "Connect to the first server in the current sorted and filtered list. "
+                "If the handshake times out or fails, automatically try the next one."
+            ))
+
+    def _set_cascade_controls_locked(self, locked: bool):
+        widgets = [
+            getattr(self, "speed_test_btn", None),
+            getattr(self, "sort_btn", None),
+            getattr(self, "search_entry", None),
+            getattr(self, "filter_dropdown", None),
+            getattr(self, "proto_dropdown", None),
+            getattr(self, "connect_btn", None),
+        ]
+        for widget in widgets:
+            if widget is not None:
+                widget.set_sensitive(not locked)
+
+    def _toast(self, message: str, timeout: int = 2):
+        if not hasattr(self, "toast_overlay"):
+            return
+        toast = Adw.Toast.new(message)
+        toast.set_timeout(timeout)
+        self.toast_overlay.add_toast(toast)
 
     def start_network_monitor(self):
         """Starts real-time bandwidth monitoring."""
@@ -943,6 +1533,10 @@ class MainWindow(Base, Gtk.Builder):
         Handles connection status transitions and D-Bus signals.
         مدیریت تغییرات وضعیت تونل VPN و پردازش رویدادهای D-Bus.
         """
+        if getattr(self, "_cascade_active", False):
+            if self._cascade_on_connection_event(result, error):
+                return
+
         if error is not None:
             logger.error("Connection error: %s", error)
             self.send_error_notification(error)
@@ -1007,8 +1601,12 @@ class MainWindow(Base, Gtk.Builder):
             self.ul_speed_label.set_text("0.0 B/s")
             self.total_traffic_label.set_text("0 B")
 
-            should_reconnect = getattr(self, "was_connected", False) and self.get_setting(
-                self.SETTING.AUTO_RECONNECT) and not getattr(self, "manual_disconnect", False)
+            should_reconnect = (
+                getattr(self, "was_connected", False)
+                and self.get_setting(self.SETTING.AUTO_RECONNECT)
+                and not getattr(self, "manual_disconnect", False)
+                and not getattr(self, "_cascade_active", False)
+            )
             self.was_connected = False
             self.manual_disconnect = False
 
