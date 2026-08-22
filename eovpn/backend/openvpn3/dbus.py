@@ -96,7 +96,8 @@ class OVPN3Dbus(Base):
         i = 0
 
         otp = "".join(otp).encode("utf-8")
-        logger.info("sending OTP: %s", otp)
+        # Security: never log one-time passwords / نکته امنیتی: هرگز کد یکبارمصرف را لاگ نکنید
+        logger.info("sending OTP for challenge group %s", g)
 
         self.module.ovpn3.send_auth(
             self.module.get_session_path(),
@@ -210,21 +211,23 @@ class OVPN3Dbus(Base):
             logger.info("processing required attention: %s %s %i %s", t, g, i, a)
             if a == "username":
                 logger.info("sending %s", a)
+                username = self.get_setting(self.SETTING.AUTH_USER) or ""
                 self.module.ovpn3.send_auth(
                     self.module.get_session_path(),
                     t.value,
                     g.value,
                     i,
-                    self.get_setting(self.SETTING.AUTH_USER).encode("utf-8"),
+                    username.encode("utf-8"),
                 )
             elif a == "password":
                 logger.info("sending %s", a)
+                password = self.get_auth_password() or ""
                 self.module.ovpn3.send_auth(
                     self.module.get_session_path(),
                     t.value,
                     g.value,
                     i,
-                    self.get_auth_password().encode("utf-8"),
+                    password.encode("utf-8"),
                 )
             elif a == "static_challenge":
                 OTPInputWindow(self.send_otp, lambda: self.module.callback(False)).show()

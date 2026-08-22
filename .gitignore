@@ -1,21 +1,42 @@
-__pycache__
+# eOVPN-Pro build artifacts / خروجی‌های ساخت
 build
 builddir
-playground.py
 build-dir
-eovpn/metadata.json
-subprojects/openvpn3/enums.h
-.flatpak-builder
-*~
-*.ovpn
-*.crt
-*.ca
-tests/data/**
+repo
+*.so
 *.mo
 gschemas.compiled
-*.so
-repo
 *.flatpak
+*.deb
+*.rpm
+*.AppImage
+
+# Python / پایتون
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.ruff_cache/
+.venv/
+dist/packages/
+
+# Generated sources / فایل‌های تولیدشده
+eovpn/metadata.json
+subprojects/openvpn3/enums.h
+cffi__pycache__
+
+# Editor / IDE
+playground.py
+*~
 *#
 .wraplock
 .cache
+
+# Local test data / داده‌های تست محلی
+tests/data/**
+
+# VPN configs must never be committed / کانفیگ‌های VPN هرگز نباید کامیت شوند
+*.ovpn
+*.crt
+*.ca
+*.pem
+*.key

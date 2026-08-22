@@ -4,18 +4,18 @@ eOVPN-Pro Configuration & Extraction Unit Tests
 """
 
 import os
-import io
+import unittest
 import zipfile
 import shutil
 import tempfile
-import unittest
-from unittest.mock import patch, MagicMock
+import unittest.mock
 
 from eovpn.utils import (
     download_remote_to_destination,
+    matches_server_filter,
     ovpn_is_auth_required,
     is_safe_path,
-    NotZipException
+    NotZipException,
 )
 
 
@@ -94,6 +94,51 @@ class TestOpenVPNUtils(unittest.TestCase):
         dest_dir = os.path.join(self.test_dir, "dest_invalid")
         with self.assertRaises(NotZipException):
             download_remote_to_destination(invalid_path, dest_dir)
+
+    def test_oversized_zip_rejected(self):
+        """Test that archives above the size cap are rejected."""
+        zip_path = os.path.join(self.test_dir, "huge.zip")
+        dest_dir = os.path.join(self.test_dir, "dest_huge")
+        with zipfile.ZipFile(zip_path, "w") as z:
+            z.writestr("big.ovpn", "remote x 1194\n" + ("A" * 4096))
+
+        with unittest.mock.patch("eovpn.utils.MAX_ZIP_DOWNLOAD_BYTES", 64):
+            with self.assertRaises(NotZipException):
+                download_remote_to_destination(zip_path, dest_dir)
+
+
+class TestServerFilter(unittest.TestCase):
+    """Unit tests for the pure server-list search/filter predicate."""
+
+    def test_search_matches_substring_case_insensitive(self):
+        self.assertTrue(matches_server_filter("iran-tehran.ovpn", search="tehran"))
+        self.assertTrue(matches_server_filter("Iran-Tehran.ovpn", search="IRAN"))
+        self.assertFalse(matches_server_filter("germany.ovpn", search="france"))
+
+    def test_favorites_mode(self):
+        favorites = {"starred.ovpn"}
+        self.assertTrue(matches_server_filter("starred.ovpn", mode="favorites", favorites=favorites))
+        self.assertFalse(matches_server_filter("plain.ovpn", mode="favorites", favorites=favorites))
+        self.assertFalse(matches_server_filter("x.ovpn", mode="favorites", favorites=None))
+
+    def test_online_offline_modes(self):
+        latencies = {"fast.ovpn": 42.0, "down.ovpn": None}
+        self.assertTrue(matches_server_filter("fast.ovpn", mode="online", latencies=latencies))
+        self.assertFalse(matches_server_filter("down.ovpn", mode="online", latencies=latencies))
+        self.assertTrue(matches_server_filter("down.ovpn", mode="offline", latencies=latencies))
+        self.assertFalse(matches_server_filter("fast.ovpn", mode="offline", latencies=latencies))
+
+    def test_all_mode_always_matches(self):
+        self.assertTrue(matches_server_filter("anything.ovpn", mode="all"))
+
+    def test_combined_search_and_mode(self):
+        favorites = {"us-ny.ovpn"}
+        self.assertTrue(
+            matches_server_filter("us-ny.ovpn", search="ny", mode="favorites", favorites=favorites)
+        )
+        self.assertFalse(
+            matches_server_filter("us-ny.ovpn", search="la", mode="favorites", favorites=favorites)
+        )
 
 
 if __name__ == '__main__':

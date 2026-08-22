@@ -4,7 +4,8 @@ eOVPN-Pro IP & Geolocation Lookup Module
 
 This module securely retrieves public IP address and geolocation (country code)
 using encrypted HTTPS endpoints with multiple redundant fallbacks.
-این ماژول آدرس IP عمومی و کد کشور را با استفاده از اندپوینت‌های امن HTTPS و مکانیزم‌های جایگزین متعدد استعلام می‌کند.
+این ماژول آدرس IP عمومی و کد کشور را با استفاده از اندپوینت‌های امن HTTPS
+و مکانیزم‌های جایگزین متعدد استعلام می‌کند.
 """
 
 import json
@@ -48,7 +49,9 @@ class Lookup:
             try:
                 logger.debug("Attempting IP lookup via: %s", provider.__name__)
                 if provider():
-                    logger.info("IP lookup succeeded via %s: %s (%s)", provider.__name__, self.ip, self.country_code)
+                    logger.info(
+                        "IP lookup succeeded via %s: %s (%s)", provider.__name__, self.ip, self.country_code
+                    )
                     return True
             except Exception as exc:
                 logger.warning("Provider %s failed: %s", provider.__name__, exc)

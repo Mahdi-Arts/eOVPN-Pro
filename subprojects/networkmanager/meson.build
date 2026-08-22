@@ -1,7 +1,7 @@
 project('eovpn_nm', 'c')
 
 main_project = 'eovpn'
-main_project_id = 'com.github.mahdi-bagheban.eovpn-pro'
+main_project_id = 'com.github.mahdi-arts.eovpn-pro'
 
 deps = [
     dependency('libnm'),

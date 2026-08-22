@@ -88,7 +88,9 @@ def test_single_ovpn(file_path: str, timeout: float = 1.5) -> float | None:
     return best_rtt
 
 
-def test_all_configs(config_dir: str, file_list: list[str], timeout: float = 1.5, max_workers: int = 12) -> dict[str, float | None]:
+def test_all_configs(
+    config_dir: str, file_list: list[str], timeout: float = 1.5, max_workers: int = 12
+) -> dict[str, float | None]:
     """
     Runs latency tests on a list of .ovpn files concurrently using a thread pool.
     اجرای موازی و ناهمگام تست پینگ بر روی لیست کانفیگ‌ها با استفاده از استخر نخ‌ها.

@@ -1,7 +1,7 @@
 project('openvpn3', 'c')
 
 main_project = 'eovpn'
-main_project_id = 'com.github.mahdi-bagheban.eovpn-pro'
+main_project_id = 'com.github.mahdi-arts.eovpn-pro'
 
 deps = [
     dependency('gio-unix-2.0'),
@@ -9,8 +9,8 @@ deps = [
 ]
 
 python = import('python')
-python_instllation = python.find_installation()
-python_dir = python_instllation.get_install_dir()
+python_installation = python.find_installation()
+python_dir = python_installation.get_install_dir()
 lib_install_dir = python_dir / main_project / 'backend' / 'openvpn3'
 message(lib_install_dir)
 

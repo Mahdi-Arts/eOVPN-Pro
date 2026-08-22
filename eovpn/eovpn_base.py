@@ -27,10 +27,10 @@ from .utils import download_remote_to_destination
 _builder_record: dict[str, Gtk.Builder] = {}
 _storage_record: dict[str, object] = {}
 _settings_backup: dict[str, GLib.Variant] = {}
-_session_secrets: dict[str, str] = {}  # In-memory secure password storage / نگهداری امن رمز عبور در حافظه موقت
+_session_secrets: dict[str, str] = {}  # Secure in-RAM password store / ذخیره امن رمز در حافظه
 
 EOVPN_SECRET_SCHEMA = Secret.Schema.new(
-    "com.github.mahdi-bagheban.eovpn-pro",
+    "com.github.mahdi-arts.eovpn-pro",
     Secret.SchemaFlags.NONE,
     {"username": Secret.SchemaAttributeType.STRING}
 )
@@ -54,18 +54,38 @@ class ConfigItem(GObject.Object):
 class ConfigRow(Gtk.ListBoxRow):
     """
     Custom ListBoxRow widget representing an OpenVPN configuration entry.
-    ویجت اختصاصی ردیف لیست برای نمایش کانفیگ OpenVPN همراه با برچسب پینگ/تأخیر و دکمه ویرایش.
+    ویجت اختصاصی ردیف لیست برای نمایش کانفیگ OpenVPN همراه با برچسب پینگ/تأخیر،
+    دکمه ستاره (مورد علاقه) و دکمه ویرایش.
     """
-    def __init__(self, filename: str, ovpn_dir: str, **kwargs):
+    def __init__(self, filename: str, ovpn_dir: str,
+                 favorites: set[str] | None = None,
+                 on_favorite_toggled=None, **kwargs):
         super().__init__(**kwargs)
         self.filename: str = filename
         self.ovpn_dir: str = ovpn_dir
+        self.on_favorite_toggled = on_favorite_toggled
+        is_favorite = bool(favorites and filename in favorites)
 
         self.box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
         self.box.set_margin_start(10)
         self.box.set_margin_end(8)
         self.box.set_margin_top(4)
         self.box.set_margin_bottom(4)
+
+        # Favorite (star) toggle / دکمه ستاره‌دار کردن کانفیگ
+        self.fav_button = Gtk.ToggleButton()
+        self.fav_button.set_icon_name(
+            "starred-symbolic" if is_favorite else "non-starred-symbolic"
+        )
+        self.fav_button.add_css_class("flat")
+        self.fav_button.add_css_class("server-fav-btn")
+        self.fav_button.set_valign(Gtk.Align.CENTER)
+        self.fav_button.set_active(is_favorite)
+        self.fav_button.set_tooltip_text(
+            gettext.gettext("Remove from Favorites") if is_favorite
+            else gettext.gettext("Add to Favorites")
+        )
+        self.fav_button.connect("toggled", self._on_favorite_toggled)
 
         # File label / نام فایل کانفیگ
         self.label = Gtk.Label.new(filename)
@@ -89,10 +109,22 @@ class ConfigRow(Gtk.ListBoxRow):
         target_file = Path(self.ovpn_dir).joinpath(filename)
         self.edit_button.connect("clicked", lambda w: subprocess.run(["xdg-open", str(target_file)]))
 
+        self.box.append(self.fav_button)
         self.box.append(self.label)
         self.box.append(self.latency_label)
         self.box.append(self.edit_button)
         self.set_child(self.box)
+
+    def _on_favorite_toggled(self, button: Gtk.ToggleButton):
+        """Updates star icon and persists the favorite state."""
+        active = button.get_active()
+        button.set_icon_name("starred-symbolic" if active else "non-starred-symbolic")
+        button.set_tooltip_text(
+            gettext.gettext("Remove from Favorites") if active
+            else gettext.gettext("Add to Favorites")
+        )
+        if self.on_favorite_toggled:
+            self.on_favorite_toggled(self.filename, active)
 
     def set_edit_visible(self, visible: bool):
         """Toggles visibility of the inline edit button."""
@@ -110,19 +142,13 @@ class StorageItem:
 
 
 class Settings:
-    CURRENT_CONNECTED = "current-connected"
     LAST_CONNECTED = "last-connected"
     LAST_CONNECTED_CURSOR = "last-connected-cursor"
-    UPDATE_ON_START = "update-on-start"
-    CONNECT_ON_LAUNCH = "connect-on-launch"
     NOTIFICATIONS = "notifications"
     MANAGER = "manager"
     REQ_AUTH = "req-auth"
     CA = "ca"
-    CA_SET_EXPLICIT = "ca-set-explicit"
-    REMOTE_TYPE = "remote-type"
     REMOTE = "remote"
-    REMOTE_SAVEPATH = "remote-savepath"
     AUTH_USER = "auth-user"
     NM_ACTIVE_UUID = "nm-active-uuid"
     SHOW_FLAG = "show-flag"
@@ -132,12 +158,15 @@ class Settings:
     OPENVPN3_DCO = "openvpn3-dco"
     AUTO_RECONNECT = "auto-reconnect"
     LANGUAGE = "language"
+    FAVORITES = "favorite-configs"
 
+    # Keep this list in sync with the GSettings schema keys
+    # این فهرست باید با کلیدهای اسکیمای GSettings هماهنگ بماند
     all_settings = [
-        "current-connected", "last-connected", "last-connected-cursor", "update-on-start",
-        "connect-on-launch", "notifications", "manager", "req-auth", "ca", "ca-set-explicit",
-        "remote-type", "remote", "remote-savepath", "auth-user", "nm-active-uuid",
-        "show-flag", "listbox-v-adjust", "layout", "dark-theme", "auto-reconnect", "language"
+        "last-connected", "last-connected-cursor", "notifications", "manager",
+        "req-auth", "ca", "remote", "auth-user", "nm-active-uuid", "show-flag",
+        "listbox-v-adjust", "layout", "dark-theme", "auto-reconnect",
+        "favorite-configs", "language"
     ]
 
 
@@ -155,7 +184,7 @@ class Base:
         except Exception:
             metadata = {
                 "APP_NAME": "eOVPN Pro",
-                "APP_ID": "com.github.mahdi-bagheban.eovpn-pro",
+                "APP_ID": "com.github.mahdi-arts.eovpn-pro",
                 "APP_VERSION": "1.5",
                 "COMMIT": "release",
                 "AUTHOR": "Mahdi Bagheban",
@@ -166,7 +195,7 @@ class Base:
             }
 
         self.APP_NAME = metadata.get("APP_NAME", "eOVPN Pro")
-        self.APP_ID = metadata.get("APP_ID", "com.github.mahdi-bagheban.eovpn-pro")
+        self.APP_ID = metadata.get("APP_ID", "com.github.mahdi-arts.eovpn-pro")
         self.APP_VERSION = metadata.get("APP_VERSION", "1.5")
         self.APP_COMMIT = metadata.get("COMMIT", "release")
         self.AUTHOR = metadata.get("AUTHOR", "Mahdi Bagheban")
@@ -180,7 +209,7 @@ class Base:
 
         self.EOVPN_CONFIG_DIR = os.path.join(GLib.get_user_config_dir(), "eovpn")
         self.EOVPN_OVPN_CONFIG_DIR = os.path.join(self.EOVPN_CONFIG_DIR, "CONFIGS")
-        self.EOVPN_GRESOURCE_PREFIX = "/com/github/mahdi-bagheban/eovpn-pro"
+        self.EOVPN_GRESOURCE_PREFIX = "/com/github/mahdi-arts/eovpn-pro"
         self.EOVPN_CSS = self.EOVPN_GRESOURCE_PREFIX + "/css/main.css"
         self.SETTING = Settings()
         self.__settings = Gio.Settings.new(self.APP_ID)
@@ -288,9 +317,13 @@ class Base:
             return v.get_int32()
         elif v_type == 's':
             val = v.get_string()
+            # "null" is the project's sentinel for an unset string key
+            # رشته "null" به‌عنوان نشانگر مقدار تنظیم‌نشده برای کلیدهای متنی است
             return None if val == "null" else val
         elif v_type == "d":
             return v.get_double()
+        elif v_type == "as":
+            return list(v.get_strv())
         return None
 
     def set_setting(self, key: str, value):
@@ -307,6 +340,8 @@ class Base:
             g_value = GLib.Variant.new_double(value)
         elif isinstance(value, str):
             g_value = GLib.Variant.new_string(value)
+        elif isinstance(value, (list, tuple)):
+            g_value = GLib.Variant.new_strv([str(v) for v in value])
 
         if g_value is not None:
             try:
@@ -332,17 +367,54 @@ class Base:
         self.__settings.sync()
 
     def reset_paths(self):
-        if os.path.exists(self.EOVPN_OVPN_CONFIG_DIR):
-            if len(os.listdir(self.EOVPN_OVPN_CONFIG_DIR)) > 1:
-                shutil.rmtree(self.EOVPN_OVPN_CONFIG_DIR)
+        """Wipes and recreates the managed configs directory."""
+        shutil.rmtree(self.EOVPN_OVPN_CONFIG_DIR, ignore_errors=True)
         os.makedirs(self.EOVPN_OVPN_CONFIG_DIR, exist_ok=True)
+
+    def get_favorites(self) -> set[str]:
+        """
+        Returns the set of favorite configuration filenames.
+        بازگرداندن مجموعه نام کانفیگ‌های نشان‌شده (مورد علاقه).
+        """
+        favs = self.get_setting(self.SETTING.FAVORITES)
+        return set(favs) if favs else set()
+
+    def toggle_favorite(self, filename: str, favorite: bool):
+        """
+        Adds or removes a configuration from the favorites list.
+        افزودن یا حذف یک کانفیگ به فهرست کانفیگ‌های مورد علاقه.
+        """
+        favs = self.get_favorites()
+        if favorite:
+            favs.add(filename)
+        else:
+            favs.discard(filename)
+        self.set_setting(self.SETTING.FAVORITES, sorted(favs))
+
+    def _notify_list_changed(self):
+        """Fires the optional list-change hook (used by MainWindow counters)."""
+        hook = self.retrieve("on_list_changed")
+        if hook is not None:
+            try:
+                hook()
+            except Exception as e:
+                logger.debug("List-changed hook failed: %s", e)
 
     def load_only(self) -> int | None:
         self.store("latency_labels", {})
 
+        # Read favorites once per (re)load to avoid repeated GSettings access
+        # خواندن یک‌باره لیست موردعلاقه‌ها در هر بار بارگذاری جهت کاهش دسترسی به GSettings
+        favorites = self.get_favorites()
+
         def widget_factory(item):
             filename = str(item)
-            row = ConfigRow(filename, self.EOVPN_OVPN_CONFIG_DIR)
+            row = ConfigRow(
+                filename,
+                self.EOVPN_OVPN_CONFIG_DIR,
+                favorites=favorites,
+                on_favorite_toggled=self.retrieve("favorite_toggled_cb"),
+            )
 
             latency_dict = self.retrieve("latency_labels")
             if isinstance(latency_dict, dict):
@@ -364,14 +436,27 @@ class Base:
             configs = []
 
         liststore = Gio.ListStore.new(ConfigItem)
-        box.bind_model(liststore, widget_factory)
-
         self.store(StorageItem.LISTSTORE, liststore)
+
+        # If a filter model is registered (search/filter feature), bind through it
+        # در صورت وجود مدل فیلتر (جستجو/فیلتر)، لیست از طریق آن به ListBox متصل می‌شود
+        filter_model = self.retrieve("filter_model")
+        if filter_model is not None:
+            try:
+                filter_model.set_model(liststore)
+            except Exception as e:
+                logger.debug("Failed to attach filter model: %s", e)
+                filter_model = None
+
+        bind_model = filter_model if filter_model is not None else liststore
+        box.bind_model(bind_model, widget_factory)
+
         self.store(StorageItem.CONFIGS_LIST, configs)
         self.store(StorageItem.LISTBOX_ROWS, [])
 
         for file in configs:
             liststore.append(ConfigItem(file))
+        self._notify_list_changed()
         return len(configs)
 
     def remove_only(self, remove_path: bool = False):
@@ -382,8 +467,15 @@ class Base:
             liststore.remove_all()
         self.store(StorageItem.LISTBOX_ROWS, [])
         self.store(StorageItem.CONFIGS_LIST, [])
+        self._notify_list_changed()
 
     def validate_and_load(self, spinner=None, ca_button=None):
+        """
+        Fetches the configuration source and atomically replaces the configs
+        directory, so a failed download never destroys the existing configs.
+        دریافت منبع کانفیگ و جایگزینی اتمی دایرکتوری کانفیگ‌ها؛ در صورت خطا،
+        کانفیگ‌های قبلی کاربر هرگز از بین نمی‌روند.
+        """
         remote_source = self.get_setting(self.SETTING.REMOTE)
         if not remote_source:
             logger.error("Configuration source is empty!")
@@ -410,8 +502,22 @@ class Base:
             return False
 
         def dispatch():
+            staging_dir = self.EOVPN_OVPN_CONFIG_DIR + ".staging"
+            backup_dir = self.EOVPN_OVPN_CONFIG_DIR + ".old"
             try:
-                cert = download_remote_to_destination(remote_source, self.EOVPN_OVPN_CONFIG_DIR)
+                # Download into a staging directory first
+                # دانلود ابتدا در یک دایرکتوری موقت (مرحله‌ای)
+                shutil.rmtree(staging_dir, ignore_errors=True)
+                cert = download_remote_to_destination(remote_source, staging_dir)
+
+                # Atomic swap: configs -> .old, staging -> configs
+                # جابجایی اتمی: کانفیگ فعلی به .old و دایرکتوری موقت به جای آن
+                shutil.rmtree(backup_dir, ignore_errors=True)
+                if os.path.exists(self.EOVPN_OVPN_CONFIG_DIR):
+                    os.rename(self.EOVPN_OVPN_CONFIG_DIR, backup_dir)
+                os.rename(staging_dir, self.EOVPN_OVPN_CONFIG_DIR)
+                shutil.rmtree(backup_dir, ignore_errors=True)
+
                 if cert:
                     ca_path = os.path.join(self.EOVPN_OVPN_CONFIG_DIR, os.path.basename(cert[-1]))
                     self.set_setting(self.SETTING.CA, ca_path)
@@ -419,10 +525,10 @@ class Base:
                         ca_button.set_label(cert[-1])
             except Exception as e:
                 logger.error("Download failed: %s", e)
+                shutil.rmtree(staging_dir, ignore_errors=True)
             finally:
                 GLib.idle_add(glib_func)
 
-        self.reset_paths()
         thread = threading.Thread(target=dispatch)
         thread.daemon = True
         thread.start()

@@ -8,18 +8,19 @@ concurrent speed tests, latency-based sorting, and connection orchestration.
 """
 
 import os
+import sys
+import time
 import logging
 import gettext
 import webbrowser
 import threading
-from time import sleep
 
 from gi.repository import Gtk, Gio, GLib, Gdk, Adw
 
 from .settings_window import SettingsWindow
 from .connection_manager import NetworkManager, OpenVPN3
 from .ip_lookup.lookup import Lookup
-from .utils import ovpn_is_auth_required
+from .utils import matches_server_filter, ovpn_is_auth_required
 from .eovpn_base import Base, StorageItem, ConfigRow
 
 logger = logging.getLogger(__name__)
@@ -34,7 +35,7 @@ class MainWindow(Base, Gtk.Builder):
         super().__init__()
         Gtk.Builder.__init__(self)
         self.app = app
-        
+
         if self.get_setting(self.SETTING.DARK_THEME) is True:
             gtk_settings = Gtk.Settings().get_default()
             if gtk_settings:
@@ -55,9 +56,13 @@ class MainWindow(Base, Gtk.Builder):
         self.manual_disconnect = False
         self.selected_config = None
         self.connected_cursor = None
-        self.signals = Signals()
+        self.signals = MainWindowSignals()
         self.latencies: dict[str, float | None] = {}
         self.sort_by_speed_active = False
+
+        # Search / Filter state / وضعیت جستجو و فیلتر لیست
+        self.search_text: str = ""
+        self.filter_mode: str = "all"
 
         ###########################################################
         # Initialize and setup Connection Manager (CM)
@@ -159,7 +164,7 @@ class MainWindow(Base, Gtk.Builder):
                 self.paned.set_orientation(Gtk.Orientation.VERTICAL)
                 self.inner_left.set_size_request(-1, 120)
                 self.window.set_default_size(400, 800)
-        
+
         update_layout()
         self.paned.set_start_child(self.inner_left)
         self.paned.set_end_child(self.inner_right)
@@ -178,18 +183,26 @@ class MainWindow(Base, Gtk.Builder):
         self.list_box.connect("row-selected", self.row_changed)
         self.store(StorageItem.LISTBOX, self.list_box)
 
+        # Search & Filter infrastructure / زیرساخت جستجو و فیلتر هوشمند
+        self.list_filter = Gtk.CustomFilter.new(self.list_filter_match, None, None)
+        self.filter_model = Gtk.FilterListModel.new(None, self.list_filter)
+        self.store("filter_model", self.filter_model)
+        self.store("list_filter", self.list_filter)
+        self.store("favorite_toggled_cb", self.on_favorite_toggled)
+        self.store("on_list_changed", self.update_filter_count)
+
         # Placeholder when list is empty / ویجت جایگزین در زمان خالی بودن لیست
         v_box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 6)
         v_box.set_valign(Gtk.Align.CENTER)
-        lbl = Gtk.Label.new(gettext.gettext("No Configs Added!"))
-        lbl.add_css_class("bold")
-        btn = Gtk.Button.new_with_label(gettext.gettext("Open Settings"))
-        btn.add_css_class("suggested-action")
-        btn.set_valign(Gtk.Align.START)
-        btn.set_halign(Gtk.Align.CENTER)
-        btn.connect("clicked", lambda x: SettingsWindow().show())
-        v_box.append(lbl)
-        v_box.append(btn)
+        self.empty_label = Gtk.Label.new(gettext.gettext("No Configs Added!"))
+        self.empty_label.add_css_class("bold")
+        self.empty_btn = Gtk.Button.new_with_label(gettext.gettext("Open Settings"))
+        self.empty_btn.add_css_class("suggested-action")
+        self.empty_btn.set_valign(Gtk.Align.START)
+        self.empty_btn.set_halign(Gtk.Align.CENTER)
+        self.empty_btn.connect("clicked", lambda x: SettingsWindow().show())
+        v_box.append(self.empty_label)
+        v_box.append(self.empty_btn)
         self.list_box.set_placeholder(v_box)
 
         self.scrolled_window.set_child(viewport)
@@ -223,7 +236,45 @@ class MainWindow(Base, Gtk.Builder):
         self.pro_box.append(self.sort_btn)
         self.pro_box.append(self.fastest_btn)
 
+        # ---------------------------------------------------------
+        # Search & Filter Toolbar / نوار ابزار جستجو و فیلتر سرورها
+        # ---------------------------------------------------------
+        self.filter_bar = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 6)
+        self.filter_bar.set_margin_start(10)
+        self.filter_bar.set_margin_end(10)
+        self.filter_bar.set_margin_bottom(6)
+
+        self.search_entry = Gtk.SearchEntry.new()
+        self.search_entry.set_hexpand(True)
+        self.search_entry.set_placeholder_text(gettext.gettext("Search servers…"))
+        self.search_entry.set_tooltip_text(gettext.gettext("Search configurations by name"))
+        self.search_entry.connect("search-changed", self.on_search_changed)
+
+        self.filter_dropdown = Gtk.DropDown.new(
+            Gtk.StringList.new([
+                gettext.gettext("All"),
+                gettext.gettext("Favorites"),
+                gettext.gettext("Online"),
+                gettext.gettext("Offline"),
+            ]),
+            None,
+        )
+        self.filter_dropdown.set_selected(0)
+        self.filter_dropdown.set_tooltip_text(gettext.gettext("Filter servers"))
+        self.filter_dropdown.connect("notify::selected", self.on_filter_changed)
+
+        self.filter_count = Gtk.Label.new("")
+        self.filter_count.add_css_class("dim-label")
+        self.filter_count.set_tooltip_text(
+            gettext.gettext("Visible servers / Total servers")
+        )
+
+        self.filter_bar.append(self.search_entry)
+        self.filter_bar.append(self.filter_dropdown)
+        self.filter_bar.append(self.filter_count)
+
         self.inner_left.append(self.pro_box)
+        self.inner_left.append(self.filter_bar)
         self.inner_left.append(self.scrolled_window)
 
         # ---------------------------------------------------------
@@ -266,7 +317,9 @@ class MainWindow(Base, Gtk.Builder):
         self.traffic_card.set_size_request(300, 72)
         self.traffic_card.set_margin_top(12)
         self.traffic_card.set_margin_bottom(12)
-        self.traffic_card.set_tooltip_text(gettext.gettext("Live traffic statistics for the active VPN tunnel"))
+        self.traffic_card.set_tooltip_text(
+            gettext.gettext("Live traffic statistics for the active VPN tunnel")
+        )
 
         def build_stat_cell(icon_name: str, css_variant: str, caption_text: str):
             cell = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
@@ -326,7 +379,7 @@ class MainWindow(Base, Gtk.Builder):
         self.connect_btn.set_valign(Gtk.Align.FILL)
         self.connect_btn.set_hexpand(True)
         self.connect_btn.set_vexpand(True)
-        
+
         self.connect_box.append(self.connect_btn)
 
         self.pause_resume_btn = Gtk.Button.new_from_icon_name("media-playback-pause-symbolic")
@@ -344,7 +397,7 @@ class MainWindow(Base, Gtk.Builder):
         # Bottom Progress Bar / نوار پیشرفت پایین
         # ---------------------------------------------------------
         self.progress_bar = Gtk.ProgressBar.new()
-        
+
         if self.CM().status():
             self.connect_btn.set_label(gettext.gettext("Disconnect"))
             self.connect_btn.add_css_class("destructive-action")
@@ -360,7 +413,7 @@ class MainWindow(Base, Gtk.Builder):
             about.set_authors([self.AUTHOR])
             about.set_artists([self.AUTHOR])
             about.set_copyright(self.AUTHOR)
-            about.set_license_type(Gtk.License.LGPL_3_0)
+            about.set_license_type(Gtk.License.GPL_3_0)
             about.set_version(self.APP_VERSION)
             website = self.AUTHOR_WEBSITE
             if not website.startswith("http"):
@@ -399,7 +452,8 @@ class MainWindow(Base, Gtk.Builder):
             logger.info("Changing language to: %s", new_lang)
             action.set_state(value)
             self.set_setting(self.SETTING.LANGUAGE, new_lang)
-            import sys
+            # Restart the process so gettext picks up the new language
+            # راه‌اندازی مجدد برنامه تا زبان جدید توسط gettext اعمال شود
             os.execv(sys.executable, [sys.executable] + sys.argv)
 
         action_lang = Gio.SimpleAction.new_stateful(
@@ -435,11 +489,23 @@ class MainWindow(Base, Gtk.Builder):
         self.app.set_accels_for_action("app.settings", ["<Primary>S"])
         self.app.set_accels_for_action("app.update", ["<Primary>U"])
         self.app.set_accels_for_action("app.about", ["<Primary>A"])
-        
+
         action = Gio.SimpleAction.new("connect", None)
         action.connect('activate', self.signals.connect_via_ks, self.get_selected_config)
         self.app.add_action(action)
         self.app.set_accels_for_action("app.connect", ["<Primary>C", "<Primary>D"])
+
+        # Focus search box / تمرکز بر کادر جستجو
+        action = Gio.SimpleAction.new("search", None)
+        action.connect("activate", lambda *_: self.search_entry.grab_focus())
+        self.app.add_action(action)
+        self.app.set_accels_for_action("app.search", ["<Primary>F"])
+
+        # Toggle favorites filter / تغییر وضعیت فیلتر موردعلاقه‌ها
+        action = Gio.SimpleAction.new("toggle-favorites", None)
+        action.connect("activate", lambda *_: self.toggle_favorites_filter())
+        self.app.add_action(action)
+        self.app.set_accels_for_action("app.toggle-favorites", ["<Primary><Shift>F"])
 
         menu = Gio.Menu()
         layout_menu = Gio.Menu()
@@ -450,7 +516,7 @@ class MainWindow(Base, Gtk.Builder):
         item = Gio.MenuItem.new(gettext.gettext("Horizontal"), "card-h")
         item.set_action_and_target_value("app.radiogroup", GLib.Variant.new_string("card-h"))
         layout_menu.append_item(item)
-        
+
         lang_menu = Gio.Menu()
         item = Gio.MenuItem.new("English", "en")
         item.set_action_and_target_value("app.language", GLib.Variant.new_string("en"))
@@ -489,7 +555,7 @@ class MainWindow(Base, Gtk.Builder):
         if (cur := self.get_setting(self.SETTING.LAST_CONNECTED_CURSOR)) != -1:
             try:
                 rows = self.retrieve(StorageItem.LISTBOX_ROWS)
-                if rows and cur < len(rows):
+                if rows and 0 <= cur < len(rows):
                     self.list_box.select_row(rows[cur])
                 adj = self.scrolled_window.get_vadjustment()
                 v = self.get_setting(self.SETTING.LISTBOX_V_ADJUST)
@@ -543,6 +609,82 @@ class MainWindow(Base, Gtk.Builder):
         else:
             return 1 if file1 > file2 else -1
 
+    # ------------------------------------------------------------------
+    # Search, Filter & Favorites / جستجو، فیلتر و کانفیگ‌های مورد علاقه
+    # ------------------------------------------------------------------
+
+    def list_filter_match(self, item, *data) -> bool:
+        """
+        Filter callback used by Gtk.CustomFilter: combines the live search
+        text, the selected filter mode and the favorites set.
+        تابع فیلتر لیست که جستجوی زنده، حالت فیلتر و مجموعه موردعلاقه‌ها را ترکیب می‌کند.
+        """
+        return matches_server_filter(
+            str(item),
+            search=self.search_text,
+            mode=self.filter_mode,
+            favorites=self.get_favorites(),
+            latencies=self.latencies,
+        )
+
+    def on_search_changed(self, entry: Gtk.SearchEntry):
+        """Re-applies the list filter on every keystroke."""
+        self.search_text = entry.get_text().strip().lower()
+        self._refresh_filter()
+
+    def on_filter_changed(self, dropdown: Gtk.DropDown, *args):
+        """Applies the selected filter mode (All / Favorites / Online / Offline)."""
+        modes = ("all", "favorites", "online", "offline")
+        idx = dropdown.get_selected()
+        if idx < len(modes):
+            self.filter_mode = modes[idx]
+        self._refresh_filter()
+
+    def toggle_favorites_filter(self):
+        """Quickly toggles the favorites-only filter."""
+        if self.filter_mode == "favorites":
+            self.filter_mode = "all"
+        else:
+            self.filter_mode = "favorites"
+        modes = ("all", "favorites", "online", "offline")
+        self.filter_dropdown.set_selected(modes.index(self.filter_mode))
+        self._refresh_filter()
+
+    def _refresh_filter(self):
+        """Notifies the filter model and updates the visible counter."""
+        f = getattr(self, "list_filter", None)
+        if f is not None:
+            f.changed(Gtk.FilterChange.DIFFERENT)
+        self.update_filter_count()
+
+    def update_filter_count(self):
+        """Shows 'visible / total' counters and adapts the empty-state message."""
+        total = 0
+        visible = 0
+        try:
+            total = len(self.retrieve(StorageItem.CONFIGS_LIST) or [])
+            model = getattr(self, "filter_model", None)
+            visible = model.get_n_items() if model is not None else total
+        except Exception:
+            pass
+        if hasattr(self, "filter_count"):
+            self.filter_count.set_text(f"{visible} / {total}")
+
+        # Differentiate "no configs at all" from "nothing matches the filter"
+        # تفکیک حالت «هیچ کانفیگی وجود ندارد» از «نتیجه‌ای با فیلتر پیدا نشد»
+        if hasattr(self, "empty_label") and hasattr(self, "empty_btn"):
+            if total == 0:
+                self.empty_label.set_text(gettext.gettext("No Configs Added!"))
+                self.empty_btn.set_visible(True)
+            else:
+                self.empty_label.set_text(gettext.gettext("No matching servers"))
+                self.empty_btn.set_visible(False)
+
+    def on_favorite_toggled(self, filename: str, active: bool):
+        """Persists favorite state and live-updates the list filters."""
+        self.toggle_favorite(filename, active)
+        self._refresh_filter()
+
     def trigger_speed_test(self):
         """
         Initiates concurrent latency test for all available .ovpn endpoints.
@@ -588,6 +730,10 @@ class MainWindow(Base, Gtk.Builder):
         if self.sort_by_speed_active:
             self.list_box.invalidate_sort()
 
+        # Re-evaluate Online/Offline filters with fresh latency data
+        # بازارزیابی فیلترهای آنلاین/آفلاین با داده‌های تازه پینگ
+        self._refresh_filter()
+
         self.speed_test_btn.set_sensitive(True)
         self.speed_test_btn.set_label(gettext.gettext("Speed Test"))
         self.spinner.stop()
@@ -628,20 +774,32 @@ class MainWindow(Base, Gtk.Builder):
 
         fastest_file = min(valid_latencies, key=valid_latencies.get)
 
-        configs_list = self.retrieve(StorageItem.CONFIGS_LIST)
         try:
-            idx = configs_list.index(fastest_file)
-            rows = self.retrieve(StorageItem.LISTBOX_ROWS)
-            if idx < len(rows):
-                row_to_select = rows[idx]
-                self.list_box.select_row(row_to_select)
-
-            toast = Adw.Toast.new(
-                gettext.gettext("Selected fastest server: {} ({} ms)").format(
-                    fastest_file, valid_latencies[fastest_file]
-                )
+            # Locate the row by filename so selection stays correct even when
+            # the list is sorted by latency or filtered (search/favorites).
+            # انتخاب ردیف بر اساس نام فایل تا در حالت مرتب‌سازی/فیلتر هم دقیق بماند
+            rows = self.retrieve(StorageItem.LISTBOX_ROWS) or []
+            row_to_select = next(
+                (r for r in rows if getattr(r, "filename", None) == fastest_file),
+                None,
             )
-            self.toast_overlay.add_toast(toast)
+            if row_to_select is not None:
+                self.list_box.select_row(row_to_select)
+                toast = Adw.Toast.new(
+                    gettext.gettext("Selected fastest server: {} ({} ms)").format(
+                        fastest_file, valid_latencies[fastest_file]
+                    )
+                )
+                self.toast_overlay.add_toast(toast)
+            else:
+                logger.info(
+                    "Fastest server '%s' is hidden by the current search/filter.",
+                    fastest_file,
+                )
+                toast = Adw.Toast.new(
+                    gettext.gettext("Fastest server is hidden by the current filter")
+                )
+                self.toast_overlay.add_toast(toast)
         except Exception as e:
             logger.error("Error selecting fastest server: %s", e)
 
@@ -650,8 +808,7 @@ class MainWindow(Base, Gtk.Builder):
         self.stop_network_monitor()
         self.last_rx = 0
         self.last_tx = 0
-        import time as pytime
-        self.last_time = pytime.time()
+        self.last_time = time.time()
         self.network_monitor_id = GLib.timeout_add_seconds(1, self.update_network_speed)
 
     def stop_network_monitor(self):
@@ -690,8 +847,7 @@ class MainWindow(Base, Gtk.Builder):
                                         rx += int(stats[0])
                                         tx += int(stats[8])
 
-            import time as pytime
-            now = pytime.time()
+            now = time.time()
             dt = now - getattr(self, "last_time", now - 1.0)
             if dt <= 0:
                 dt = 1.0
@@ -742,14 +898,32 @@ class MainWindow(Base, Gtk.Builder):
         return False
 
     def update_set_ip_flag(self):
-        """Updates public IP and country flag asynchronously."""
-        self.spinner.start()
-        if os.environ.get("FLATPAK_ID") is not None:
-            sleep(1.25)
-        self.lookup.update()
-        self.retrieve(StorageItem.FLAG).set_pixbuf(self.get_country_pixbuf(self.lookup.country_code))
-        self.ip_addr.set_label(self.lookup.ip or "0.0.0.0")
+        """
+        Worker: performs the network lookup off the main thread.
+        GTK widgets must never be touched from worker threads; the UI update
+        is therefore scheduled back onto the main loop via GLib.idle_add.
+        نخ کارگر: استعلام شبکه خارج از نخ اصلی انجام می‌شود. ویجت‌های GTK هرگز
+        نباید از نخ‌های فرعی دستکاری شوند؛ به‌روزرسانی رابط از طریق GLib.idle_add
+        به نخ اصلی بازگردانده می‌شود.
+        """
+        try:
+            if os.environ.get("FLATPAK_ID") is not None:
+                time.sleep(1.25)
+            self.lookup.update()
+        finally:
+            GLib.idle_add(self._apply_ip_lookup)
+
+    def _apply_ip_lookup(self) -> bool:
+        """Applies the lookup result on the GTK main thread."""
+        try:
+            flag = self.retrieve(StorageItem.FLAG)
+            if flag is not None:
+                flag.set_pixbuf(self.get_country_pixbuf(self.lookup.country_code))
+            self.ip_addr.set_label(self.lookup.ip or "0.0.0.0")
+        except Exception as e:
+            logger.debug("Failed to apply IP lookup result: %s", e)
         self.spinner.stop()
+        return False
 
     def swap_pause_btn_signal_pause_to_resume(self):
         self.pause_resume_btn.set_property("icon-name", "media-playback-start-symbolic")
@@ -757,7 +931,7 @@ class MainWindow(Base, Gtk.Builder):
             self.pause_resume_btn.disconnect(self.psh)
         self.psh = self.pause_resume_btn.connect("clicked", self.signals.resume, self.CM())
         self.update_ip_flag_async()
-        
+
     def swap_pause_btn_signal_resume_to_pause(self):
         self.pause_resume_btn.set_property("icon-name", "media-playback-pause-symbolic")
         if self.psh is not None:
@@ -810,17 +984,17 @@ class MainWindow(Base, Gtk.Builder):
             self.progress_bar.set_fraction(1.0)
             self.set_setting(self.SETTING.LAST_CONNECTED, self.get_selected_config())
             self.send_connected_notification()
-            
+
             # Save last cursor & vertical adjustment / ذخیره آخرین موقعیت نشانگر
             adj = self.scrolled_window.get_vadjustment()
             if adj:
                 self.set_setting(self.SETTING.LISTBOX_V_ADJUST, float(adj.get_value()))
-            
+
             configs = self.retrieve(StorageItem.CONFIGS_LIST)
             selected_cfg = self.get_selected_config()
             if configs and selected_cfg in configs:
-                self.set_setting(self.SETTING.LAST_CONNECTED_CURSOR, configs.index(selected_cfg) - 1)
-            
+                self.set_setting(self.SETTING.LAST_CONNECTED_CURSOR, configs.index(selected_cfg))
+
             self.swap_pause_btn_signal_resume_to_pause()
 
             if self.CM().get_name().lower() == "openvpn3":
@@ -845,7 +1019,7 @@ class MainWindow(Base, Gtk.Builder):
             self.progress_bar.add_css_class("progress-yellow")
             self.progress_bar.set_fraction(0)
             self.send_disconnected_notification()
-            
+
             self.swap_pause_btn_signal_pause_to_resume()
             self.pause_resume_btn.set_visible(False)
 
@@ -865,12 +1039,13 @@ class MainWindow(Base, Gtk.Builder):
 
     def update_ip_flag_async(self):
         """Runs IP and geolocation lookup asynchronously."""
+        self.spinner.start()
         th = threading.Thread(target=self.update_set_ip_flag)
         th.daemon = True
         th.start()
 
 
-class Signals(Base):
+class MainWindowSignals(Base):
     """
     Action dispatchers for MainWindow buttons and accelerator shortcuts.
     سیستم مدیریت سیگنال‌ها و اکشن‌های پنجره اصلی.
@@ -909,7 +1084,7 @@ class Signals(Base):
 
     def pause(self, button, manager):
         if hasattr(manager, "pause"):
-            manager.pause()   
+            manager.pause()
 
     def resume(self, button, manager):
         if hasattr(manager, "resume"):

@@ -163,3 +163,51 @@ msgstr "برون‌سپاری کانال داده (DCO)"
 
 msgid "Offloads VPN data processing directly to the Linux kernel for maximum speed and lower CPU usage."
 msgstr "پردازش داده‌های VPN را مستقیماً به هسته لینوکس منتقل می‌کند تا به حداکثر سرعت و کمترین استفاده از CPU دست یابد."
+
+msgid "Search servers…"
+msgstr "جستجوی سرورها…"
+
+msgid "Search configurations by name"
+msgstr "جستجوی کانفیگ‌ها بر اساس نام"
+
+msgid "Filter servers"
+msgstr "فیلتر سرورها"
+
+msgid "Visible servers / Total servers"
+msgstr "سرورهای نمایش‌داده‌شده / کل سرورها"
+
+msgid "All"
+msgstr "همه"
+
+msgid "Favorites"
+msgstr "مورد علاقه‌ها"
+
+msgid "Online"
+msgstr "آنلاین"
+
+msgid "Offline"
+msgstr "آفلاین"
+
+msgid "Add to Favorites"
+msgstr "افزودن به مورد علاقه‌ها"
+
+msgid "Remove from Favorites"
+msgstr "حذف از مورد علاقه‌ها"
+
+msgid "Fastest server is hidden by the current filter"
+msgstr "سریع‌ترین سرور توسط فیلتر فعلی پنهان شده است"
+
+msgid "No matching servers"
+msgstr "هیچ سروری مطابق فیلتر یافت نشد"
+
+msgid "Delete All VPN Connections?"
+msgstr "همه اتصالات VPN حذف شوند؟"
+
+msgid "This will permanently remove ALL VPN profiles from NetworkManager, including profiles created by other applications. This action cannot be undone."
+msgstr "این کار تمام پروفایل‌های VPN را برای همیشه از NetworkManager حذف می‌کند، از جمله پروفایل‌هایی که توسط برنامه‌های دیگر ساخته شده‌اند. این عمل قابل بازگشت نیست."
+
+msgid "Cancel"
+msgstr "انصراف"
+
+msgid "Delete All"
+msgstr "حذف همه"

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>com.github.mahdi-bagheban.eovpn-pro</id>
+  <id>com.github.mahdi-arts.eovpn-pro</id>
   <metadata_license>FSFAP</metadata_license>
   <project_license>GPL-3.0+</project_license>
   <developer_name>Mahdi Bagheban</developer_name>
@@ -19,11 +19,11 @@
     <kudo>Notifications</kudo>
   </kudos>
 
-  <launchable type="desktop-id">com.github.mahdi-bagheban.eovpn-pro.desktop</launchable>
+  <launchable type="desktop-id">com.github.mahdi-arts.eovpn-pro.desktop</launchable>
 
   <screenshots>
     <screenshot type="default">
-      <image>https://raw.githubusercontent.com/Mahdi-Arts/eOVPN-Pro/1.5/static/window.png</image>
+      <image>https://raw.githubusercontent.com/Mahdi-Arts/eOVPN-Pro/master/static/window.png</image>
     </screenshot>
   </screenshots>
 
@@ -37,6 +37,15 @@
   </provides>
 
   <releases>
+    <release version="1.5.0" date="2026-08-22">
+      <description>
+        <ul>
+          <li>Added live server search, smart filtering (All / Favorites / Online / Offline) and star-marked favorite servers.</li>
+          <li>Security hardening: removed OTP logging, added delete-all confirmation dialog, safe ZIP size limits and staging download.</li>
+          <li>Updated application ID to match the repository (com.github.mahdi-arts.eovpn-pro).</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.5" date="2026-08-05">
       <description>
         <ul>
