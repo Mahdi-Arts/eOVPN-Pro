@@ -4,6 +4,34 @@
 All notable changes are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 همه تغییرات مهم در اینجا ثبت می‌شوند؛ قالب بر اساس استاندارد Keep a Changelog است.
 
+## [Unreleased]
+
+### Added / افزوده‌شده
+- Real GitHub Actions CI and release workflows (`ci.yml`, `release.yml`) for tests,
+  Meson smoke builds, Debian packages, Flatpak bundles and SHA256 checksums.
+  وورک‌فلوهای واقعی GitHub Actions برای تست، build نمونه Meson، بسته Debian، Flatpak و checksum.
+- Offline smoke tests for import-safe pure modules. / تست‌های دود برای ماژول‌های خالص قابل ایمپورت.
+
+### Security / امنیت
+- Remote configuration sources now require HTTPS; HTTP URLs and non-HTTPS redirects are rejected.
+  منابع کانفیگ راه‌دور اکنون حتماً باید HTTPS باشند؛ HTTP و ریدایرکت غیر HTTPS رد می‌شود.
+- ZIP extraction now enforces private file permissions, rejects symlinks/duplicate basenames
+  and limits the number of archive entries. / استخراج ZIP اکنون مجوز فایل خصوصی اعمال می‌کند،
+  symlink و نام تکراری را رد می‌کند و تعداد ورودی‌ها را محدود می‌سازد.
+- NetworkManager profiles are marked as eOVPN-managed; delete/status operations avoid other VPNs.
+  پروفایل‌های NetworkManager به‌عنوان متعلق به eOVPN علامت‌گذاری می‌شوند تا عملیات حذف/وضعیت
+  به VPNهای دیگر آسیب نزند.
+- NetworkManager import now aborts if the agent-owned password secret flag cannot be set.
+  اگر پرچم agent-owned رمز عبور قابل تنظیم نباشد، import متوقف می‌شود.
+
+### Fixed / رفع‌شده
+- All OpenVPN 3 native D-Bus calls now use bounded timeouts. / همه تماس‌های بومی OpenVPN 3 D-Bus
+  تایم‌اوت محدود دارند.
+- D-Bus subscriptions are explicitly tracked and cleaned up. / اشتراک‌های D-Bus صریحاً رهگیری و پاک می‌شوند.
+- Backend switching stops the old watcher before replacing it. / تعویض بک‌اند قبل از جایگزینی، watcher قبلی را متوقف می‌کند.
+- AppImage build script now installs through Meson and places desktop/icon/schema assets correctly.
+  اسکریپت ساخت AppImage از طریق Meson نصب می‌کند و فایل‌های desktop، icon و schema را درست قرار می‌دهد.
+
 ## [1.5.0] — 2026-08-22
 
 ### Added / افزوده‌شده

@@ -54,6 +54,22 @@ OpenVPN 3 DCO kernel acceleration, and full Persian (RTL) localization.
 desktop-file-validate %{buildroot}%{_datadir}/applications/com.github.mahdi-arts.eovpn-pro.desktop
 appstreamcli validate --no-net %{buildroot}%{_datadir}/metainfo/com.github.mahdi-arts.eovpn-pro.metainfo.xml || true
 
+%post
+/bin/touch --no-create %{_datadir}/icons/hicolor 2>/dev/null || :
+/usr/bin/glib-compile-schemas %{_datadir}/glib-2.0/schemas 2>/dev/null || :
+/usr/bin/update-desktop-database -q 2>/dev/null || :
+
+%postun
+/bin/touch --no-create %{_datadir}/icons/hicolor 2>/dev/null || :
+/usr/bin/glib-compile-schemas %{_datadir}/glib-2.0/schemas 2>/dev/null || :
+/usr/bin/update-desktop-database -q 2>/dev/null || :
+
+%transfiletriggerin -- %{_datadir}/icons/hicolor
+/usr/bin/gtk-update-icon-cache -f -t %{_datadir}/icons/hicolor 2>/dev/null || :
+
+%transfiletriggerpostun -- %{_datadir}/icons/hicolor
+/usr/bin/gtk-update-icon-cache -f -t %{_datadir}/icons/hicolor 2>/dev/null || :
+
 %files -f eovpn.lang
 %license LICENSE
 %doc README.md PACKAGING.md CHANGELOG.md

@@ -29,16 +29,16 @@
 #include "eovpn_nm.h"
 
 /*
- * Hard timeout for every synchronous NetworkManager operation so a hung
- * service can never freeze the UI thread forever (availability hardening).
- * مهلت سخت برای هر عملیات همزمان NetworkManager تا سرویس از کار افتاده
- * هرگز نخ رابط کاربری را بی‌نهایت قفل نکند (مقاوم‌سازی در دسترس‌پذیری).
+ * Hard timeout for synchronous NetworkManager operations.
+ * مهلت سخت برای عملیات همزمان NetworkManager.
  */
 #define EOVPN_NM_TIMEOUT_MS 15000
 
 #define NM_OPENVPN_KEY_USERNAME "username"
 #define NM_OPENVPN_KEY_PASSWORD "password"
 #define NM_OPENVPN_KEY_CA "ca"
+#define EOVPN_MANAGED_KEY "managed-by"
+#define EOVPN_MANAGED_VALUE "eovpn-pro"
 
 static gboolean
 eovpn_nm_watchdog (gpointer user_data)
@@ -49,20 +49,71 @@ eovpn_nm_watchdog (gpointer user_data)
     return G_SOURCE_REMOVE;
 }
 
+static gboolean
+eovpn_connection_is_managed (NMConnection *conn)
+{
+    NMSettingVpn *vpn;
+    const char *managed;
+
+    if (conn == NULL)
+        return false;
+
+    vpn = nm_connection_get_setting_vpn (conn);
+    if (vpn == NULL)
+        return false;
+
+    managed = nm_setting_vpn_get_data_item (vpn, EOVPN_MANAGED_KEY);
+    return managed != NULL && strcmp (managed, EOVPN_MANAGED_VALUE) == 0;
+}
+
+static NMConnection *
+eovpn_get_managed_active_connection (char **uuid_out)
+{
+    NMClient *client;
+    const GPtrArray *arr;
+    NMConnection *managed = NULL;
+
+    client = nm_client_new (NULL, NULL);
+    if (client == NULL)
+        return NULL;
+
+    arr = nm_client_get_active_connections (client);
+    if (arr != NULL)
+    {
+        for (size_t i = 0; i < arr->len; i++)
+        {
+            NMActiveConnection *active = arr->pdata[i];
+            NMConnection *conn = nm_active_connection_get_connection (active);
+
+            if (eovpn_connection_is_managed (conn))
+            {
+                const char *uuid = nm_connection_get_uuid (conn);
+                managed = conn;
+                if (uuid_out != NULL)
+                    *uuid_out = uuid ? g_strdup (uuid) : NULL;
+                break;
+            }
+        }
+    }
+
+    g_object_unref (client);
+    return managed;
+}
+
 static void
 add_cb (NMClient *client, GAsyncResult *result, GMainLoop *loop)
 {
     GError *err = NULL;
     nm_client_add_connection_finish (client, result, &err);
     if (err != NULL)
-        {
-            g_printerr ("Error adding connection: %s\n", err->message);
-            g_error_free (err);
-        }
+    {
+        g_printerr ("Error adding connection: %s\n", err->message);
+        g_error_free (err);
+    }
     else
-        {
-            g_debug ("[NM] Connection Added Successfully!");
-        }
+    {
+        g_debug ("[NM] Connection Added Successfully!");
+    }
 
     g_main_loop_quit (loop);
 }
@@ -70,96 +121,107 @@ add_cb (NMClient *client, GAsyncResult *result, GMainLoop *loop)
 char *
 add_connection (char *config_name, char *username, char *password, char *ca)
 {
-    GMainLoop *loop = g_main_loop_new (NULL, FALSE);
-    GSList *plugins = nm_vpn_plugin_info_list_load ();
-    GSList *iter = NULL;
+    GMainLoop *loop = NULL;
+    GSList *plugins = NULL;
     NMVpnPluginInfo *plugin = NULL;
+    NMVpnEditorPlugin *editor = NULL;
+    NMConnection *conn = NULL;
+    NMSettingVpn *vpn_settings = NULL;
+    NMClient *client = NULL;
     GError *err = NULL;
+    GError *flags_err = NULL;
+    guint watchdog_id = 0;
+    char *result_uuid = NULL;
+    gboolean secret_flags_ok = true;
 
-    for (iter = plugins; iter != NULL; iter = iter->next)
+    loop = g_main_loop_new (NULL, FALSE);
+    plugins = nm_vpn_plugin_info_list_load ();
+
+    for (GSList *iter = plugins; iter != NULL; iter = iter->next)
+    {
+        NMVpnPluginInfo *info = (NMVpnPluginInfo *) iter->data;
+        const char *name = nm_vpn_plugin_info_get_name (info);
+        if (name != NULL && strcmp ("openvpn", name) == 0)
         {
-            NMVpnPluginInfo *info = (NMVpnPluginInfo *) iter->data;
-            const char *name = nm_vpn_plugin_info_get_name (info);
-            if (name != NULL && strcmp ("openvpn", name) == 0)
-                {
-                    plugin = info;
-                    break;
-                }
+            plugin = info;
+            break;
         }
+    }
 
     if (plugin == NULL)
-        {
-            g_printerr ("NetworkManager OpenVPN plugin not found on system.\n");
-            g_slist_free_full (plugins, g_object_unref);
-            g_main_loop_unref (loop);
-            return NULL;
-        }
+    {
+        g_printerr ("NetworkManager OpenVPN plugin not found on system.\n");
+        goto cleanup;
+    }
 
-    NMVpnEditorPlugin *editor = nm_vpn_plugin_info_load_editor_plugin (plugin, &err);
+    editor = nm_vpn_plugin_info_load_editor_plugin (plugin, &err);
     if (err != NULL)
-        {
-            g_printerr ("Failed to load VPN editor plugin: %s\n", err->message);
-            g_error_free (err);
-            g_slist_free_full (plugins, g_object_unref);
-            g_main_loop_unref (loop);
-            return NULL;
-        }
+    {
+        g_printerr ("Failed to load VPN editor plugin: %s\n", err->message);
+        g_clear_error (&err);
+        goto cleanup;
+    }
 
-    NMConnection *conn = nm_vpn_editor_plugin_import (editor, config_name, &err);
+    conn = nm_vpn_editor_plugin_import (editor, config_name, &err);
     if (err != NULL)
-        {
-            g_printerr ("Failed to import VPN config: %s\n", err->message);
-            g_error_free (err);
-            g_slist_free_full (plugins, g_object_unref);
-            g_main_loop_unref (loop);
-            return NULL;
-        }
+    {
+        g_printerr ("Failed to import VPN config: %s\n", err->message);
+        g_clear_error (&err);
+        goto cleanup;
+    }
 
-    NMSettingVpn *vpn_settings = nm_connection_get_setting_vpn (conn);
+    vpn_settings = nm_connection_get_setting_vpn (conn);
     if (vpn_settings != NULL)
+    {
+        nm_setting_vpn_add_data_item (vpn_settings, EOVPN_MANAGED_KEY, EOVPN_MANAGED_VALUE);
+
+        if (username != NULL && strlen (username) > 0)
+            nm_setting_vpn_add_data_item (vpn_settings, NM_OPENVPN_KEY_USERNAME, username);
+
+        if (password != NULL && strlen (password) > 0)
         {
-            if (username != NULL && strlen (username) > 0)
-                {
-                    nm_setting_vpn_add_data_item (vpn_settings, NM_OPENVPN_KEY_USERNAME, username);
-                }
-            if (password != NULL && strlen (password) > 0)
-                {
-                    nm_setting_vpn_add_secret (vpn_settings, NM_OPENVPN_KEY_PASSWORD, password);
-                    /* Keep the password agent-owned: NetworkManager must NOT
-                     * write it to /etc/NetworkManager/system-connections.
-                     * رمز فقط نزد secret agent می‌ماند و NetworkManager نباید آن
-                     * را روی دیسک (system-connections) بنویسد. */
-                    GError *flags_err = NULL;
-                    if (!nm_setting_set_secret_flags (vpn_settings,
-                                                      NM_SETTING_VPN_SECRET_PASSWORD,
-                                                      NM_SETTING_SECRET_FLAG_AGENT_OWNED,
-                                                      &flags_err))
-                        {
-                            g_printerr ("Failed to set password secret flags: %s\n",
-                                        flags_err ? flags_err->message : "unknown");
-                            g_clear_error (&flags_err);
-                        }
-                }
-            if (ca != NULL && strlen (ca) > 0)
-                {
-                    nm_setting_vpn_add_data_item (vpn_settings, NM_OPENVPN_KEY_CA, ca);
-                }
+            nm_setting_vpn_add_secret (vpn_settings, NM_OPENVPN_KEY_PASSWORD, password);
+
+            /* Keep the password agent-owned; abort if NetworkManager cannot
+             * guarantee that it will not persist the secret on disk. */
+            if (!nm_setting_set_secret_flags (vpn_settings,
+                                              NM_SETTING_VPN_SECRET_PASSWORD,
+                                              NM_SETTING_SECRET_FLAG_AGENT_OWNED,
+                                              &flags_err))
+            {
+                g_printerr ("Refusing to add VPN profile: failed to set agent-owned "
+                            "secret flags: %s\n",
+                            flags_err ? flags_err->message : "unknown");
+                g_clear_error (&flags_err);
+                secret_flags_ok = false;
+            }
         }
+
+        if (ca != NULL && strlen (ca) > 0)
+            nm_setting_vpn_add_data_item (vpn_settings, NM_OPENVPN_KEY_CA, ca);
+    }
+
+    if (!secret_flags_ok)
+        goto cleanup;
 
     nm_connection_normalize (conn, NULL, NULL, NULL);
 
-    NMClient *client = nm_client_new (NULL, NULL);
+    client = nm_client_new (NULL, NULL);
     nm_client_add_connection_async (client, conn, TRUE, NULL, (GAsyncReadyCallback) add_cb, loop);
-    guint watchdog_id = g_timeout_add (EOVPN_NM_TIMEOUT_MS, eovpn_nm_watchdog, loop);
+    watchdog_id = g_timeout_add (EOVPN_NM_TIMEOUT_MS, eovpn_nm_watchdog, loop);
     g_main_loop_run (loop);
     g_source_remove (watchdog_id);
 
     const char *conn_uuid = nm_connection_get_uuid (conn);
-    char *result_uuid = conn_uuid ? g_strdup (conn_uuid) : NULL;
+    result_uuid = conn_uuid ? g_strdup (conn_uuid) : NULL;
 
-    g_slist_free_full (plugins, g_object_unref);
-    g_object_unref (client);
-    g_main_loop_unref (loop);
+cleanup:
+    g_clear_object (&editor);
+    if (plugins != NULL)
+        g_slist_free_full (plugins, g_object_unref);
+    g_clear_object (&client);
+    if (loop != NULL)
+        g_main_loop_unref (loop);
 
     return result_uuid;
 }
@@ -170,14 +232,14 @@ activate_cb (NMClient *client, GAsyncResult *result, GMainLoop *loop)
     GError *err = NULL;
     nm_client_activate_connection_finish (client, result, &err);
     if (err != NULL)
-        {
-            g_printerr ("Error activating connection: %s\n", err->message);
-            g_error_free (err);
-        }
+    {
+        g_printerr ("Error activating connection: %s\n", err->message);
+        g_error_free (err);
+    }
     else
-        {
-            g_debug ("[NM] Connection Connected!");
-        }
+    {
+        g_debug ("[NM] Connection Connected!");
+    }
 
     g_main_loop_quit (loop);
 }
@@ -185,38 +247,46 @@ activate_cb (NMClient *client, GAsyncResult *result, GMainLoop *loop)
 int
 activate_connection (char *uuid)
 {
+    GMainLoop *loop;
+    NMClient *client;
+    const GPtrArray *arr;
+    NMConnection *target = NULL;
+    guint watchdog_id;
+    gboolean success;
+
     if (uuid == NULL)
         return false;
 
-    GMainLoop *loop = g_main_loop_new (NULL, FALSE);
-    NMClient *client = nm_client_new (NULL, NULL);
-    const GPtrArray *arr = nm_client_get_connections (client);
-    NMConnection *target = NULL;
+    loop = g_main_loop_new (NULL, FALSE);
+    client = nm_client_new (NULL, NULL);
+    arr = nm_client_get_connections (client);
 
     if (arr != NULL)
+    {
+        for (size_t i = 0; i < arr->len; i++)
         {
-            for (size_t i = 0; i < arr->len; i++)
-                {
-                    const char *current_uuid = nm_connection_get_uuid (NM_CONNECTION (arr->pdata[i]));
-                    if (current_uuid != NULL && strcmp (uuid, current_uuid) == 0)
-                        {
-                            target = NM_CONNECTION (arr->pdata[i]);
-                            break;
-                        }
-                }
+            const char *current_uuid = nm_connection_get_uuid (NM_CONNECTION (arr->pdata[i]));
+            if (current_uuid != NULL && strcmp (uuid, current_uuid) == 0)
+            {
+                target = NM_CONNECTION (arr->pdata[i]);
+                break;
+            }
         }
+    }
 
+    success = target != NULL;
     if (target != NULL)
-        {
-            nm_client_activate_connection_async (client, target, NULL, NULL, NULL, (GAsyncReadyCallback) activate_cb, loop);
-            guint watchdog_id = g_timeout_add (EOVPN_NM_TIMEOUT_MS, eovpn_nm_watchdog, loop);
-            g_main_loop_run (loop);
-            g_source_remove (watchdog_id);
-        }
+    {
+        nm_client_activate_connection_async (client, target, NULL, NULL, NULL,
+                                             (GAsyncReadyCallback) activate_cb, loop);
+        watchdog_id = g_timeout_add (EOVPN_NM_TIMEOUT_MS, eovpn_nm_watchdog, loop);
+        g_main_loop_run (loop);
+        g_source_remove (watchdog_id);
+    }
 
     g_object_unref (client);
     g_main_loop_unref (loop);
-    return (target != NULL);
+    return success;
 }
 
 static void
@@ -225,52 +295,60 @@ disconnect_cb (NMClient *client, GAsyncResult *result, GMainLoop *loop)
     GError *err = NULL;
     nm_client_deactivate_connection_finish (client, result, &err);
     if (err != NULL)
-        {
-            g_printerr ("Error deactivating connection: %s\n", err->message);
-            g_error_free (err);
-        }
+    {
+        g_printerr ("Error deactivating connection: %s\n", err->message);
+        g_error_free (err);
+    }
     else
-        {
-            g_debug ("[NM] Connection Disconnected!");
-        }
+    {
+        g_debug ("[NM] Connection Disconnected!");
+    }
     g_main_loop_quit (loop);
 }
 
 int
 disconnect (char *uuid)
 {
+    GMainLoop *loop;
+    NMClient *client;
+    const GPtrArray *arr;
+    NMActiveConnection *target = NULL;
+    guint watchdog_id;
+    gboolean success;
+
     if (uuid == NULL)
         return false;
 
-    GMainLoop *loop = g_main_loop_new (NULL, FALSE);
-    NMClient *client = nm_client_new (NULL, NULL);
-    const GPtrArray *arr = nm_client_get_active_connections (client);
-    NMActiveConnection *target = NULL;
+    loop = g_main_loop_new (NULL, FALSE);
+    client = nm_client_new (NULL, NULL);
+    arr = nm_client_get_active_connections (client);
 
     if (arr != NULL)
+    {
+        for (size_t i = 0; i < arr->len; i++)
         {
-            for (size_t i = 0; i < arr->len; i++)
-                {
-                    const char *current_uuid = nm_active_connection_get_uuid (arr->pdata[i]);
-                    if (current_uuid != NULL && strcmp (uuid, current_uuid) == 0)
-                        {
-                            target = arr->pdata[i];
-                            break;
-                        }
-                }
+            const char *current_uuid = nm_active_connection_get_uuid (arr->pdata[i]);
+            if (current_uuid != NULL && strcmp (uuid, current_uuid) == 0)
+            {
+                target = arr->pdata[i];
+                break;
+            }
         }
+    }
 
+    success = target != NULL;
     if (target != NULL)
-        {
-            nm_client_deactivate_connection_async (client, target, NULL, (GAsyncReadyCallback) disconnect_cb, loop);
-            guint watchdog_id = g_timeout_add (EOVPN_NM_TIMEOUT_MS, eovpn_nm_watchdog, loop);
-            g_main_loop_run (loop);
-            g_source_remove (watchdog_id);
-        }
+    {
+        nm_client_deactivate_connection_async (client, target, NULL,
+                                               (GAsyncReadyCallback) disconnect_cb, loop);
+        watchdog_id = g_timeout_add (EOVPN_NM_TIMEOUT_MS, eovpn_nm_watchdog, loop);
+        g_main_loop_run (loop);
+        g_source_remove (watchdog_id);
+    }
 
     g_object_unref (client);
     g_main_loop_unref (loop);
-    return (target != NULL);
+    return success;
 }
 
 static void
@@ -279,110 +357,105 @@ delete_cb (NMRemoteConnection *conn, GAsyncResult *result, GMainLoop *loop)
     GError *err = NULL;
     nm_remote_connection_delete_finish (conn, result, &err);
     if (err != NULL)
-        {
-            g_printerr ("Error deleting connection: %s\n", err->message);
-            g_error_free (err);
-        }
+    {
+        g_printerr ("Error deleting connection: %s\n", err->message);
+        g_error_free (err);
+    }
     else
-        {
-            g_debug ("[NM] Connection Deleted!");
-        }
+    {
+        g_debug ("[NM] Connection Deleted!");
+    }
     g_main_loop_quit (loop);
 }
 
 int
 delete_connection (char *uuid)
 {
+    GMainLoop *loop;
+    NMClient *client;
+    const GPtrArray *arr;
+    NMRemoteConnection *target = NULL;
+    guint watchdog_id;
+    gboolean success;
+
     if (uuid == NULL)
         return false;
 
-    GMainLoop *loop = g_main_loop_new (NULL, FALSE);
-    NMClient *client = nm_client_new (NULL, NULL);
-    const GPtrArray *arr = nm_client_get_connections (client);
-    NMRemoteConnection *target = NULL;
+    loop = g_main_loop_new (NULL, FALSE);
+    client = nm_client_new (NULL, NULL);
+    arr = nm_client_get_connections (client);
 
     if (arr != NULL)
+    {
+        for (size_t i = 0; i < arr->len; i++)
         {
-            for (size_t i = 0; i < arr->len; i++)
-                {
-                    const char *current_uuid = nm_connection_get_uuid (NM_CONNECTION (arr->pdata[i]));
-                    if (current_uuid != NULL && strcmp (uuid, current_uuid) == 0)
-                        {
-                            target = NM_REMOTE_CONNECTION (arr->pdata[i]);
-                            break;
-                        }
-                }
+            NMConnection *candidate = NM_CONNECTION (arr->pdata[i]);
+            const char *current_uuid = nm_connection_get_uuid (candidate);
+            if (eovpn_connection_is_managed (candidate) && current_uuid != NULL
+                && strcmp (uuid, current_uuid) == 0)
+            {
+                target = NM_REMOTE_CONNECTION (candidate);
+                break;
+            }
         }
+    }
 
+    success = target != NULL;
     if (target != NULL)
-        {
-            nm_remote_connection_delete_async (target, NULL, (GAsyncReadyCallback) delete_cb, loop);
-            guint watchdog_id = g_timeout_add (EOVPN_NM_TIMEOUT_MS, eovpn_nm_watchdog, loop);
-            g_main_loop_run (loop);
-            g_source_remove (watchdog_id);
-        }
+    {
+        nm_remote_connection_delete_async (target, NULL, (GAsyncReadyCallback) delete_cb, loop);
+        watchdog_id = g_timeout_add (EOVPN_NM_TIMEOUT_MS, eovpn_nm_watchdog, loop);
+        g_main_loop_run (loop);
+        g_source_remove (watchdog_id);
+    }
 
     g_object_unref (client);
     g_main_loop_unref (loop);
-    return (target != NULL);
+    return success;
 }
 
 char *
-get_active_vpn_connection_uuid (void)
+get_eovpn_active_vpn_connection_uuid (void)
 {
-    NMClient *client = nm_client_new (NULL, NULL);
-    const GPtrArray *arr = nm_client_get_active_connections (client);
-    char *result_uuid = NULL;
+    char *uuid = NULL;
 
-    if (arr != NULL)
-        {
-            for (size_t i = 0; i < arr->len; i++)
-                {
-                    const char *conn_type = nm_active_connection_get_connection_type (arr->pdata[i]);
-                    if (conn_type != NULL && strcmp (conn_type, "vpn") == 0)
-                        {
-                            const char *u = nm_active_connection_get_uuid (arr->pdata[i]);
-                            if (u != NULL)
-                                {
-                                    result_uuid = g_strdup (u);
-                                    break;
-                                }
-                        }
-                }
-        }
-
-    g_object_unref (client);
-    return result_uuid;
+    /* The returned NMConnection is owned by NMClient, which is unrefed by the
+     * helper. Only the duplicated UUID is returned to callers. */
+    eovpn_get_managed_active_connection (&uuid);
+    return uuid;
 }
 
 int
 delete_all_vpn_connections (void)
 {
-    NMClient *client = nm_client_new (NULL, NULL);
-    const GPtrArray *arr = nm_client_get_connections (client);
-    GPtrArray *vpn_uuids = g_ptr_array_new_with_free_func (g_free);
+    NMClient *client;
+    const GPtrArray *arr;
+    GPtrArray *vpn_uuids;
+
+    client = nm_client_new (NULL, NULL);
+    arr = nm_client_get_connections (client);
+    vpn_uuids = g_ptr_array_new_with_free_func (g_free);
 
     if (arr != NULL)
+    {
+        for (size_t i = 0; i < arr->len; i++)
         {
-            for (size_t i = 0; i < arr->len; i++)
-                {
-                    const char *uuid = nm_connection_get_uuid (arr->pdata[i]);
-                    NMSetting *is_vpn = nm_connection_get_setting_by_name (arr->pdata[i], "vpn");
-                    if (is_vpn != NULL && uuid != NULL)
-                        {
-                            g_ptr_array_add (vpn_uuids, g_strdup (uuid));
-                        }
-                }
+            NMConnection *conn = NM_CONNECTION (arr->pdata[i]);
+            const char *uuid = nm_connection_get_uuid (conn);
+
+            if (eovpn_connection_is_managed (conn) && uuid != NULL)
+                g_ptr_array_add (vpn_uuids, g_strdup (uuid));
         }
+    }
 
     g_object_unref (client);
 
     for (guint i = 0; i < vpn_uuids->len; i++)
-        {
-            char *u = g_ptr_array_index (vpn_uuids, i);
-            g_debug ("Deleting VPN connection UUID: %s", u);
-            delete_connection (u);
-        }
+    {
+        char *u = g_ptr_array_index (vpn_uuids, i);
+        g_debug ("Deleting eOVPN-managed VPN connection UUID: %s", u);
+        delete_connection (u);
+    }
 
     g_ptr_array_free (vpn_uuids, TRUE);
     return true;
@@ -391,57 +464,42 @@ delete_all_vpn_connections (void)
 int
 is_vpn_running (void)
 {
-    NMClient *client = nm_client_new (NULL, NULL);
-    const GPtrArray *arr = nm_client_get_active_connections (client);
-    bool running = false;
+    char *uuid = get_eovpn_active_vpn_connection_uuid ();
 
-    if (arr != NULL)
-        {
-            for (size_t i = 0; i < arr->len; i++)
-                {
-                    const char *con_type = nm_active_connection_get_connection_type (arr->pdata[i]);
-                    if (con_type != NULL && strcmp ("vpn", con_type) == 0)
-                        {
-                            running = true;
-                            break;
-                        }
-                }
-        }
-
-    g_object_unref (client);
-    return running;
+    if (uuid != NULL)
+    {
+        g_free (uuid);
+        return true;
+    }
+    return false;
 }
 
 int
 is_vpn_activated (char *uuid)
 {
+    NMClient *client;
+    const GPtrArray *arr;
+    int state = -1;
+
     if (uuid == NULL)
         return -1;
 
-    NMClient *client = nm_client_new (NULL, NULL);
-    const GPtrArray *arr = nm_client_get_active_connections (client);
-    NMActiveConnection *target = NULL;
+    client = nm_client_new (NULL, NULL);
+    arr = nm_client_get_active_connections (client);
 
     if (arr != NULL)
+    {
+        for (size_t i = 0; i < arr->len; i++)
         {
-            for (size_t i = 0; i < arr->len; i++)
-                {
-                    const char *current_uuid = nm_active_connection_get_uuid (arr->pdata[i]);
-                    if (current_uuid != NULL && strcmp (uuid, current_uuid) == 0)
-                        {
-                            target = arr->pdata[i];
-                            break;
-                        }
-                }
+            const char *current_uuid = nm_active_connection_get_uuid (arr->pdata[i]);
+            if (current_uuid != NULL && strcmp (uuid, current_uuid) == 0)
+            {
+                state = nm_vpn_connection_get_vpn_state (NM_VPN_CONNECTION (arr->pdata[i]));
+                break;
+            }
         }
+    }
 
-    if (target == NULL)
-        {
-            g_object_unref (client);
-            return -1;
-        }
-
-    NMVpnConnectionState state = nm_vpn_connection_get_vpn_state (NM_VPN_CONNECTION (target));
     g_object_unref (client);
     return state;
 }
@@ -450,16 +508,20 @@ char *
 get_version (void)
 {
     GError *err = NULL;
-    NMClient *client = nm_client_new (NULL, &err);
-    if (err != NULL)
-        {
-            g_printerr ("Error getting NM version: %s\n", err->message);
-            g_error_free (err);
-            return NULL;
-        }
+    NMClient *client;
+    const char *ver;
+    char *result_ver;
 
-    const char *ver = nm_client_get_version (client);
-    char *result_ver = ver ? g_strdup (ver) : NULL;
+    client = nm_client_new (NULL, &err);
+    if (err != NULL)
+    {
+        g_printerr ("Error getting NM version: %s\n", err->message);
+        g_error_free (err);
+        return NULL;
+    }
+
+    ver = nm_client_get_version (client);
+    result_ver = ver ? g_strdup (ver) : NULL;
     g_object_unref (client);
     return result_ver;
 }
@@ -467,22 +529,22 @@ get_version (void)
 int
 is_openvpn_plugin_available (void)
 {
-    GSList *plugins = nm_vpn_plugin_info_list_load ();
-    GSList *iter;
+    GSList *plugins;
     bool found = false;
 
+    plugins = nm_vpn_plugin_info_list_load ();
     if (plugins == NULL)
         return false;
 
-    for (iter = plugins; iter; iter = iter->next)
+    for (GSList *iter = plugins; iter != NULL; iter = iter->next)
+    {
+        const char *name = nm_vpn_plugin_info_get_name (iter->data);
+        if (name != NULL && strcmp ("openvpn", name) == 0)
         {
-            const char *name = nm_vpn_plugin_info_get_name (iter->data);
-            if (name != NULL && strcmp ("openvpn", name) == 0)
-                {
-                    found = true;
-                    break;
-                }
+            found = true;
+            break;
         }
+    }
 
     g_slist_free_full (plugins, g_object_unref);
     return found;

@@ -162,22 +162,27 @@ package() {
 
 ## 5. Automated CI/CD Deployment
 
-The repository ships one active GitHub Actions workflow — `.github/workflows/ci-cd.yml` —
-with the following jobs (all run automatically on every push/PR):
+The repository ships two active GitHub Actions workflows:
 
-1. **test**: unit tests, flake8/ruff/mypy linting, `pip-audit` CVE scanning, metadata
-   consistency checks and byte-compilation on every commit/PR.
-2. **build-deb**: builds the native `.deb` package on Ubuntu runners.
-3. **build-rpm**: builds the native `.rpm` package inside a Fedora container.
-4. **build-flatpak**: builds the Flatpak bundle on version tags (and manual dispatch).
-5. **release**: attaches both `.deb` and `.flatpak` artifacts to a new GitHub Release
-   when a version tag is pushed (e.g. `git tag v1.5.0 && git push origin v1.5.0`).
+- `.github/workflows/ci.yml` runs on every push/PR and performs unit tests,
+  flake8/ruff/mypy linting, `pip-audit`, metadata checks, Meson build smoke testing,
+  desktop/AppStream validation, `.deb` builds and Flatpak bundle builds.
+- `.github/workflows/release.yml` runs on version tags and publishes `.deb` and
+  Flatpak artifacts (with SHA256 checksums) to a GitHub Release.
+
+To publish a release:
+
+```bash
+git tag v1.5.0
+git push origin v1.5.0
+```
 
 Dependabot (`.github/dependabot.yml`) keeps GitHub Actions and Python dependencies
 updated weekly.
 
-مخزن یک وورک‌فلو فعال گیت‌هاب اکشن دارد — `.github/workflows/ci-cd.yml` — با وظایف:
-تست/لینت/ممیزی CVE، ساخت .deb، ساخت .rpm، ساخت Flatpak و انتشار خودکار بسته‌ها روی تگ.
+مخزن دو وورک‌فلو فعال دارد:
+`ci.yml` برای تست/لینت/ممیزی CVE، اعتبارسنجی متادیتا، build نمونه Meson، ساخت .deb و Flatpak؛
+و `release.yml` برای انتشار .deb و Flatpak روی تگ‌های نسخه همراه با checksum.
 
 See `docs/RELEASE_CHECKLIST.md` for the full release runbook.
 راهنمای کامل انتشار در `docs/RELEASE_CHECKLIST.md` موجود است.

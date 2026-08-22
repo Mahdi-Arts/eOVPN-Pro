@@ -1,61 +1,59 @@
 #!/usr/bin/env bash
 # ============================================================================
-# eOVPN-Pro AppImage build script (experimental scaffold)
-# اسکریپت ساخت AppImage برای eOVPN-Pro (زیرساخت آزمایشی)
+# eOVPN-Pro AppImage build script (experimental)
+# اسکریپت ساخت AppImage برای eOVPN-Pro (آزمایشی)
 #
-# NOTE: This is a best-effort scaffold. eOVPN-Pro talks to the SYSTEM
-# NetworkManager / OpenVPN 3 D-Bus services, so the produced AppImage is a
-# portable UI bundle that still requires those host services to be installed.
-# نکته: این یک زیرساخت «تلاش بر اساس بهترین شکل» است. برنامه با سرویس‌های
-# سیستمی NetworkManager / OpenVPN 3 گفتگو می‌کند؛ بنابراین AppImage تولیدی یک
-# باندل قابل‌حمل از رابط کاربری است که همچنان به نصب بودن آن سرویس‌ها نیاز دارد.
+# This script installs the Meson-built application into AppDir and bundles the
+# generated resources/schemas/native CFFI libraries. eOVPN-Pro still talks to the
+# host NetworkManager/OpenVPN 3 D-Bus services, so an AppImage is a portable UI
+# bundle, not a self-contained VPN stack.
 #
-# Requirements / پیش‌نیازها:
-#   - linuxdeploy (https://github.com/linuxdeploy/linuxdeploy/releases)
-#   - linuxdeploy-plugin-gtk (https://github.com/linuxdeploy/linuxdeploy-plugin-gtk)
-#   - linuxdeploy-plugin-python (https://github.com/linuxdeploy/linuxdeploy-plugin-python)
-#   - A Python venv with PyGObject + cffi (pip install -r requirements.txt)
+# این اسکریپت خروجی Meson را داخل AppDir نصب می‌کند و gresource، schemaها و
+# کتابخانه‌های CFFI را باندل می‌کند. AppImage همچنان به سرویس‌های D-Bus میزبان
+# نیاز دارد.
 # ============================================================================
 set -euo pipefail
 
 APP_NAME="eOVPN-Pro"
 APP_ID="com.github.mahdi-arts.eovpn-pro"
-VERSION="1.5.0"
-APPDIR="$(pwd)/AppDir"
-export ARCH="${ARCH:-x86_64}"
+VERSION="${VERSION:-1.5.0}"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+BUILD_DIR="${BUILD_DIR:-${ROOT_DIR}/build-appimage}"
+APPDIR="${APPDIR:-$(pwd)/AppDir}"
+ARCH="${ARCH:-x86_64}"
+OUTPUT="eovpn-pro-${VERSION}-${ARCH}.AppImage"
 
-echo "==> [eOVPN-Pro] Preparing AppDir at ${APPDIR}"
-rm -rf "${APPDIR}"
-mkdir -p "${APPDIR}/usr/bin" "${APPDIR}/usr/share"
+echo "==> Building eOVPN-Pro into ${APPDIR}"
+rm -rf "${BUILD_DIR}" "${APPDIR}"
+meson setup "${BUILD_DIR}" "${ROOT_DIR}" \
+  --prefix=/usr \
+  --buildtype=release \
+  -Dopenvpn3=false
+DESTDIR="${APPDIR}" meson install -C "${BUILD_DIR}"
 
-# 1. Python entry wrapper / نقطه ورود پایتون
-cat > "${APPDIR}/usr/bin/eovpn" <<EOF
-#!/usr/bin/env python3
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib", "python"))
-os.environ.setdefault("GSETTINGS_SCHEMA_DIR", "/usr/share/glib-2.0/schemas")
-from eovpn.application import launch_eovpn
-sys.exit(launch_eovpn())
-EOF
-chmod +x "${APPDIR}/usr/bin/eovpn"
+# AppImages expect the desktop file and icon in standard AppDir locations.
+# مسیرهای استاندارد AppDir برای desktop و آیکون.
+mkdir -p "${APPDIR}/usr/share/applications" \
+         "${APPDIR}/usr/share/icons/hicolor/scalable/apps"
+cp "${ROOT_DIR}/data/${APP_ID}.desktop" "${APPDIR}/usr/share/applications/"
+cp "${ROOT_DIR}/data/icons/${APP_ID}.svg" \
+   "${APPDIR}/usr/share/icons/hicolor/scalable/apps/${APP_ID}.svg"
 
-# 2. Desktop entry + icon / فایل دسکتاپ و آیکون
-cp "data/${APP_ID}.desktop" "${APPDIR}/usr/share/"
-cp "data/icons/${APP_ID}.svg" "${APPDIR}/usr/share/"
+# Compile schemas inside the bundle. The wrapper exports GSETTINGS_SCHEMA_DIR.
+# کامپایل schemaها درون باندل.
+glib-compile-schemas "${APPDIR}/usr/share/glib-2.0/schemas"
 
-# 3. Bundle Python packages (requires an active venv with the deps installed)
-#    باندل پکیج‌های پایتون (نیازمند venv فعال با وابستگی‌های نصب‌شده)
-if [ -n "${VIRTUAL_ENV:-}" ]; then
-  mkdir -p "${APPDIR}/usr/lib/python"
-  cp -r "${VIRTUAL_ENV}/lib/python"*"/site-packages/eovpn" "${APPDIR}/usr/lib/python/" 2>/dev/null || true
-  cp -r eovpn "${APPDIR}/usr/lib/python/"
+# linuxdeploy is the recommended external packager. CI can download it before
+# invoking this script. If it is absent, AppDir remains available for testing.
+if command -v linuxdeploy >/dev/null 2>&1; then
+  linuxdeploy --appdir "${APPDIR}" \
+    --executable "${APPDIR}/usr/bin/eovpn" \
+    --desktop-file "${APPDIR}/usr/share/applications/${APP_ID}.desktop" \
+    --icon-file "${APPDIR}/usr/share/icons/hicolor/scalable/apps/${APP_ID}.svg" \
+    --plugin gtk \
+    --output appimage
+  echo "==> Done: ${OUTPUT}"
+else
+  echo "==> linuxdeploy not found; AppDir prepared at ${APPDIR}"
+  echo "    Install linuxdeploy and the GTK plugin to produce ${OUTPUT}."
 fi
-
-# 4. linuxdeploy + GTK plugin + Python plugin
-export LDAI_OUTPUT="eovpn-pro-${VERSION}-${ARCH}.AppImage"
-linuxdeploy --appdir "${APPDIR}" \
-  --plugin gtk \
-  --plugin python \
-  --output appimage
-
-echo "==> Done: ${LDAI_OUTPUT}"

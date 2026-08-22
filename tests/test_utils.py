@@ -12,6 +12,7 @@ import zipfile
 
 from eovpn.utils import (
     MAX_FOLDER_IMPORT_TOTAL_BYTES,
+    InsecureSourceError,
     NotZipException,
     audit_ovpn_content,
     download_remote_to_destination,
@@ -98,6 +99,12 @@ class TestOpenVPNUtils(unittest.TestCase):
         dest_dir = os.path.join(self.test_dir, "dest_invalid")
         with self.assertRaises(NotZipException):
             download_remote_to_destination(invalid_path, dest_dir)
+
+    def test_http_source_rejected(self):
+        """Remote configuration sources must use HTTPS."""
+        dest_dir = os.path.join(self.test_dir, "dest_http")
+        with self.assertRaises(InsecureSourceError):
+            download_remote_to_destination("http://example.com/configs.zip", dest_dir)
 
     def test_oversized_zip_rejected(self):
         """Test that archives above the size cap are rejected."""

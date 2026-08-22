@@ -17,7 +17,7 @@ import gi
 gi.require_version('Gtk', '4.0')
 from gi.repository import Gio, GLib, Gtk, Secret
 
-from .connection_manager import NetworkManager, OpenVPN3
+from .connection_manager import NetworkManager, OpenVPN3, create_connection_manager
 from .eovpn_base import Base, StorageItem
 
 logger = logging.getLogger(__name__)
@@ -334,19 +334,25 @@ class SettingsWindow(Base, Gtk.Builder):
 
         self.combobox = Gtk.ComboBoxText()
         self.combobox.set_valign(Gtk.Align.CENTER)
-        version = NetworkManager(None).version()
-        if version:
-            self.combobox.append("networkmanager", gettext.gettext("{} (OpenVPN 2)").format(version))
+        manager = self.get_setting(self.SETTING.MANAGER) or "networkmanager"
 
         try:
-            ovpn3_version = OpenVPN3(None).version()
+            nm = NetworkManager(None)
+            version = nm.version()
+            if version:
+                self.combobox.append("networkmanager", gettext.gettext("{} (OpenVPN 2)").format(version))
+        except Exception as exc:
+            logger.debug("NetworkManager module not available: %s", exc)
+
+        try:
+            ovpn3 = OpenVPN3(None)
+            ovpn3_version = ovpn3.version()
             if ovpn3_version:
                 self.combobox.append("openvpn3", gettext.gettext("OpenVPN 3 {}").format(ovpn3_version))
-        except Exception:
-            logger.debug("OpenVPN 3 module not loaded.")
+        except Exception as exc:
+            logger.debug("OpenVPN 3 module not available: %s", exc)
 
-        if (manager := self.get_setting(self.SETTING.MANAGER)) is not None:
-            self.combobox.set_property("active-id", manager)
+        self.combobox.set_property("active-id", manager)
 
         h_box1.append(icon1)
         h_box1.append(v_box1)
@@ -604,12 +610,29 @@ class SettingsSignals(Base):
         backend_id = box.get_property("active_id")
         if not backend_id:
             return
-        self.set_setting(self.SETTING.MANAGER, backend_id)
+
         callback = self.retrieve("on_connection_event")
-        self.store("CM", {
-            "name": backend_id,
-            "instance": NetworkManager(callback) if backend_id == "networkmanager" else OpenVPN3(callback)
-        })
+        old_record = self.retrieve("CM") or {}
+        old_instance = old_record.get("instance")
+        stop_old = getattr(old_instance, "stop_watch", None)
+        if callable(stop_old):
+            try:
+                stop_old()
+            except Exception as exc:
+                logger.debug("Could not stop old backend watcher: %s", exc)
+
+        try:
+            instance = create_connection_manager(callback, backend_id)
+            if instance.get_name() != backend_id:
+                raise RuntimeError(f"{backend_id} backend is not available")
+        except Exception as exc:
+            logger.error("Requested backend %s unavailable: %s", backend_id, exc)
+            self.set_setting(self.SETTING.MANAGER, old_record.get("name", "networkmanager"))
+            box.set_property("active-id", old_record.get("name", "networkmanager"))
+            return
+
+        self.set_setting(self.SETTING.MANAGER, backend_id)
+        self.store("CM", {"name": backend_id, "instance": instance})
         try:
             sw = self.retrieve("settings_window_instance")
             if hasattr(sw, "dco_row"):
