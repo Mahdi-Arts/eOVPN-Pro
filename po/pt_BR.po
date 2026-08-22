@@ -159,3 +159,7 @@ msgstr "Teste de velocidade"
 
 msgid "Sort"
 msgstr "Ordenar"
+
+#: settings_window.py:new
+msgid "Choose CA / CRT Certificate"
+msgstr "Escolher certificado CA / CRT"

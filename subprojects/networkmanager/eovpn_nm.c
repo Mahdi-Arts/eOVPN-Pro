@@ -66,12 +66,24 @@ eovpn_connection_is_managed (NMConnection *conn)
     return managed != NULL && strcmp (managed, EOVPN_MANAGED_VALUE) == 0;
 }
 
-static NMConnection *
-eovpn_get_managed_active_connection (char **uuid_out)
+/*
+ * Returns a duplicated UUID of the active eOVPN-managed VPN connection.
+ *
+ * The connection object itself is owned by NMClient and becomes invalid the
+ * moment the client is released, so it must never escape this function.
+ * Only the duplicated UUID string is returned (caller frees it).
+ *
+ * یک UUID کپی‌شده از اتصال فعال VPN متعلق به eOVPN برمی‌گرداند.
+ * شیء اتصال متعلق به NMClient است و بلافاصله پس از آزادسازی client نامعتبر
+ * می‌شود؛ بنابراین هرگز نباید از این تابع خارج شود. فقط رشته UUID
+ * کپی‌شده بازگردانده می‌شود (فراخوان آزادش می‌کند).
+ */
+static char *
+eovpn_get_managed_active_uuid (void)
 {
     NMClient *client;
     const GPtrArray *arr;
-    NMConnection *managed = NULL;
+    char *uuid = NULL;
 
     client = nm_client_new (NULL, NULL);
     if (client == NULL)
@@ -87,17 +99,15 @@ eovpn_get_managed_active_connection (char **uuid_out)
 
             if (eovpn_connection_is_managed (conn))
             {
-                const char *uuid = nm_connection_get_uuid (conn);
-                managed = conn;
-                if (uuid_out != NULL)
-                    *uuid_out = uuid ? g_strdup (uuid) : NULL;
+                const char *conn_uuid = nm_connection_get_uuid (conn);
+                uuid = conn_uuid ? g_strdup (conn_uuid) : NULL;
                 break;
             }
         }
     }
 
     g_object_unref (client);
-    return managed;
+    return uuid;
 }
 
 static void
@@ -417,12 +427,10 @@ delete_connection (char *uuid)
 char *
 get_eovpn_active_vpn_connection_uuid (void)
 {
-    char *uuid = NULL;
-
-    /* The returned NMConnection is owned by NMClient, which is unrefed by the
-     * helper. Only the duplicated UUID is returned to callers. */
-    eovpn_get_managed_active_connection (&uuid);
-    return uuid;
+    /* Only the duplicated UUID escapes the helper; the NMConnection object
+     * itself stays owned by the (released) NMClient, so there is no use-after
+     * free risk for future callers. */
+    return eovpn_get_managed_active_uuid ();
 }
 
 int
@@ -491,10 +499,16 @@ is_vpn_activated (char *uuid)
     {
         for (size_t i = 0; i < arr->len; i++)
         {
-            const char *current_uuid = nm_active_connection_get_uuid (arr->pdata[i]);
-            if (current_uuid != NULL && strcmp (uuid, current_uuid) == 0)
+            NMActiveConnection *active = arr->pdata[i];
+            const char *current_uuid = nm_active_connection_get_uuid (active);
+
+            /* Only cast when the active connection really is a VPN one;
+             * a plain device connection with a colliding UUID must never
+             * reach nm_vpn_connection_get_vpn_state(). */
+            if (current_uuid != NULL && strcmp (uuid, current_uuid) == 0
+                && NM_IS_VPN_CONNECTION (active))
             {
-                state = nm_vpn_connection_get_vpn_state (NM_VPN_CONNECTION (arr->pdata[i]));
+                state = nm_vpn_connection_get_vpn_state (NM_VPN_CONNECTION (active));
                 break;
             }
         }

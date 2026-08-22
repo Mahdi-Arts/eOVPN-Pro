@@ -147,19 +147,11 @@ class TestTimeoutAndQueue(unittest.TestCase):
 
 class TestProtoFilterPredicate(unittest.TestCase):
     def test_tcp_filter(self):
-        self.assertTrue(
-            matches_server_filter("a.ovpn", proto_mode="tcp", protocols={PROTO_TCP})
-        )
-        self.assertFalse(
-            matches_server_filter("b.ovpn", proto_mode="tcp", protocols={PROTO_UDP})
-        )
+        self.assertTrue(matches_server_filter("a.ovpn", proto_mode="tcp", protocols={PROTO_TCP}))
+        self.assertFalse(matches_server_filter("b.ovpn", proto_mode="tcp", protocols={PROTO_UDP}))
 
     def test_udp_filter_with_mixed(self):
-        self.assertTrue(
-            matches_server_filter(
-                "mix.ovpn", proto_mode="udp", protocols={PROTO_TCP, PROTO_UDP}
-            )
-        )
+        self.assertTrue(matches_server_filter("mix.ovpn", proto_mode="udp", protocols={PROTO_TCP, PROTO_UDP}))
 
     def test_proto_and_search_combined(self):
         self.assertFalse(

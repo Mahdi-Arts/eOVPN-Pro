@@ -23,11 +23,13 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
+import threading
 from abc import ABC, abstractmethod
+from typing import Any
 
 from gi.repository import Secret
 
-from .backend._base import CFFIStringMixin
+from .backend._base import CFFIStringMixin, cffi_string
 from .eovpn_base import Base
 
 logger = logging.getLogger(__name__)
@@ -80,22 +82,28 @@ def _secure_temp_dir() -> str | None:
 
 _NM_IMPORT_ERROR: Exception | None = None
 _OVPN3_IMPORT_ERROR: Exception | None = None
+NMDbus: Any = None
+OVPN3Dbus: Any = None
+_libeovpn_nm: Any = None
+_libopenvpn3: Any = None
 
 try:
-    from .backend.networkmanager import _libeovpn_nm  # type: ignore[attr-defined]
-    from .backend.networkmanager.dbus import NMDbus
+    from .backend.networkmanager import _libeovpn_nm as _nm_lib  # type: ignore[attr-defined]
+    from .backend.networkmanager.dbus import NMDbus as _NMDbus
+
+    _libeovpn_nm = _nm_lib
+    NMDbus = _NMDbus
 except Exception as exc:  # pragma: no cover - depends on native build/runtime
-    _libeovpn_nm = None
-    NMDbus = None
     _NM_IMPORT_ERROR = exc
     logger.warning("NetworkManager backend module unavailable: %s", exc)
 
 try:
-    from .backend.openvpn3 import _libopenvpn3  # type: ignore[attr-defined]
-    from .backend.openvpn3.dbus import OVPN3Dbus
+    from .backend.openvpn3 import _libopenvpn3 as _ovpn3_lib  # type: ignore[attr-defined]
+    from .backend.openvpn3.dbus import OVPN3Dbus as _OVPN3Dbus
+
+    _libopenvpn3 = _ovpn3_lib
+    OVPN3Dbus = _OVPN3Dbus
 except Exception as exc:  # pragma: no cover - depends on native build/runtime
-    _libopenvpn3 = None
-    OVPN3Dbus = None
     _OVPN3_IMPORT_ERROR = exc
     logger.warning("OpenVPN 3 backend module unavailable: %s", exc)
 
@@ -113,7 +121,6 @@ class ConnectionManager(ABC, Base):
     @abstractmethod
     def get_name(self) -> str:
         """Returns the identifier name of the backend."""
-        return self.__NAME__
 
     @abstractmethod
     def start_watch(self):
@@ -208,9 +215,25 @@ class NetworkManager(CFFIStringMixin, ConnectionManager):
         self.ffi = _libeovpn_nm.ffi
         self.callback = callback
         self._temp_config_path: str | None = None
+        # Guards concurrent native operations (one worker at a time).
+        # محافظ عملیات بومی همزمان (هر بار فقط یک کارگر).
+        self._op_lock = threading.Lock()
 
         self.dbus = NMDbus() if NMDbus is not None else None
         self.watch = False
+
+    @classmethod
+    def probe_version(cls) -> str | None:
+        """
+        Reads the NetworkManager version without instantiating the backend,
+        so the settings window never pays for a full probe on the UI thread.
+
+        خواندن نسخه NetworkManager بدون نمونه‌سازی بک‌اند؛ تا پنجره تنظیمات
+        هزینه پروب کامل را روی نخ UI نپردازد.
+        """
+        if _libeovpn_nm is None:
+            return None
+        return cffi_string(_libeovpn_nm.ffi, _libeovpn_nm.lib.get_version(), True)  # type: ignore[return-value]
 
     def get_name(self) -> str:
         return "networkmanager"
@@ -234,8 +257,45 @@ class NetworkManager(CFFIStringMixin, ConnectionManager):
     def connect(self, openvpn_config: str):
         """
         Creates and activates a NetworkManager OpenVPN connection securely.
+
+        The blocking libnm work runs on a short-lived worker thread: every C
+        call still carries its own 15-second watchdog, but the GTK main loop
+        is never frozen by a nested GMainLoop.
+
         ایجاد و فعال‌سازی امن کانکشن در NetworkManager.
+        کار مسدودکننده libnm روی یک نخ کارگر کوتاه‌عمر اجرا می‌شود؛ هر فراخوانی C
+        همچنان نگهبان ۱۵ ثانیه‌ای خود را دارد اما حلقه اصلی GTK هرگز توسط
+        GMainLoop تودرتو فریز نمی‌شود.
         """
+        self._dispatch_off_ui_thread(self._connect_blocking, openvpn_config)
+
+    def _dispatch_off_ui_thread(self, operation, *args) -> None:
+        """
+        Runs one native operation at a time on a daemon worker thread.
+
+        The lock makes overlapping requests no-ops instead of racing on
+        libnm state; a stale operation can never queue up.
+
+        هر بار فقط یک عملیات بومی را روی نخ کارگر daemon اجرا می‌کند؛ قفل باعث
+        می‌شود درخواست‌های همپوشان به‌جای رقابت روی وضعیت libnm، نادیده گرفته شوند.
+        """
+        if not self._op_lock.acquire(blocking=False):
+            logger.warning("NetworkManager operation already in progress; request ignored.")
+            return
+
+        def runner() -> None:
+            try:
+                operation(*args)
+            except Exception as exc:
+                logger.error("NetworkManager native operation failed: %s", exc)
+            finally:
+                self._op_lock.release()
+
+        thread = threading.Thread(target=runner, name="eovpn-nm-op", daemon=True)
+        thread.start()
+
+    def _connect_blocking(self, openvpn_config: str):
+        """Worker body of :meth:`connect` / بدنه نخ کارگر متد connect."""
         nm_username = self.get_setting(self.SETTING.AUTH_USER)
         nm_password = None
         nm_ca = self.get_setting(self.SETTING.CA)
@@ -296,9 +356,14 @@ class NetworkManager(CFFIStringMixin, ConnectionManager):
 
     def disconnect(self):
         """
-        Deactivates and removes this backend's VPN profile.
-        قطع اتصال و حذف پروفایل VPN مربوط به این بک‌اند.
+        Deactivates and removes this backend's VPN profile (worker thread).
+
+        قطع اتصال و حذف پروفایل VPN مربوط به این بک‌اند (روی نخ کارگر).
         """
+        self._dispatch_off_ui_thread(self._disconnect_blocking)
+
+    def _disconnect_blocking(self):
+        """Worker body of :meth:`disconnect` / بدنه نخ کارگر متد disconnect."""
         if self.uuid is None:
             for _ in range(3):
                 active_uuid = self.to_cffi_string(self.nm_manager.get_eovpn_active_vpn_connection_uuid())
@@ -371,11 +436,22 @@ class OpenVPN3(CFFIStringMixin, ConnectionManager):
             finally:
                 self.watch = False
 
+    @classmethod
+    def probe_version(cls) -> str | None:
+        """
+        Reads the OpenVPN 3 version without instantiating the backend.
+
+        خواندن نسخه OpenVPN 3 بدون نمونه‌سازی بک‌اند.
+        """
+        if _libopenvpn3 is None:
+            return None
+        return cffi_string(_libopenvpn3.ffi, _libopenvpn3.lib.p_get_version(), True)  # type: ignore[return-value]
+
     def get_session_path(self):
         return self.session_path
 
     def is_ready(self) -> bool:
-        status = self.to_cffi_string(self.ovpn3.is_ready_to_connect())
+        status = self.to_cffi_string(self.ovpn3.is_ready_to_connect(self.session_path))
         return status is None
 
     def connect(self, openvpn_config: str):
@@ -404,7 +480,7 @@ class OpenVPN3(CFFIStringMixin, ConnectionManager):
     def disconnect(self):
         if self.session_path is not None:
             logger.info("Disconnecting OpenVPN 3 session %s", self.session_path.decode("utf-8"))
-            self.ovpn3.disconnect_vpn()
+            self.ovpn3.disconnect_vpn(self.session_path)
         else:
             self.ovpn3.disconnect_all_sessions()
             if self.callback:
@@ -412,10 +488,10 @@ class OpenVPN3(CFFIStringMixin, ConnectionManager):
         self.session_path = None
 
     def pause(self):
-        self.ovpn3.pause_vpn(b"User Action in eOVPN Pro")
+        self.ovpn3.pause_vpn(self.session_path, b"User Action in eOVPN Pro")
 
     def resume(self):
-        self.ovpn3.resume_vpn()
+        self.ovpn3.resume_vpn(self.session_path)
 
     def version(self) -> str | None:
         v = self.ovpn3.p_get_version()

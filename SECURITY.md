@@ -98,20 +98,25 @@ sha256sum -c SHA256SUMS --ignore-missing
 
 ### Supply chain / زنجیرهٔ تأمین
 - **Automated scanning in CI** — `.github/workflows/ci.yml` runs, on every push and pull request:
-  `pip-audit --requirement requirements.txt --strict` for known CVEs in Python dependencies, and
-  **CodeQL** static analysis for the Python codebase. A failure in either blocks the merge gate.
+  `pip-audit --requirement requirements.txt --strict` for known CVEs in Python dependencies.
+  `.github/workflows/codeql.yml` runs the security-extended **CodeQL** query packs against the
+  Python codebase and the compiled C bindings. A failure in either blocks the merge gate.
   **پویش خودکار در CI** — ورک‌فلوی `.github/workflows/ci.yml` در هر push و pull request دستور
-  `pip-audit --requirement requirements.txt --strict` را برای شناسایی CVEهای وابستگی‌های پایتون و
-  تحلیل ایستای **CodeQL** را اجرا می‌کند؛ شکست هرکدام مانع عبور از دروازهٔ ادغام می‌شود.
-- **Dependabot** (`.github/dependabot.yml`) proposes weekly updates for GitHub Actions and Python
-  dependencies.
-  **Dependabot** به‌صورت هفتگی به‌روزرسانی اکشن‌های GitHub و وابستگی‌های پایتون را پیشنهاد می‌دهد.
+  `pip-audit --requirement requirements.txt --strict` را برای شناسایی CVEهای وابستگی‌های پایتون
+  اجرا می‌کند و `.github/workflows/codeql.yml` پکیج‌های security-extended **CodeQL** را روی کدبیس
+  پایتون و بایندینگ‌های C اجرا می‌کند؛ شکست هرکدام مانع عبور از دروازهٔ ادغام می‌شود.
+- **Dependabot** (`.github/dependabot.yml`) proposes weekly, grouped updates for GitHub Actions
+  and Python dependencies.
+  **Dependabot** به‌صورت هفتگی به‌روزرسانی‌های گروهی اکشن‌های GitHub و وابستگی‌های پایتون را
+  پیشنهاد می‌دهد.
 - **Release integrity** — `.github/workflows/release.yml` refuses to publish when the version in
-  `meson.build`, `debian/changelog`, the RPM spec, the AppStream metainfo and the README disagree,
-  and it attaches a `SHA256SUMS` manifest to every release.
+  `meson.build`, `debian/changelog`, the RPM spec, the PKGBUILD, the AppImage script, the AppStream
+  metainfo and the README disagree, attaches build-provenance attestations to the `.deb` and
+  AppImage artifacts, and ships a `SHA256SUMS` manifest with every release.
   **یکپارچگی انتشار** — ورک‌فلوی `release.yml` در صورت ناهماهنگی نسخه بین `meson.build`،
-  `debian/changelog`، اسپک RPM، متادیتای AppStream و README از انتشار خودداری می‌کند و به هر
-  انتشار فایل `SHA256SUMS` را پیوست می‌کند.
+  `debian/changelog`، اسپک RPM، PKGBUILD، اسکریپت AppImage، متادیتای AppStream و README از انتشار
+  خودداری می‌کند، گواهی provenance به `.deb` و AppImage ضمیمه می‌کند و با هر انتشار فایل
+  `SHA256SUMS` را منتشر می‌سازد.
 
 ---
 
@@ -126,12 +131,15 @@ These are accepted, documented limitations — not undiscovered bugs.
   **قابلیت kill-switch و محافظت در برابر نشت DNS وجود ندارد.** در صورت قطع تونل، ترافیک تا زمان
   اتصال مجدد از مسیر پیش‌فرض عبور می‌کند. کاربرانی که مدل تهدید سخت‌گیرانه‌ای دارند باید برنامه را
   با مجموعه قواعد فایروال (مانند `ufw`/`nftables`) که خروج غیر VPN را مسدود می‌کند همراه کنند.
-- **Private/loopback config sources are warned about, not blocked.** A remote configuration URL that
-  resolves to a private or loopback address is logged as a warning; hostnames are deliberately not
-  resolved before the request, to avoid blocking the UI and leaking the source URL to the resolver.
-  **منابع کانفیگ خصوصی/loopback فقط هشدار می‌گیرند و مسدود نمی‌شوند.** آدرس‌هایی که به شبکهٔ خصوصی یا
-  loopback اشاره دارند فقط در لاگ هشدار ثبت می‌شوند؛ نام میزبان عمداً پیش از درخواست resolve نمی‌شود
-  تا رابط کاربری قفل نشود و آدرس منبع به resolver درز نکند.
+- **Private/loopback config sources are blocked when detectable.** Configuration URLs that use
+  `localhost` (or `.local`/`.localhost` names) or literal private/loopback/link-local/reserved IP
+  addresses are refused outright (SSRF hardening). Unresolved hostnames are still warned about only:
+  hostnames are deliberately not resolved before the request, to avoid blocking the UI and leaking
+  the source URL to the resolver.
+  **منابع کانفیگ خصوصی/loopback در صورت قابل تشخیص بودن مسدود می‌شوند.** آدرس‌هایی که از `localhost`
+  (یا نام‌های `.local`/`.localhost`) یا IPهای صریح خصوصی/loopback/link-local/رزرو استفاده می‌کنند
+  قاطعانه رد می‌شوند (سخت‌سازی SSRF). نام‌های میزبان حل‌نشده همچنان فقط هشدار می‌گیرند؛ نام میزبان
+  عمداً پیش از درخواست resolve نمی‌شود تا رابط کاربری قفل نشود و آدرس منبع به resolver درز نکند.
 - **Flatpak plugin ownership patch** — the manifest ships a patch that disables the NetworkManager
   plugin ownership check (`dist/flatpak/0001-disable-ownership-check-for-plugins.patch`), required
   for the sandbox to load its own bundled plugin. Keep it minimal and reviewed.

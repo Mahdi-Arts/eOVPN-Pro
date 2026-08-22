@@ -2,7 +2,11 @@
 # وابستگی‌های پایتون eOVPN-Pro
 #
 # Core runtime dependencies / وابستگی‌های اصلی زمان اجرا
-cffi>=1.15.0
+# cffi floor is kept >= 1.16.0: older floors could resolve to 1.15.0,
+# which is affected by CVE-2023-23931 (fixed in 1.15.1).
+# کف cffi عمداً >= 1.16.0 است: کف‌های قدیمی‌تر ممکن است به نسخه 1.15.0 حل شوند
+# که مشمول CVE-2023-23931 است (رفع‌شده در 1.15.1).
+cffi>=1.16.0
 PyGObject>=3.42.0
 
 # Development & testing dependencies / وابستگی‌های توسعه و تست

@@ -7,32 +7,83 @@ All notable changes are documented here. Format follows [Keep a Changelog](https
 ## [Unreleased]
 
 ### Added / افزوده‌شده
-- **Continuous integration** — `.github/workflows/ci.yml` with seven jobs: Ruff lint and
-  format check, mypy, the 56 offline unit tests across Python 3.10/3.11/3.12, `pip-audit`
-  and CodeQL scanning, a full Meson build with desktop/AppStream/translation validation,
-  and smoke builds of the `.deb`, `.rpm` and Arch packages.
-  **یکپارچه‌سازی مداوم** — ورک‌فلوی `ci.yml` با هفت job شامل لینت و بررسی قالب‌بندی Ruff،
-  بررسی نوع mypy، اجرای ۵۶ تست واحد آفلاین روی پایتون ۳٫۱۰ تا ۳٫۱۲، پویش `pip-audit` و
-  CodeQL، ساخت کامل Meson همراه با اعتبارسنجی desktop و AppStream و ترجمه‌ها، و ساخت
-  آزمایشی بسته‌های `.deb` و `.rpm` و آرچ.
+- **Continuous integration** — `.github/workflows/ci.yml`: Ruff lint and format check, mypy,
+  the 56 offline unit tests across Python 3.10/3.11/3.12, coverage of the pure modules,
+  `pip-audit --strict`, metadata consistency, a full Meson build with desktop/AppStream
+  validation, and smoke builds of the `.deb`, `.rpm` and Arch packages (Debian native,
+  Fedora and Arch containers).
+  **یکپارچه‌سازی مداوم** — ورک‌فلوی `ci.yml`: لینت و بررسی قالب‌بندی Ruff، بررسی نوع mypy،
+  اجرای ۵۶ تست واحد آفلاین روی پایتون ۳٫۱۰ تا ۳٫۱۲، پوشش ماژول‌های خالص، `pip-audit --strict`،
+  بررسی یکپارچگی متادیتا، ساخت کامل Meson با اعتبارسنجی desktop و AppStream، و ساخت آزمایشی
+  بسته‌های `.deb`، `.rpm` و آرچ (به‌صورت بومی دبیان و کانتینر فدورا/آرچ).
+- **CodeQL static analysis** — `.github/workflows/codeql.yml` runs the security-extended query
+  packs against the Python codebase and the compiled C bindings on every push, pull request
+  and weekly. / **تحلیل ایستای CodeQL** — وورک‌فلوی `codeql.yml` پکیج‌های پرس‌وجوی
+  security-extended را روی کدبیس پایتون و بایندینگ‌های C در هر push، pull request و هفتگی اجرا می‌کند.
 - **Release automation** — `.github/workflows/release.yml` builds all five package formats
   (`.deb`, `.rpm`, `.pkg.tar.zst`, AppImage, Flatpak) on a version tag, verifies that every
-  packaging file declares the same version as the tag, generates a `SHA256SUMS` manifest,
-  and publishes the GitHub Release with notes extracted from this changelog.
+  packaging file declares the same version as the tag, attaches build-provenance attestations
+  to the `.deb` and AppImage, generates a `SHA256SUMS` manifest and publishes the GitHub
+  Release with auto-generated notes.
   **انتشار خودکار** — ورک‌فلوی `release.yml` با ایجاد تگ نسخه، هر پنج قالب بسته را می‌سازد،
-  یکسان بودن نسخه در همهٔ فایل‌های بسته‌بندی را بررسی می‌کند، فایل `SHA256SUMS` را تولید
-  می‌کند و نسخه را با یادداشت‌های برگرفته از همین فایل منتشر می‌سازد.
+  یکسان بودن نسخه در همهٔ فایل‌های بسته‌بندی را بررسی می‌کند، گواهی provenance به `.deb` و
+  AppImage ضمیمه می‌کند، فایل `SHA256SUMS` را تولید می‌کند و نسخه را با یادداشت‌های خودکار
+  منتشر می‌سازد.
 - **Arch Linux packaging** — `dist/arch/PKGBUILD` and `dist/arch/.SRCINFO`. The recipe is
   dual-mode: it builds the working tree when run inside a checkout, or downloads the tagged
   release tarball when used standalone (AUR).
   **بسته‌بندی آرچ‌لینوکس** — فایل‌های `dist/arch/PKGBUILD` و `dist/arch/.SRCINFO`. این دستور
   دو حالته است: داخل مخزن، درخت کاری را می‌سازد و به‌صورت مستقل (AUR) آرشیو نسخهٔ تگ‌خورده
   را دانلود می‌کند.
+- **RPM helper script** — `scripts/build-rpm.sh` mirrors `build-deb.sh`/`build-flatpak.sh` for
+  local Fedora/RHEL/openSUSE builds. / **اسکریپت کمکی RPM** — `scripts/build-rpm.sh` هم‌تراز
+  اسکریپت‌های deb و Flatpak برای ساخت محلی در فدورا/RHEL/openSUSE.
+- **Debian autopkgtest** — `debian/tests/` runs a headless smoke test (binary `--help`,
+  desktop/schema validation) after installation. / **autopkgtest دبیان** — `debian/tests/`
+  آزمون دود بدون نمایشگر (اجرای `--help` و اعتبارسنجی desktop/schema) را پس از نصب اجرا می‌کند.
 - Offline smoke tests for import-safe pure modules. / تست‌های دود برای ماژول‌های خالص قابل ایمپورت.
+
+### Changed / تغییر یافته
+- **Cascade state machine extracted** — `eovpn/cascade_controller.py` owns the full
+  connect-to-fastest lifecycle; `MainWindow` now delegates to it (composition over
+  inheritance, `Gtk.Builder` via composition). Unit-testable with a fake host/scheduler.
+  **استخراج ماشین حالت آبشار** — `eovpn/cascade_controller.py` مالک چرخه کامل اتصال به
+  سریع‌ترین است؛ `MainWindow` اکنون به آن واگذار می‌کند (ترکیب به‌جای وراثت و استفاده از
+  `Gtk.Builder` به‌صورت ترکیبی). با میزبان/زمان‌بند جعلی قابل تست واحد است.
+- **Bandwidth monitor extracted** — `eovpn/network_monitor.py` reads `/proc/net/dev` in a
+  single pass per tick. / **استخراج مانیتور پهنای باند** — `eovpn/network_monitor.py` در هر
+  تیک فقط یک‌بار `/proc/net/dev` را می‌خواند.
+- **Typed connection events** — `eovpn/events.py` normalizes the legacy callback payloads;
+  `on_connection_event` no longer branches on `type(result)`.
+  **رویدادهای تایپ‌شده اتصال** — `eovpn/events.py` payloadهای قدیمی را نرمال می‌کند؛
+  `on_connection_event` دیگر روی `type(result)` شاخه‌بندی نمی‌کند.
+- **Version-tolerant dialogs** — `eovpn/ui_compat.py` prefers `Gtk.AlertDialog`/`Gtk.FileDialog`
+  with fallbacks for older GTK4 runtimes; deprecated `hide()/show()` calls replaced by
+  `set_visible()`. / **دیالوگ‌های مقاوم به نسخه** — `eovpn/ui_compat.py` ویجت‌های مدرن را با
+  fallback برای رانتایم‌های قدیمی ترجیح می‌دهد و `hide()/show()` منسوخ با `set_visible()`
+  جایگزین شد.
+- Backend versions are probed via lightweight `probe_version()` classmethods instead of
+  instantiating backends on the UI thread. / نسخه بک‌اندها با `probe_version()` سبک به‌جای
+  نمونه‌سازی روی نخ UI خوانده می‌شود.
+- NetworkManager connect/disconnect now run on a daemon worker thread, so the nested
+  `GMainLoop` can never freeze the UI. / اتصال/قطع NetworkManager اکنون روی نخ کارگر اجرا
+  می‌شود تا `GMainLoop` تودرتو هرگز UI را فریز نکند.
+- OTP dialog supports pasting a full 6-digit code. / دیالوگ OTP چسباندن کد کامل ۶ رقمی را
+  پشتیبانی می‌کند.
 
 ### Security / امنیت
 - Remote configuration sources now require HTTPS; HTTP URLs and non-HTTPS redirects are rejected.
   منابع کانفیگ راه‌دور اکنون حتماً باید HTTPS باشند؛ HTTP و ریدایرکت غیر HTTPS رد می‌شود.
+- Configuration sources on localhost or literal private/loopback/reserved IP addresses are now
+  refused outright (SSRF hardening); unresolved hostnames still get a warning only.
+  منابع کانفیگ روی localhost یا IPهای صریح خصوصی/loopback/رزرو اکنون قاطعانه رد می‌شوند
+  (سخت‌سازی SSRF)؛ نام‌های میزبان حل‌نشده همچنان فقط هشدار می‌گیرند.
+- The `cffi` floor was raised to `>=1.16.0` so the resolver can never pick 1.15.0
+  (CVE-2023-23931). / کف `cffi` به `>=1.16.0` رسید تا حل‌کننده هرگز 1.15.0
+  (CVE-2023-23931) را انتخاب نکند.
+- In-RAM session passwords are now stored as mutable `bytearray`s and actively zeroed on
+  clear. / رمز نشست در RAM اکنون به‌صورت `bytearray` تغییرپذیر ذخیره و هنگام پاک‌سازی فعالانه
+  صفر می‌شود.
 - ZIP extraction now enforces private file permissions, rejects symlinks/duplicate basenames
   and limits the number of archive entries. / استخراج ZIP اکنون مجوز فایل خصوصی اعمال می‌کند،
   symlink و نام تکراری را رد می‌کند و تعداد ورودی‌ها را محدود می‌سازد.
@@ -41,6 +92,15 @@ All notable changes are documented here. Format follows [Keep a Changelog](https
   به VPNهای دیگر آسیب نزند.
 - NetworkManager import now aborts if the agent-owned password secret flag cannot be set.
   اگر پرچم agent-owned رمز عبور قابل تنظیم نباشد، import متوقف می‌شود.
+- Fixed a latent use-after-free contract in `eovpn_get_managed_active_connection` (only the
+  duplicated UUID now escapes the NMClient scope) and a per-call GVariant leak in
+  `_get_all_sessions`. / قرارداد use-after-free نهفته در `eovpn_get_managed_active_connection`
+  (اکنون فقط UUID کپی‌شده از محدوده NMClient خارج می‌شود) و نشت GVariant در هر فراخوانی
+  `_get_all_sessions` اصلاح شد.
+- Removed the process-wide `UniqueSession` state from the OpenVPN 3 binding: every session
+  operation now takes the session path explicitly (thread-safe, multi-session capable).
+  وضعیت سراسری `UniqueSession` از بایندینگ OpenVPN 3 حذف شد؛ هر عملیات نشست اکنون مسیر
+  نشست را صریحاً می‌گیرد (thread-safe و چندنشسته).
 - Dependency CVE scanning (`pip-audit --strict`) and CodeQL static analysis now run on every
   push and pull request, so a vulnerable dependency blocks the merge gate.
   پویش CVE وابستگی‌ها و تحلیل ایستای CodeQL اکنون در هر push و pull request اجرا می‌شوند و

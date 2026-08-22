@@ -133,3 +133,7 @@ msgstr "TCP"
 
 msgid "UDP"
 msgstr "UDP"
+
+#: settings_window.py:new
+msgid "Choose CA / CRT Certificate"
+msgstr "Scegli certificato CA / CRT"

@@ -33,7 +33,7 @@ class TestSpeedTest(unittest.TestCase):
         self.assertEqual(remotes[1], ("example.com", 8080))
         self.assertEqual(remotes[2], ("fallback.net", 1194))
 
-    @patch('socket.create_connection')
+    @patch("socket.create_connection")
     def test_ping_host_success(self, mock_create_connection):
         mock_sock = MagicMock()
         mock_create_connection.return_value = mock_sock
@@ -44,14 +44,14 @@ class TestSpeedTest(unittest.TestCase):
         mock_create_connection.assert_called_once_with(("127.0.0.1", 80), timeout=2.0)
         mock_sock.close.assert_called_once()
 
-    @patch('socket.create_connection')
+    @patch("socket.create_connection")
     def test_ping_host_fail(self, mock_create_connection):
         mock_create_connection.side_effect = TimeoutError("Connection timed out")
 
         rtt = ping_host("192.0.2.1", 12345, timeout=0.5)
         self.assertIsNone(rtt)
 
-    @patch('eovpn.speed_test.ping_host')
+    @patch("eovpn.speed_test.ping_host")
     def test_single_ovpn(self, mock_ping):
         test_file = "test_multi.ovpn"
         with open(test_file, "w") as f:

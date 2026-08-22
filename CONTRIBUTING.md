@@ -55,8 +55,38 @@ python3 run_program_debug.py   # requires a desktop session / نیازمند ن�
 - All tests are offline and mock network I/O / همه تست‌ها آفلاین و با شبیه‌سازی شبکه هستند.
 - Add a unit test for every new pure function (e.g. `tests/test_utils.py`).
   برای هر تابع خالص جدید تست واحد بنویسید.
+- The extracted controllers (`cascade_controller.py`, `network_monitor.py`) are testable with
+  fake hosts/schedulers — no GTK session is required; see `tests/test_cascade_state.py`.
+  کنترلرهای استخراج‌شده (`cascade_controller.py` و `network_monitor.py`) با میزبان/زمان‌بند جعلی
+  قابل تست هستند و به نشست GTK نیاز ندارند؛ `tests/test_cascade_state.py` را ببینید.
 - Never commit `.ovpn`, `.crt`, `.key` or any credential file.
   هرگز فایل‌های `.ovpn`، `.crt`، `.key` یا هر فایل حاوی اعتبارنامه را کامیت نکنید.
+
+---
+
+## 🖥️ Local Debug Run / اجرای محلی برای توسعه
+
+The debug launcher builds the native CFFI bindings with Meson/Ninja and starts the
+application straight from the source tree (no system installation). It needs a desktop
+session with GTK4 + Libadwaita and NetworkManager with the OpenVPN plugin.
+
+راه‌انداز دیباگ، بایندینگ‌های بومی CFFI را با Meson/Ninja می‌سازد و برنامه را مستقیم از درخت
+منبع اجرا می‌کند (بدون نصب سیستمی). نیازمند نشست گرافیکی GTK4 + Libadwaita و NetworkManager
+به همراه افزونه OpenVPN است.
+
+```bash
+# Requires a running desktop session / نیازمند نشست گرافیکی فعال
+python3 run_program_debug.py
+
+# Or with a specific log level / یا با سطح لاگ مشخص
+EOVPN_DEBUG=DEBUG python3 run_program_debug.py
+```
+
+> `run_program_debug.py` sets `OPENVPN3 = True` automatically when the Python
+> `openvpn3` bindings are importable; otherwise it falls back to the
+> NetworkManager backend only.
+> اسکریپت وقتی بایندینگ پایتون `openvpn3` قابل ایمپورت باشد به‌صورت خودکار `OPENVPN3 = True`
+> می‌گذارد؛ در غیر این صورت فقط به بک‌اند NetworkManager بازمی‌گردد.
 
 ---
 

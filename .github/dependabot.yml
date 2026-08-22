@@ -11,6 +11,12 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "ci"
+    # One grouped PR instead of one PR per action
+    # یک PR گروهی به‌جای یک PR برای هر اکشن
+    groups:
+      github-actions:
+        patterns:
+          - "*"
 
   # Python dependencies (runtime + dev) / وابستگی‌های پایتون
   - package-ecosystem: "pip"
@@ -20,6 +26,13 @@ updates:
     open-pull-requests-limit: 10
     commit-message:
       prefix: "deps"
+    # Bump lower bounds only when the resolved version requires it
+    # فقط در صورت نیاز، کف نسخه‌ها را بالا می‌برد
+    versioning-strategy: increase-if-necessary
+    groups:
+      python-deps:
+        patterns:
+          - "*"
     # Runtime pins are intentionally loose; Dependabot keeps them current.
     # پین‌های زمان اجرا عمداً باز هستند؛ Dependabot آن‌ها را به‌روز نگه می‌دارد.
     ignore:

@@ -5,7 +5,7 @@
 # پیکربندی متمرکز meson-python، ruff، mypy و سایر ابزارهای پایتون.
 
 [build-system]
-requires = ["meson-python>=0.16.0", "meson>=0.60.0", "ninja", "cffi>=1.15.0"]
+requires = ["meson-python>=0.16.0", "meson>=0.60.0", "ninja", "cffi>=1.16.0"]
 build-backend = "mesonpy"
 
 [project]
@@ -32,7 +32,7 @@ classifiers = [
     "Topic :: System :: Networking",
 ]
 dependencies = [
-    "cffi>=1.15.0",
+    "cffi>=1.16.0",
     "PyGObject>=3.42.0",
 ]
 
@@ -68,6 +68,11 @@ ignore = [
     "N818",
 ]
 
+# The /proc/net/dev fixture lines mirror the real kernel format verbatim.
+# خطوط فیکسچر /proc/net/dev عیناً قالب واقعی هسته را بازتاب می‌دهند.
+[tool.ruff.lint.per-file-ignores]
+"tests/test_network_monitor.py" = ["E501"]
+
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
@@ -85,3 +90,30 @@ exclude = ["build/", "build-appimage/", "dist/", ".flatpak-builder/"]
 [[tool.mypy.overrides]]
 module = ["gi.*", "cffi.*", "openvpn3.*"]
 ignore_missing_imports = true
+
+# Deterministic wheel builds: the OpenVPN 3 backend is not part of the
+# wheel story, so the meson-python backend is pinned to the same option
+# every distribution package uses.
+# ساخت‌های wheel قطعی: بک‌اند OpenVPN 3 بخشی از داستان wheel نیست، بنابراین
+# بک‌اند meson-python روی همان آپشنی قفل می‌شود که همه بسته‌های توزیع‌ها دارند.
+[tool.meson-python.args]
+setup = ["-Dopenvpn3=false"]
+
+# Coverage is scoped to the pure, offline-testable modules; GTK controllers
+# are exercised manually and via the smoke builds (see docs/ARCHITECTURE.md).
+# پوشش کد به ماژول‌های خالص و قابل تست آفلاین محدود است؛ کنترلرهای GTK از طریق
+# اجرای دستی و ساخت‌های آزمایشی بررسی می‌شوند (رجوع کنید به docs/ARCHITECTURE.md).
+[tool.coverage.run]
+source = ["eovpn"]
+
+[tool.coverage.report]
+include = [
+    "eovpn/utils.py",
+    "eovpn/speed_test.py",
+    "eovpn/auto_connect.py",
+    "eovpn/cascade.py",
+    "eovpn/cascade_controller.py",
+    "eovpn/network_monitor.py",
+    "eovpn/ip_lookup/*",
+]
+show_missing = true
