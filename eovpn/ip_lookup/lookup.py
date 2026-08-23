@@ -41,7 +41,7 @@ class Lookup:
         self.providers = [
             self.cloudflare_https,
             self.ipapi_co,
-            self.ip_api_https,
+            self.ipify_https,
         ]
 
     def update(self) -> bool:
@@ -107,10 +107,18 @@ class Lookup:
                 return True
         return False
 
-    def ip_api_https(self) -> bool:
+    def ipify_https(self) -> bool:
         """
-        Fetches IP and country from ip-api.com (or json fallback) over HTTPS / JSON.
-        دریافت اطلاعات IP و کشور به عنوان گره پشتیبان.
+        Fetches public IP from ipify.org over HTTPS as a last-resort fallback.
+
+        Unlike the other providers, ipify only returns the IP address (no
+        country code); the existing ``country_code`` value is preserved when
+        present, otherwise it stays as the ``uno`` sentinel set by __init__.
+
+        دریافت IP عمومی از ipify.org بر بستر HTTPS به‌عنوان آخرین گره پشتیبان.
+        برخلاف سایر ارائه‌دهندگان، ipify فقط آدرس IP را برمی‌گرداند (بدون کد
+        کشور)؛ مقدار country_code موجود در صورت وجود حفظ می‌شود و در غیر این
+        صورت به‌عنوان مقدار uno که سازنده تعیین کرده باقی می‌ماند.
         """
         req = urllib.request.Request("https://api.ipify.org?format=json", headers={"User-Agent": USER_AGENT})
         with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as response:

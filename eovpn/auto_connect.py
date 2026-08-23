@@ -27,6 +27,42 @@ from .ovpn_parser import (
 
 logger = logging.getLogger(__name__)
 
+# Public API surface. Symbols imported from ``ovpn_parser`` are deliberately
+# re-exported here so that downstream modules (``main_window``, ``eovpn_base``,
+# ``cascade_controller`` and the test suite) can import them from a single
+# facade instead of reaching into the parser directly.
+#
+# سطح API عمومی. نمادهای ایمپورت‌شده از ovpn_parser عمداً از اینجا بازصادر
+# می‌شوند تا ماژول‌های پایین‌دست بتوانند از یک نمای واحد ایمپورت کنند.
+__all__ = [
+    # Re-exported from ovpn_parser / بازصادر از ovpn_parser
+    "DEFAULT_OVPN_PROTO",
+    "PROTO_ALL",
+    "PROTO_TCP",
+    "PROTO_UDP",
+    "normalize_proto",
+    "parse_ovpn_endpoints",
+    "parse_ovpn_protocols",
+    # Timing constants / ثابت‌های زمانی
+    "BASE_HANDSHAKE_SECONDS",
+    "UNKNOWN_RTT_TIMEOUT_SECONDS",
+    "MIN_ATTEMPT_TIMEOUT_SECONDS",
+    "MAX_ATTEMPT_TIMEOUT_SECONDS",
+    "RTT_TIMEOUT_MULTIPLIER",
+    "DISCONNECT_SETTLE_SECONDS",
+    "PROGRESS_TICK_MS",
+    "MAX_CASCADE_CANDIDATES",
+    # Types / نوع‌ها
+    "CascadePhase",
+    "CascadeAttempt",
+    # Functions / توابع
+    "compute_attempt_timeout",
+    "collect_visible_filenames",
+    "build_cascade_queue",
+    "format_proto_badge",
+    "proto_badge_css",
+]
+
 # ---------------------------------------------------------------------------
 # Handshake timing budget / بودجه زمانی دست‌دهی OpenVPN
 # ---------------------------------------------------------------------------
