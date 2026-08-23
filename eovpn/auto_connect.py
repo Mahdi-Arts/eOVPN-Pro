@@ -12,11 +12,56 @@ layer drives connect/disconnect; this module stays UI-free and unit-testable.
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass, field
 from enum import Enum
 
+from .ovpn_parser import (
+    DEFAULT_OVPN_PROTO,
+    PROTO_ALL,
+    PROTO_TCP,
+    PROTO_UDP,
+    normalize_proto,
+    parse_ovpn_endpoints,
+    parse_ovpn_protocols,
+)
+
 logger = logging.getLogger(__name__)
+
+# Public API surface. Symbols imported from ``ovpn_parser`` are deliberately
+# re-exported here so that downstream modules (``main_window``, ``eovpn_base``,
+# ``cascade_controller`` and the test suite) can import them from a single
+# facade instead of reaching into the parser directly.
+#
+# سطح API عمومی. نمادهای ایمپورت‌شده از ovpn_parser عمداً از اینجا بازصادر
+# می‌شوند تا ماژول‌های پایین‌دست بتوانند از یک نمای واحد ایمپورت کنند.
+__all__ = [
+    # Re-exported from ovpn_parser / بازصادر از ovpn_parser
+    "DEFAULT_OVPN_PROTO",
+    "PROTO_ALL",
+    "PROTO_TCP",
+    "PROTO_UDP",
+    "normalize_proto",
+    "parse_ovpn_endpoints",
+    "parse_ovpn_protocols",
+    # Timing constants / ثابت‌های زمانی
+    "BASE_HANDSHAKE_SECONDS",
+    "UNKNOWN_RTT_TIMEOUT_SECONDS",
+    "MIN_ATTEMPT_TIMEOUT_SECONDS",
+    "MAX_ATTEMPT_TIMEOUT_SECONDS",
+    "RTT_TIMEOUT_MULTIPLIER",
+    "DISCONNECT_SETTLE_SECONDS",
+    "PROGRESS_TICK_MS",
+    "MAX_CASCADE_CANDIDATES",
+    # Types / نوع‌ها
+    "CascadePhase",
+    "CascadeAttempt",
+    # Functions / توابع
+    "compute_attempt_timeout",
+    "collect_visible_filenames",
+    "build_cascade_queue",
+    "format_proto_badge",
+    "proto_badge_css",
+]
 
 # ---------------------------------------------------------------------------
 # Handshake timing budget / بودجه زمانی دست‌دهی OpenVPN
@@ -34,15 +79,6 @@ RTT_TIMEOUT_MULTIPLIER = 8.0
 DISCONNECT_SETTLE_SECONDS = 0.55
 PROGRESS_TICK_MS = 100
 MAX_CASCADE_CANDIDATES = 50
-
-PROTO_TCP = "tcp"
-PROTO_UDP = "udp"
-PROTO_ALL = "all"
-
-# OpenVPN's documented default transport when neither `proto` nor a
-# per-remote protocol token is present.
-# پیش‌فرض مستند OpenVPN وقتی نه `proto` و نه پروتکل روی remote آمده باشد.
-DEFAULT_OVPN_PROTO = PROTO_UDP
 
 
 class CascadePhase(str, Enum):
@@ -68,80 +104,6 @@ class CascadeAttempt:
     rtt_ms: float | None = None
     protocols: frozenset[str] = field(default_factory=frozenset)
     reason: str | None = None
-
-
-def normalize_proto(token: str | None) -> str | None:
-    """
-    Maps an OpenVPN proto token (tcp, tcp4, tcp-client, udp6, …) to tcp/udp.
-    نگاشت توکن پروتکل OpenVPN به یکی از دو مقدار tcp یا udp.
-    """
-    if not token:
-        return None
-    lowered = str(token).strip().lower()
-    if lowered.startswith("tcp"):
-        return PROTO_TCP
-    if lowered.startswith("udp"):
-        return PROTO_UDP
-    return None
-
-
-def parse_ovpn_endpoints(file_path: str) -> list[tuple[str, int, str]]:
-    """
-    Parses ``remote`` / ``proto`` directives from an .ovpn file.
-
-    Returns a list of ``(host, port, proto)`` tuples. The file-level ``proto``
-    (default: UDP) is used unless a remote overrides it with a 3rd/4th token.
-    پارس خطوط remote و proto و بازگرداندن فهرست (میزبان، پورت، پروتکل).
-
-    :param file_path: Absolute path to the configuration file.
-    :return: Endpoint tuples. Empty when the file cannot be read or has no remotes.
-    """
-    endpoints: list[tuple[str, int, str]] = []
-    file_proto = DEFAULT_OVPN_PROTO
-    try:
-        with open(file_path, encoding="utf-8", errors="ignore") as handle:
-            for raw in handle:
-                line = raw.strip()
-                if not line or line.startswith("#") or line.startswith(";"):
-                    continue
-                parts = line.split()
-                if not parts:
-                    continue
-                key = parts[0].lower()
-                if key == "proto" and len(parts) >= 2:
-                    parsed = normalize_proto(parts[1])
-                    if parsed:
-                        file_proto = parsed
-                    continue
-                if key != "remote" or len(parts) < 2:
-                    continue
-                host = parts[1]
-                port = 1194
-                proto = file_proto
-                if len(parts) >= 3 and parts[2].isdigit():
-                    port = int(parts[2])
-                    if len(parts) >= 4:
-                        parsed = normalize_proto(parts[3])
-                        if parsed:
-                            proto = parsed
-                elif len(parts) >= 3:
-                    parsed = normalize_proto(parts[2])
-                    if parsed:
-                        proto = parsed
-                endpoints.append((host, port, proto))
-    except Exception as exc:
-        logger.error("Error parsing endpoints from %s: %s", file_path, exc)
-    return endpoints
-
-
-def parse_ovpn_protocols(file_path: str) -> frozenset[str]:
-    """
-    Returns the set of transports declared by an .ovpn file ({tcp}, {udp}, or both).
-    مجموعه پروتکل‌های اعلام‌شده در یک فایل کانفیگ را برمی‌گرداند.
-    """
-    if not file_path or not os.path.isfile(file_path):
-        return frozenset()
-    return frozenset(proto for _host, _port, proto in parse_ovpn_endpoints(file_path))
 
 
 def compute_attempt_timeout(rtt_ms: float | None) -> float:

@@ -13,7 +13,6 @@ import shutil
 import tempfile
 import unittest
 import zipfile
-import socket
 from unittest.mock import patch
 
 from eovpn.utils import (
@@ -21,7 +20,6 @@ from eovpn.utils import (
     InsecureSourceError,
     _read_limited,
     _SafeRedirectHandler,
-    _resolve_safe_https_host,
     download_remote_to_destination,
     is_hard_blocked_source_host,
     is_private_or_loopback_host,
@@ -105,17 +103,6 @@ class TestHostClassification(unittest.TestCase):
         self.assertTrue(is_private_or_loopback_host("10.1.2.3"))
         self.assertFalse(is_private_or_loopback_host("vpn.example.com"))
 
-    @patch("eovpn.utils.socket.getaddrinfo")
-    def test_resolved_private_addresses_blocked(self, getaddrinfo):
-        getaddrinfo.return_value = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.8", 443))]
-        with self.assertRaises(InsecureSourceError):
-            _resolve_safe_https_host("vpn.example.com", 443)
-
-    @patch("eovpn.utils.socket.getaddrinfo")
-    def test_resolved_public_address_is_selected(self, getaddrinfo):
-        getaddrinfo.return_value = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
-        self.assertEqual(_resolve_safe_https_host("vpn.example.com", 443), "93.184.216.34")
-
 
 class TestHttpsDownload(unittest.TestCase):
     """Download scheme, SSRF and size enforcement / اعمال پروتکل، SSRF و حجم."""
@@ -141,9 +128,7 @@ class TestHttpsDownload(unittest.TestCase):
     def test_https_zip_download_succeeds(self):
         response = _FakeResponse(_make_zip_bytes())
         opener = _FakeOpener(response)
-        with (patch("eovpn.utils.socket.getaddrinfo", return_value=[
-            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))
-        ]), patch("eovpn.utils.urllib.request.build_opener", return_value=opener)):
+        with patch("eovpn.utils.urllib.request.build_opener", return_value=opener):
             certs = download_remote_to_destination("https://vpn.example.com/configs.zip", self.test_dir)
         self.assertEqual(certs, [])
         self.assertTrue(

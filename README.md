@@ -56,8 +56,6 @@
 - 🛡️ **Security Hardened Architecture (معماری امن و محافظت‌شده)**:
   - Zero plaintext password leakage into disk/dconf (GNOME Keyring with volatile RAM fallback + agent-owned NetworkManager secrets), secure temporary file generation (`0o600` permissions), Zip-Slip path traversal protection, zip-bomb/size caps, config import audit for executable OpenVPN directives, and encrypted HTTPS IP lookups.
   - عدم ذخیره متن خام رمز عبور روی دیسک، ایجاد ایمن فایل‌های موقت با پرمیشن `0600`، جلوگیری از آسیب‌پذیری‌های فایل فشرده (Zip-Slip) و بمب فشرده، ممیزی کانفیگ‌های واردشده از نظر دایرکتیوهای اجرایی و استعلام امن موقعیت مکانی از طریق پروتکل HTTPS.
-  - منابع پیکربندی HTTPS پیش از اتصال با DNS بررسی می‌شوند؛ نشانی‌های خصوصی، loopback، link-local و reserved رد شده و اتصال به نشانی عمومی معتبرسنجی‌شده pin می‌شود تا DNS rebinding رخ ندهد.
-  - HTTPS configuration sources are DNS-validated before connection; private, loopback, link-local, and reserved addresses are rejected, and the connection is pinned to the validated public address to prevent DNS rebinding.
 
 - 🔌 **Auto-Reconnect (اتصال مجدد خودکار)**:
   - Detects unexpected connection drops and automatically schedules an immediate reconnect attempt within 3 seconds.
@@ -73,10 +71,6 @@
 
 Every release publishes prebuilt packages plus a `SHA256SUMS` manifest on the
 [Releases page](https://github.com/Mahdi-Arts/eOVPN-Pro/releases).
-
-> نکته: ساخت Flatpak در CI به‌صورت best-effort است؛ اگر build آن شکست بخورد، انتشار ممکن است بدون فایل `.flatpak` انجام شود.
->
-> Note: Flatpak is a best-effort CI build; a release can be published without a `.flatpak` artifact if that build fails.
 هر انتشار، بسته‌های آمادهٔ نصب به همراه فایل `SHA256SUMS` را در صفحهٔ Releases قرار می‌دهد.
 
 ```bash
@@ -169,13 +163,13 @@ python3 run_program_debug.py
 
 ## 🧪 Testing & Quality Assurance (آزمون و تست نرم‌افزار)
 
-The project ships **83 offline unit tests** that require no network, no D-Bus and
+The project ships **81 offline unit tests** that require no network, no D-Bus and
 no display server, so they run identically on a laptop and inside CI.
 این پروژه دارای **۸۱ تست واحد آفلاین** است که به شبکه، D-Bus یا سرور نمایش نیاز
 ندارند و به همین دلیل روی سیستم شخصی و داخل CI یکسان اجرا می‌شوند.
 
 ```bash
-# Unit tests / تست‌های واحد  (83 tests)
+# Unit tests / تست‌های واحد  (81 tests)
 python3 -m unittest discover -s tests -v
 
 # …or through Meson / یا از طریق Meson
@@ -204,7 +198,7 @@ python3 -m compileall -q eovpn tests run_program_debug.py cffi_compile.py meson_
 
 | Workflow / وورک‌فلو | Trigger / محرک | What it does / وظیفه |
 |---|---|---|
-| [`ci.yml`](.github/workflows/ci.yml) | every push & pull request — هر push و pull request | Ruff lint + format check, mypy, 83 unit tests on Python 3.10/3.11/3.12, coverage, `pip-audit`, metadata consistency, a full Meson build with desktop/AppStream validation, and smoke builds of the `.deb`, `.rpm` and Arch packages |
+| [`ci.yml`](.github/workflows/ci.yml) | every push & pull request — هر push و pull request | Ruff lint + format check, mypy, 81 unit tests on Python 3.10/3.11/3.12, coverage, `pip-audit`, metadata consistency, a full Meson build with desktop/AppStream validation, and smoke builds of the `.deb`, `.rpm` and Arch packages |
 | [`codeql.yml`](.github/workflows/codeql.yml) | every push, pull request & weekly — هر push، pull request و هفتگی | CodeQL static analysis for the Python codebase and the compiled C bindings (security-extended queries) |
 | [`release.yml`](.github/workflows/release.yml) | version tags `v*.*.*` — تگ‌های نسخه | Verifies version parity across all packaging metadata, then builds `.deb`, `.rpm`, `.pkg.tar.zst`, AppImage and Flatpak, attaches build provenance, generates `SHA256SUMS`, and publishes the GitHub Release |
 
