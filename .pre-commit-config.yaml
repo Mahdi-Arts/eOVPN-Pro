@@ -1,0 +1,58 @@
+# eOVPN-Pro Pre-Commit Hooks
+# هوک‌های pre-commit برای eOVPN-Pro
+#
+# Install once per checkout / یک‌بار برای هر checkout نصب کنید:
+#   pip install pre-commit
+#   pre-commit install
+#
+# Run manually on all files / اجرای دستی روی همه فایل‌ها:
+#   pre-commit run --all-files
+#
+# These hooks mirror the CI checks (ci.yml) so developers catch lint, format
+# and type errors before pushing. They never touch the runtime logic.
+# این هوک‌ها بررسی‌های CI را بازتاب می‌دهند تا توسعه‌دهندگان پیش از push،
+# خطاهای lint، format و type را شناسایی کنند. منطق زمان اجرا را تغییر نمی‌دهند.
+
+repos:
+  # --- Generic hygiene / بهداشت عمومی فایل‌ها ---
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: '\.(po|pot|svg|patch)$'
+      - id: end-of-file-fixer
+        exclude: '\.(po|pot|svg|patch)$'
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: ['--maxkb=512']
+      - id: check-merge-conflict
+      - id: debug-statements
+
+  # --- Ruff lint / بررسی کیفیت کد ---
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.1
+    hooks:
+      - id: ruff
+        args: ['--fix', '--exit-non-zero-on-fix']
+      - id: ruff-format
+
+  # --- Mypy type check / بررسی نوع‌ها ---
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.14.1
+    hooks:
+      - id: mypy
+        args: ['--ignore-missing-imports']
+        files: '^(eovpn|tests)/'
+        additional_dependencies:
+          - types-setuptools>=70.0.0
+
+  # --- Project metadata parity / یکپارچگی متادیتای پروژه ---
+  - repo: local
+    hooks:
+      - id: check-project-meta
+        name: Project metadata consistency
+        entry: python3 scripts/check_project_meta.py
+        language: python
+        pass_filenames: false
+        always_run: true

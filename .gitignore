@@ -43,3 +43,14 @@ tests/data/**
 *.ca
 *.pem
 *.key
+
+# Obsolete artifacts that must not be re-committed to the repository root
+# فایل‌های منسوخ که نباید دوباره در ریشه مخزن کامیت شوند
+# Leading slash ensures only the root-level copy is ignored; the archived
+# copy in docs/archive/ remains tracked.
+# اسلش آغازی فقط نمونهٔ ریشه را نادیده می‌گیرد؛ نسخهٔ بایگانی‌شده در
+# docs/archive/ همچنان ردیابی می‌شود.
+/fix-workflow.patch
+
+# pre-commit framework cache / کش فریمورک pre-commit
+.pre-commit/.cache/
