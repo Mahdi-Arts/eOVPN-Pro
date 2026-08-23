@@ -16,12 +16,14 @@ from __future__ import annotations
 
 import contextlib
 import gettext
+import http.client
 import io
 import ipaddress
 import logging
 import os
 import re
 import shutil
+import socket
 import urllib.parse
 import urllib.request
 import zipfile
@@ -81,6 +83,74 @@ class InsecureSourceError(ValueError):
     Raised when a configuration source uses an insecure network scheme.
     زمانی که منبع شبکه از پروتکل امن HTTPS استفاده نکند.
     """
+
+
+def _resolve_safe_https_host(host: str, port: int) -> str:
+    """نام میزبان HTTPS را resolve کرده و یک نشانی عمومی امن برای اتصال برمی‌گرداند.
+    -
+    Resolve an HTTPS host and return one public address safe for connection.
+
+    Resolving immediately before connecting closes the hostname-only SSRF gap.
+    Every returned address is checked and the selected address is pinned by the
+    HTTPS connection, while TLS validation still uses the original hostname.
+    """
+    try:
+        addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise InsecureSourceError(gettext.gettext("Configuration source hostname could not be resolved.")) from exc
+
+    public_addresses: list[str] = []
+    for _family, _socktype, _proto, _canonname, sockaddr in addresses:
+        address = sockaddr[0]
+        try:
+            parsed = ipaddress.ip_address(address)
+        except ValueError:
+            continue
+        if not (parsed.is_loopback or parsed.is_private or parsed.is_link_local or parsed.is_reserved):
+            public_addresses.append(address)
+
+    if not public_addresses:
+        raise InsecureSourceError(
+            gettext.gettext("Configuration source resolves to a blocked network address.")
+        )
+    return public_addresses[0]
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """اتصال HTTPS متصل‌شده به نشانی معتبرسنجی‌شده با حفظ TLS SNI.
+    -
+    HTTPS connection pinned to a validated address while retaining TLS SNI."""
+
+    def __init__(self, host: str, *, connect_host: str, **kwargs: Any) -> None:
+        self._connect_host = connect_host
+        super().__init__(host, **kwargs)
+
+    def connect(self) -> None:
+        self.sock = socket.create_connection((self._connect_host, self.port), self.timeout, self.source_address)
+        if self._tunnel_host:
+            self._tunnel()
+        self.sock = self._context.wrap_socket(self.sock, server_hostname=self.host)
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    """handler مربوط به urllib که هر مقصد درخواست HTTPS را معتبرسنجی و pin می‌کند.
+    -
+    urllib handler that validates and pins every HTTPS request target."""
+
+    def https_open(self, req):
+        parsed = urllib.parse.urlparse(req.full_url)
+        host = parsed.hostname
+        if not host:
+            raise InsecureSourceError(gettext.gettext("Configuration source hostname is missing."))
+        if is_hard_blocked_source_host(host):
+            raise InsecureSourceError(
+                gettext.gettext("Configuration sources on localhost or private network addresses are blocked.")
+            )
+        port = parsed.port or 443
+        connect_host = _resolve_safe_https_host(host, port)
+        return self.do_open(lambda authority, **kwargs: _PinnedHTTPSConnection(
+            authority, connect_host=connect_host, **kwargs
+        ), req)
 
 
 class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -258,7 +328,7 @@ def download_remote_to_destination(remote: str, destination: str) -> list[str]:
             "Connection": "close",
         }
         req = urllib.request.Request(src, headers=headers, method="GET")
-        opener = urllib.request.build_opener(_SafeRedirectHandler())
+        opener = urllib.request.build_opener(_SafeRedirectHandler(), _PinnedHTTPSHandler())
         with opener.open(req, timeout=12.0) as resp:
             return make_zip_from_bytes(_read_limited(resp))
 

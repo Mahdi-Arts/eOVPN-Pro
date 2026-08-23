@@ -188,9 +188,10 @@ sudo apt install -y meson ninja-build pkg-config libfuse2 wget file \
 # linuxdeploy + the GTK plugin / ابزار linuxdeploy و افزونهٔ GTK آن
 mkdir -p ~/.local/bin && cd ~/.local/bin
 wget -O linuxdeploy \
-  https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+  https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20250213-2/linuxdeploy-x86_64.AppImage
 wget -O linuxdeploy-plugin-gtk.sh \
-  https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh
+  https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/7a3fbc31a9e5075073ff8790f26effbac5f84453/linuxdeploy-plugin-gtk.sh
+echo "b0f4cbc684a0103a9651f0955b635eaea0096b3a66c0f5a2c2aa337960375171  linuxdeploy-plugin-gtk.sh" | sha256sum --check --status
 chmod +x linuxdeploy linuxdeploy-plugin-gtk.sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
@@ -222,7 +223,18 @@ chmod +x eovpn-pro-1.5.0-x86_64.AppImage
 
 ---
 
+> **نکتهٔ زنجیرهٔ تأمین:** CI از ارجاع‌های تغییرناپذیر Linuxdeploy و افزونهٔ GTK استفاده می‌کند. برای ساخت محلی AppImage نیز همان نسخهٔ pin‌شده در `.github/workflows/release.yml` را استفاده کنید و artifact متغیر `continuous` را جایگزین نکنید.
+>
+> **نکتهٔ زنجیرهٔ تأمین:** افزونهٔ GTK به commit ثابت و SHA-256 آن pin شده است؛ پیش از اجرا دستور `sha256sum --check` باید موفق شود.
+>
+> **Supply-chain note:** The GTK plugin is pinned to an immutable commit and SHA-256; `sha256sum --check` must succeed before it is executed.
+
 ## 5. Flatpak (Universal Sandbox)
+
+> **تکرارپذیری:** تمام sourceهای `type: git` در manifest فلت‌پک به commit تغییرناپذیر pin شده‌اند. هنگام ارتقای وابستگی، commit را فقط پس از بازبینی release/tag متناظر بالادست تغییر دهید.
+>
+> **Reproducibility:** Every `type: git` source in `dist/flatpak/com.github.mahdi-arts.eovpn-pro.yml` is pinned to an immutable commit. When upgrading a dependency, replace its commit only after reviewing the upstream release/tag it represents.
+
 
 Flatpak provides an isolated, sandboxed container ensuring compatibility across all
 modern Linux desktops.
