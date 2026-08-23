@@ -328,7 +328,6 @@ class Base:
         self.AUTHOR_MAIL = metadata.get("AUTHOR_MAIL", "info@MahdiArts.ir")
         self.AUTHOR_MAIL_SECONDARY = metadata.get("AUTHOR_MAIL_SECONDARY", "mehdi.bagheban@gmail.com")
         self.AUTHOR_WEBSITE = metadata.get("AUTHOR_WEBSITE", "https://www.MahdiArts.ir")
-        self.AUTHOR_DONATE = metadata.get("AUTHOR_DONATE", "https://www.MahdiArts.ir/donate")
 
         self.TRANSLATORS = {}
         self.EOVPN_SECRET_SCHEMA = EOVPN_SECRET_SCHEMA

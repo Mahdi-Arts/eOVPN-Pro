@@ -23,7 +23,6 @@ import os
 import sys
 import threading
 import time
-import webbrowser
 
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango
 
@@ -686,10 +685,6 @@ class MainWindow(Base):
         action.connect("activate", open_about_dialog)
         self.app.add_action(action)
 
-        action = Gio.SimpleAction.new("donate", None)
-        action.connect("activate", lambda x, d: webbrowser.open(self.AUTHOR_DONATE))
-        self.app.add_action(action)
-
         action = Gio.SimpleAction.new("keyboard_shortcuts", None)
         action.connect("activate", open_ks)
         self.app.add_action(action)
@@ -751,7 +746,6 @@ class MainWindow(Base):
         menu.append(gettext.gettext("Keyboard Shortcuts"), "app.keyboard_shortcuts")
         menu.append_submenu(gettext.gettext("Layout"), layout_menu)
         menu.append_submenu(gettext.gettext("Language"), lang_menu)
-        menu.append(gettext.gettext("Donate"), "app.donate")
         menu.append(gettext.gettext("About"), "app.about")
         popover = Gtk.PopoverMenu.new_from_model(menu)
 
@@ -761,13 +755,6 @@ class MainWindow(Base):
         menu_button.set_icon_name("open-menu-symbolic")
         menu_button.set_popover(popover)
         header_bar.pack_end(menu_button)
-
-        # Dedicated Sponsor/Donate Button (❤️)
-        self.donate_btn_header = Gtk.Button.new_from_icon_name("emblem-favorite-symbolic")
-        self.donate_btn_header.set_tooltip_text(gettext.gettext("Sponsor & Donate (حمایت مالی)"))
-        self.donate_btn_header.add_css_class("flat")
-        self.donate_btn_header.connect("clicked", lambda b: webbrowser.open(self.AUTHOR_DONATE))
-        header_bar.pack_end(self.donate_btn_header)
 
         self.spinner = Gtk.Spinner()
         header_bar.pack_end(self.spinner)

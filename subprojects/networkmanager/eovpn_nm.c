@@ -194,8 +194,8 @@ add_connection (char *config_name, char *username, char *password, char *ca)
 
             /* Keep the password agent-owned; abort if NetworkManager cannot
              * guarantee that it will not persist the secret on disk. */
-            if (!nm_setting_set_secret_flags (vpn_settings,
-                                              NM_SETTING_VPN_SECRET_PASSWORD,
+            if (!nm_setting_set_secret_flags ((NMSetting *) vpn_settings,
+                                              "password",
                                               NM_SETTING_SECRET_FLAG_AGENT_OWNED,
                                               &flags_err))
             {

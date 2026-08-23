@@ -14,6 +14,7 @@ Requirements:
   - نصب NetworkManager به همراه افزونه openvpn.
 """
 
+import importlib.util
 import os
 import pathlib
 import shutil
@@ -24,12 +25,7 @@ from gi.repository import Gio
 
 # Set to False to build without the OpenVPN 3 backend
 # برای ساخت بدون بک‌اند OpenVPN 3 مقدار را False کنید
-OPENVPN3 = True
-
-try:
-    import openvpn3  # noqa: F401  (presence check only / فقط بررسی وجود)
-except ImportError:
-    OPENVPN3 = False
+OPENVPN3 = importlib.util.find_spec("openvpn3") is not None
 
 APP_NAME = "com.github.mahdi-arts.eovpn-pro"
 

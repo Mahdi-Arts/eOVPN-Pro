@@ -30,7 +30,6 @@ _FALLBACK_METADATA: dict[str, str] = {
     "AUTHOR_MAIL": "info@MahdiArts.ir",
     "AUTHOR_MAIL_SECONDARY": "mehdi.bagheban@gmail.com",
     "AUTHOR_WEBSITE": "https://www.MahdiArts.ir",
-    "AUTHOR_DONATE": "https://www.MahdiArts.ir/donate",
 }
 
 
