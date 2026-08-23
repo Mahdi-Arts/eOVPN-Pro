@@ -6,11 +6,15 @@ Measures socket-level round-trip time (TCP latency) to remote OpenVPN endpoints 
 محاسبه همزمان و چندنخی میزان تأخیر دست‌دهی شبکه (TCP RTT) به سرورهای OpenVPN.
 """
 
+from __future__ import annotations
+
 import logging
 import os
 import socket
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from .ovpn_parser import parse_ovpn_remote
 
 logger = logging.getLogger(__name__)
 
@@ -19,26 +23,6 @@ logger = logging.getLogger(__name__)
 # محدودیت‌های محافظه‌کارانه جلوی سوکت‌های همزمان بیش از حد را می‌گیرند.
 MAX_WORKERS = 16
 MAX_ENDPOINTS_PER_CONFIG = 16
-
-
-def parse_ovpn_remote(file_path: str) -> list[tuple[str, int]]:
-    """
-    Parses an .ovpn file and extracts the list of (host, port) from remote directives.
-
-    Delegates to the single shared parser in :mod:`eovpn.auto_connect` so the
-    endpoint grammar (remote/proto tokens, UDP default) is defined exactly once
-    (DRY). The return type is unchanged for backward compatibility.
-    پارس کردن فایل .ovpn و استخراج آدرس سرورها و پورت‌های مقصد از خطوط remote.
-    این تابع به پارسر مشترک در ماژول auto_connect واگذار می‌شود تا گرامر
-    اندپوینت‌ها فقط یک بار تعریف شود (اصل DRY)؛ نوع خروجی برای سازگاری
-    با کدهای قبلی تغییری نکرده است.
-
-    :param file_path: Path to the .ovpn configuration file.
-    :return: List of (host, port) tuples.
-    """
-    from .auto_connect import parse_ovpn_endpoints  # Deferred to avoid cycles
-
-    return [(host, port) for host, port, _proto in parse_ovpn_endpoints(file_path)]
 
 
 def ping_host(host: str, port: int, timeout: float = 1.5) -> float | None:
