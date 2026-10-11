@@ -25,14 +25,24 @@ import os
 import tempfile
 import threading
 from abc import ABC, abstractmethod
+from collections import deque
+from collections.abc import Callable
 from typing import Any
 
-from gi.repository import Secret
+import gi
+
+gi.require_version("Secret", "1")
+from gi.repository import GLib, Secret
 
 from .backend._base import CFFIStringMixin, cffi_string
 from .eovpn_base import Base
+from .utils import audit_ovpn_content
 
 logger = logging.getLogger(__name__)
+
+
+class OperationCancelled(RuntimeError):
+    """Raised internally when a native worker is cancelled cooperatively."""
 
 
 def _secure_temp_dir() -> str | None:
@@ -157,27 +167,84 @@ def available_backend_names() -> set[str]:
     return available
 
 
+def backend_diagnostics() -> dict[str, str]:
+    """Return safe, user-facing availability diagnostics for each backend."""
+    diagnostics: dict[str, str] = {}
+    if _libeovpn_nm is not None:
+        diagnostics["networkmanager"] = "available"
+    elif _NM_IMPORT_ERROR is not None:
+        diagnostics["networkmanager"] = str(_NM_IMPORT_ERROR)
+    else:
+        diagnostics["networkmanager"] = "native bindings are unavailable"
+
+    if _libopenvpn3 is not None:
+        diagnostics["openvpn3"] = "available"
+    elif _OVPN3_IMPORT_ERROR is not None:
+        diagnostics["openvpn3"] = str(_OVPN3_IMPORT_ERROR)
+    else:
+        diagnostics["openvpn3"] = "native bindings are unavailable"
+    return diagnostics
+
+
+def backend_capabilities() -> dict[str, dict[str, object]]:
+    """Return backend capabilities for the settings UI without starting a backend."""
+    available = available_backend_names()
+
+    def safe_probe(probe, default=None):
+        """Keep optional capability probes from turning Settings into a crash path."""
+        try:
+            return probe()
+        except Exception as exc:  # pragma: no cover - depends on host native bindings
+            logger.debug("Backend capability probe failed: %s", exc)
+            return default
+
+    networkmanager_version = safe_probe(NetworkManager.probe_version)
+    networkmanager_plugin = safe_probe(NetworkManager.probe_openvpn_plugin)
+    networkmanager_cffi = safe_probe(NetworkManager.probe_cffi_contract, "unavailable")
+    openvpn3_version = safe_probe(OpenVPN3.probe_version)
+    return {
+        "networkmanager": {
+            "available": "networkmanager" in available,
+            "version": networkmanager_version,
+            "openvpn_plugin": networkmanager_plugin,
+            "cffi_contract": networkmanager_cffi,
+            "native_bindings": "networkmanager" in available,
+            "reason": backend_diagnostics()["networkmanager"],
+        },
+        "openvpn3": {
+            "available": "openvpn3" in available,
+            "version": openvpn3_version,
+            "dco": "openvpn3" in available,
+            "native_bindings": "openvpn3" in available,
+            "reason": backend_diagnostics()["openvpn3"],
+        },
+    }
+
+
 def create_connection_manager(callback, preferred: str | None = None):
     """
     Creates a backend instance, preferring ``preferred`` when it is available.
 
-    If the requested backend is unavailable, another available backend is used
-    as a safe fallback. Raises ``RuntimeError`` when no backend is available.
+    If an explicitly selected backend is unavailable, fail clearly instead of
+    silently switching the user's backend. Raises ``RuntimeError`` when no
+    backend is available.
 
     یک نمونه بک‌اند می‌سازد و در صورت موجود بودن، ``preferred`` را اولویت می‌دهد.
-    اگر بک‌اند درخواست‌شده در دسترس نباشد، به بک‌اند موجود دیگر fallback می‌شود.
+    اگر بک‌اند درخواست‌شده صریحاً انتخاب شده ولی در دسترس نباشد، خطای شفاف برمی‌گرداند؛
+    فقط در حالت انتخاب‌نشدن بک‌اند، ترتیب پیش‌فرض موجود بررسی می‌شود.
     اگر هیچ بک‌اندی موجود نباشد، ``RuntimeError`` پرتاب می‌کند.
     """
     available = available_backend_names()
     if not available:
-        details = {
-            "networkmanager": _NM_IMPORT_ERROR,
-            "openvpn3": _OVPN3_IMPORT_ERROR,
-        }
+        details = "; ".join(f"{name}: {reason}" for name, reason in backend_diagnostics().items())
         raise RuntimeError(
             "No VPN backend is available. Install/network-manager-openvpn and "
-            f"build the native bindings. Details: {details}"
+            f"build the native bindings. Diagnostics: {details}"
         )
+
+    if preferred and preferred not in available:
+        reason = backend_diagnostics().get(preferred, "backend is not recognized")
+        raise RuntimeError(f"Selected VPN backend '{preferred}' is unavailable: {reason}")
 
     order: list[str] = []
     if preferred in available:
@@ -215,9 +282,17 @@ class NetworkManager(CFFIStringMixin, ConnectionManager):
         self.ffi = _libeovpn_nm.ffi
         self.callback = callback
         self._temp_config_path: str | None = None
-        # Guards concurrent native operations (one worker at a time).
-        # محافظ عملیات بومی همزمان (هر بار فقط یک کارگر).
-        self._op_lock = threading.Lock()
+        # Native operations are serialized instead of being dropped when a
+        # timeout races with disconnect/next-candidate.  The old non-blocking
+        # lock silently discarded the follow-up operation, leaving cascade
+        # auto-connect stuck after its countdown reached zero.
+        # عملیات بومی به‌جای حذف‌شدن در اثر race بین timeout و قطع/کاندید بعدی،
+        # به‌صورت ترتیبی صف می‌شوند؛ قفل قبلی عملیات بعدی را بی‌صدا دور می‌ریخت.
+        self._operation_state_lock = threading.Lock()
+        self._operation_queue: deque[tuple[Callable[..., None], tuple[Any, ...]]] = deque()
+        self._operation_cancel = threading.Event()
+        self._suppress_callbacks = threading.Event()
+        self._worker_thread: threading.Thread | None = None
 
         self.dbus = NMDbus() if NMDbus is not None else None
         self.watch = False
@@ -235,13 +310,43 @@ class NetworkManager(CFFIStringMixin, ConnectionManager):
             return None
         return cffi_string(_libeovpn_nm.ffi, _libeovpn_nm.lib.get_version(), True)  # type: ignore[return-value]
 
+    @classmethod
+    def probe_cffi_contract(cls) -> str:
+        """Return whether the loaded native module exposes the current API."""
+        if _libeovpn_nm is None:
+            return "unavailable"
+        required = ("add_connection", "activate_connection", "get_last_error")
+        if all(hasattr(_libeovpn_nm.lib, symbol) for symbol in required):
+            return "current"
+        return "legacy"
+
+    @classmethod
+    def probe_openvpn_plugin(cls) -> bool | None:
+        """Read OpenVPN plugin capability without creating a backend instance."""
+        if _libeovpn_nm is None or not hasattr(_libeovpn_nm.lib, "is_openvpn_plugin_available"):
+            return None
+        try:
+            return bool(_libeovpn_nm.lib.is_openvpn_plugin_available())
+        except Exception as exc:  # pragma: no cover - depends on host libnm
+            logger.debug("Could not probe NetworkManager OpenVPN plugin: %s", exc)
+            return None
+
     def get_name(self) -> str:
         return "networkmanager"
 
     def start_watch(self):
+        self._suppress_callbacks.clear()
         if not self.watch and self.dbus is not None:
-            self.dbus.watch(self.callback)
+            self.dbus.watch(self._guarded_callback)
             self.watch = True
+
+    def _guarded_callback(self, *args) -> None:
+        """Drop late native signals after an explicit operation cancellation."""
+        if self._suppress_callbacks.is_set():
+            logger.debug("Ignoring late NetworkManager callback after cancellation.")
+            return
+        if self.callback is not None:
+            self.callback(*args)
 
     def stop_watch(self):
         """
@@ -267,35 +372,92 @@ class NetworkManager(CFFIStringMixin, ConnectionManager):
         همچنان نگهبان ۱۵ ثانیه‌ای خود را دارد اما حلقه اصلی GTK هرگز توسط
         GMainLoop تودرتو فریز نمی‌شود.
         """
+        suspicious = audit_ovpn_content(openvpn_config)
+        if suspicious:
+            message = "Refusing to connect an untrusted profile containing: " + ", ".join(suspicious)
+            logger.warning(message)
+            if self.callback is not None:
+                GLib.idle_add(self._guarded_callback, False, message)
+            return
         self._dispatch_off_ui_thread(self._connect_blocking, openvpn_config)
+
+    def cancel_current_operation(self) -> None:
+        """Request cooperative cancellation and suppress stale callbacks."""
+        self._operation_cancel.set()
+        self._suppress_callbacks.set()
+        with self._operation_state_lock:
+            self._operation_queue.clear()
+
+    def _raise_if_cancelled(self) -> None:
+        if self._operation_cancel.is_set():
+            raise OperationCancelled("NetworkManager operation cancelled")
+
+    def _native_error(self, fallback: str) -> str:
+        """Read the optional structured error exposed by the CFFI boundary."""
+        getter = getattr(self.nm_manager, "get_last_error", None)
+        if getter is not None:
+            try:
+                message = self.to_cffi_string(getter(), True)
+                if message:
+                    return str(message)
+            except Exception as exc:
+                logger.debug("Could not read native NetworkManager error: %s", exc)
+        return fallback
 
     def _dispatch_off_ui_thread(self, operation, *args) -> None:
         """
-        Runs one native operation at a time on a daemon worker thread.
+        Runs native operations in order on a daemon worker thread.
 
-        The lock makes overlapping requests no-ops instead of racing on
-        libnm state; a stale operation can never queue up.
+        A timeout may request disconnect while the preceding connect call is
+        still unwinding.  Queueing preserves that required ordering; dropping
+        the request leaves the UI on a finished countdown with no next
+        candidate.
 
         هر بار فقط یک عملیات بومی را روی نخ کارگر daemon اجرا می‌کند؛ قفل باعث
         می‌شود درخواست‌های همپوشان به‌جای رقابت روی وضعیت libnm، نادیده گرفته شوند.
         """
-        if not self._op_lock.acquire(blocking=False):
-            logger.warning("NetworkManager operation already in progress; request ignored.")
-            return
+        with self._operation_state_lock:
+            self._operation_queue.append((operation, args))
+            if self._worker_thread is not None and self._worker_thread.is_alive():
+                return
 
-        def runner() -> None:
+            thread = threading.Thread(target=self._operation_runner, name="eovpn-nm-op", daemon=True)
+            self._worker_thread = thread
+            thread.start()
+
+    def _operation_runner(self) -> None:
+        """Drain native operations without dropping timeout follow-ups."""
+        while True:
+            with self._operation_state_lock:
+                if not self._operation_queue:
+                    self._worker_thread = None
+                    return
+                operation, args = self._operation_queue.popleft()
+                self._operation_cancel.clear()
+                self._suppress_callbacks.clear()
+                cancel_event = self._operation_cancel
+
             try:
                 operation(*args)
+            except OperationCancelled:
+                logger.info("NetworkManager native operation cancelled.")
             except Exception as exc:
                 logger.error("NetworkManager native operation failed: %s", exc)
-            finally:
-                self._op_lock.release()
+                if self.callback is not None and not cancel_event.is_set():
+                    message = str(exc) or "NetworkManager operation failed."
 
-        thread = threading.Thread(target=runner, name="eovpn-nm-op", daemon=True)
-        thread.start()
+                    def notify_failure() -> bool:
+                        try:
+                            self.callback(False, message)
+                        except Exception:
+                            logger.exception("Failed to deliver NetworkManager error to the UI.")
+                        return False
+
+                    GLib.idle_add(notify_failure)
 
     def _connect_blocking(self, openvpn_config: str):
         """Worker body of :meth:`connect` / بدنه نخ کارگر متد connect."""
+        self._raise_if_cancelled()
         nm_username = self.get_setting(self.SETTING.AUTH_USER)
         nm_password = None
         nm_ca = self.get_setting(self.SETTING.CA)
@@ -335,6 +497,7 @@ class NetworkManager(CFFIStringMixin, ConnectionManager):
             raise
 
         try:
+            self._raise_if_cancelled()
             uuid = self.nm_manager.add_connection(
                 self._temp_config_path.encode("utf-8"),
                 (nm_username.encode("utf-8") if nm_username is not None else None),
@@ -343,8 +506,18 @@ class NetworkManager(CFFIStringMixin, ConnectionManager):
             )
             self.uuid = self.to_cffi_string(uuid)
             if not self.uuid:
-                raise RuntimeError("NetworkManager could not import the VPN profile.")
-            self.nm_manager.activate_connection(self.uuid)
+                raise RuntimeError(self._native_error("NetworkManager could not import the VPN profile."))
+            self._raise_if_cancelled()
+            activated = self.nm_manager.activate_connection(self.uuid)
+            if not activated:
+                raise RuntimeError(
+                    self._native_error("NetworkManager rejected activation of the VPN profile.")
+                )
+            if self._operation_cancel.is_set():
+                self.nm_manager.disconnect(self.uuid)
+                self.nm_manager.delete_connection(self.uuid)
+                self.uuid = None
+                raise OperationCancelled("NetworkManager connection cancelled")
             self.set_setting(self.SETTING.NM_ACTIVE_UUID, self.uuid.decode("utf-8"))
         finally:
             if self._temp_config_path and os.path.exists(self._temp_config_path):
@@ -456,6 +629,13 @@ class OpenVPN3(CFFIStringMixin, ConnectionManager):
 
     def connect(self, openvpn_config: str):
         """Imports config and prepares an OpenVPN 3 tunnel session."""
+        suspicious = audit_ovpn_content(openvpn_config)
+        if suspicious:
+            message = "Refusing to connect an untrusted profile containing: " + ", ".join(suspicious)
+            logger.warning(message)
+            if self.callback:
+                self.callback(False, message)
+            return
         with open(openvpn_config, encoding="utf-8", errors="ignore") as f:
             config_content = f.read()
 
@@ -482,7 +662,9 @@ class OpenVPN3(CFFIStringMixin, ConnectionManager):
             logger.info("Disconnecting OpenVPN 3 session %s", self.session_path.decode("utf-8"))
             self.ovpn3.disconnect_vpn(self.session_path)
         else:
-            self.ovpn3.disconnect_all_sessions()
+            # This backend instance owns at most ``session_path``.  A global
+            # disconnect could terminate tunnels created by another process.
+            logger.warning("OpenVPN 3 disconnect requested without an owned session")
             if self.callback:
                 self.callback(False)
         self.session_path = None

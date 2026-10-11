@@ -155,6 +155,12 @@ class TestHttpsDownload(unittest.TestCase):
         )
         self.assertEqual(redirected.get_full_url(), "https://cdn.example.com/x.zip")
 
+    def test_redirect_to_private_https_host_blocked(self):
+        handler = _SafeRedirectHandler()
+        request = _ReqStub("https://vpn.example.com/configs.zip")
+        with self.assertRaises(InsecureSourceError):
+            handler.redirect_request(request, None, 302, "Found", {}, "https://127.0.0.1/configs.zip")
+
 
 if __name__ == "__main__":
     unittest.main()

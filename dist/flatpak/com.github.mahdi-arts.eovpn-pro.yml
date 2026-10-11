@@ -76,7 +76,7 @@ modules:
     sources:
       - type: git
         url: 'https://github.com/eudev-project/eudev'
-        tag: "v3.2.10"
+        commit: be7068512c7512fa67c64fbff3472ab140c277c8
 
   - name: libndp
     buildsystem: autotools
@@ -112,7 +112,7 @@ modules:
     sources:
       - type: git
         url: 'https://github.com/NetworkManager/NetworkManager.git'
-        tag: "1.38.2"
+        commit: abfd2d6ea729926bff0ddafa1367a54f6d6f4230
 
       - type: patch
         path: '0001-disable-ownership-check-for-plugins.patch'
@@ -127,7 +127,7 @@ modules:
     sources:
       - type: git
         url: 'https://gitlab.gnome.org/GNOME/libnma.git'
-        tag: "1.8.40"
+        commit: 8f21d3b1f6825d2dad37f203649ac79e0e6ff171
 
 
   - name: NetworkManager-openvpn
@@ -135,28 +135,28 @@ modules:
     sources:
       - type: git
         url: 'https://github.com/NetworkManager/NetworkManager-openvpn.git'
-        tag: "1.8.18"
+        commit: 428aa26bc05cac4cf418624128bb10c9d4003e5d
 
   - name: jsoncpp
     buildsystem: meson
     sources:
       - type: git
         url: 'https://github.com/open-source-parsers/jsoncpp.git'
-        tag: '1.9.5'
+        commit: 5defb4ed1a4293b8e2bf641e16b156fb9de498cc
 
   - name: libcap-ng
     buildsystem: autotools
     sources:
       - type: git
         url: 'https://github.com/stevegrubb/libcap-ng'
-        tag: 'v0.8.3'
+        commit: 03b8572843b36bf071776a311c61f8d1dcfc4d53
 
   - name: tinyxml2
     buildsystem: meson
     sources:
       - type: git
         url: 'https://github.com/leethomason/tinyxml2'
-        tag: '9.0.0'
+        commit: 1dee28e51f9175a31955b9791c74c430fe13dc82
 
   - name: python-dbus
     buildsystem: meson
@@ -174,21 +174,21 @@ modules:
     sources:
       - type: git
         url: https://codeberg.org/OpenVPN/gdbuspp.git
-        tag: 'v3'
+        commit: 96f7fb688ed2dea3f192c63c5fe283dbe4900f16
   
   - name: libnl
     buildsystem: autotools
     sources:
       - type: git
         url: https://github.com/thom311/libnl.git
-        tag: libnl3_12_0
+        commit: 43878680c994989f16637dc47be19bb8dc154985
   
   - name: protobuf
     buildsystem: cmake
     sources:
       - type: git
         url: https://github.com/protocolbuffers/protobuf
-        tag: v34.1
+        commit: 4b0c3aacf0657fbf38253b38918d3358dd4319ec
 
   - name: openvpn3
     buildsystem: meson
@@ -201,7 +201,7 @@ modules:
     sources:
       - type: git
         url: 'https://codeberg.org/OpenVPN/openvpn3-linux.git'
-        tag: 'v24.1'
+        commit: 8bba2a15088bd0ef9c2f18ff29186e890a010add
       
       - type: patch
         path: 0001-openvpn3-linux-v24.1.patch

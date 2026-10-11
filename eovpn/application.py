@@ -14,6 +14,7 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
+gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, Gio, GLib, Gtk
 
 from .eovpn_base import Base
@@ -109,6 +110,16 @@ def do_command_line(app: Gtk.Application, args: Gio.ApplicationCommandLine) -> b
     مدیریت آرگومان‌های خط فرمان با پارسر GLib.
     """
     options_dict = args.get_options_dict()
+
+    if options_dict.contains("help"):
+        print(
+            "Usage: eovpn [OPTION…]\n\n"
+            "Options:\n"
+            "  -d, --debug LEVEL  Show debug messages.\n"
+            "  -c, --config PATH  Deprecated legacy option (ignored).\n"
+            "  -h, --help         Show this help message."
+        )
+        return True
 
     if options_dict.contains("debug"):
         debug_val = options_dict.lookup_value("debug", None)

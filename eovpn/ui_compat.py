@@ -52,7 +52,8 @@ def show_alert(
     قدیمی ``-1`` گزارش می‌دهد.
     """
     if hasattr(Gtk, "AlertDialog"):
-        dialog = Gtk.AlertDialog.new(title)
+        dialog = Gtk.AlertDialog()
+        dialog.set_message(title)
         dialog.set_detail(detail)
         dialog.set_buttons(list(buttons))
         if cancel_index is not None:
@@ -60,7 +61,9 @@ def show_alert(
         if default_index is not None:
             dialog.set_default_button(default_index)
 
-        def _on_choose(_dialog: Gtk.AlertDialog, result: Gio.AsyncResult) -> None:
+        def _on_choose(
+            _dialog: Gtk.AlertDialog, result: Gio.AsyncResult, _user_data: object | None = None
+        ) -> None:
             index = cancel_index if cancel_index is not None else -1
             with contextlib.suppress(GLib.Error):
                 index = _dialog.choose_finish(result)
@@ -107,11 +110,14 @@ def show_critical_error(
     نمایش دیالوگ خطای بحرانی مودال که تنها دکمه آن برنامه را می‌بندد.
     """
     if hasattr(Gtk, "AlertDialog"):
-        dialog = Gtk.AlertDialog.new(_("Error"))
+        dialog = Gtk.AlertDialog()
+        dialog.set_message(_("Error"))
         dialog.set_detail("\n".join(error_messages))
         dialog.set_buttons([_("Exit")])
 
-        def _on_choose(_dialog: Gtk.AlertDialog, result: Gio.AsyncResult) -> None:
+        def _on_choose(
+            _dialog: Gtk.AlertDialog, result: Gio.AsyncResult, _user_data: object | None = None
+        ) -> None:
             with contextlib.suppress(GLib.Error):
                 _dialog.choose_finish(result)
             on_exit()

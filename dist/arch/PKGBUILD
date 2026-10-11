@@ -6,7 +6,7 @@
 # EN: This PKGBUILD works in two modes.
 #     1. In-tree mode  — when run from `dist/arch` inside a repository checkout
 #        it builds the working tree directly (used by CI and by developers):
-#            cd dist/arch && makepkg -sf --skipinteg
+#            cd dist/arch && makepkg -sf
 #     2. Release mode  — when the surrounding source tree is absent it fetches
 #        the tagged tarball from GitHub (this is the mode the AUR uses):
 #            makepkg -si
@@ -14,7 +14,7 @@
 # FA: این PKGBUILD دو حالت کاری دارد.
 #     ۱. حالت درون‌مخزنی — اگر از داخل مسیر dist/arch در یک کپی از مخزن اجرا شود،
 #        مستقیماً همان درخت کاری را می‌سازد (روش مورد استفاده CI و توسعه‌دهنده):
-#            cd dist/arch && makepkg -sf --skipinteg
+#            cd dist/arch && makepkg -sf
 #     ۲. حالت انتشار — اگر درخت منبع در دسترس نباشد، آرشیو نسخهٔ تگ‌خورده را از
 #        GitHub دریافت می‌کند (روشی که AUR از آن استفاده می‌کند):
 #            makepkg -si
@@ -86,13 +86,10 @@ else
   # حالت انتشار: آرشیو همین تگ نسخه از GitHub دریافت می‌شود.
   _treeroot=""
   source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz")
-  # NOTE: fill in the real checksum here once the v${pkgver} tag exists on
-  # GitHub; CI builds the tree directly (in-tree mode) so it is unaffected.
-  # For AUR publishing, run:  updpkgsums  (from pacman-contrib) after tagging.
-  # توجه: پس از ایجاد تگ v${pkgver} در گیت‌هاب، جمع‌چک واقعی را اینجا وارد کنید؛
-  # CI مستقیماً درخت را می‌سازد (حالت درون‌مخزنی) و تحت تأثیر نیست.
-  # برای انتشار در AUR پس از تگ‌گذاری اجرا کنید:  updpkgsums
-  sha256sums=('SKIP')
+  # Release mode must never accept an unverified source archive. The
+  # maintainer must replace this placeholder with the exact tagged archive
+  # checksum before publishing to AUR.
+  sha256sums=('REPLACE_WITH_RELEASE_SHA256')
 fi
 
 # ---------------------------------------------------------------------------
@@ -110,6 +107,11 @@ _sourcedir() {
 prepare() {
   local _src
   _src="$(_sourcedir)"
+
+  if [[ -z ${_treeroot} && ${sha256sums[0]} == REPLACE_WITH_RELEASE_SHA256 ]]; then
+    error "Release archive checksum is not pinned; refusing an unverified build."
+    return 1
+  fi
 
   # Guard against a stale build directory from a previous run.
   # جلوگیری از باقی ماندن پوشهٔ build از اجرای قبلی.

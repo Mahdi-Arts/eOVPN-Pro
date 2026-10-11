@@ -66,15 +66,15 @@ __all__ = [
 # ---------------------------------------------------------------------------
 # Handshake timing budget / بودجه زمانی دست‌دهی OpenVPN
 # ---------------------------------------------------------------------------
-# A live OpenVPN TLS handshake + PUSH typically completes in 3–8 seconds.
-# The floor keeps flaky NAT / DPI paths in the game; the ceiling prevents a
-# dead endpoint from stalling the whole cascade.
-# دست‌دهی TLS اوپن‌وی‌پی‌ان معمولاً ۳ تا ۸ ثانیه طول می‌کشد. کف زمانی برای
-# مسیرهای ناپایدار و سقف زمانی برای جلوگیری از گیر کردن روی سرور مرده است.
-BASE_HANDSHAKE_SECONDS = 10.0
-UNKNOWN_RTT_TIMEOUT_SECONDS = 12.0
-MIN_ATTEMPT_TIMEOUT_SECONDS = 8.0
-MAX_ATTEMPT_TIMEOUT_SECONDS = 20.0
+# Auto-connect gives every real handshake a bounded 30-second opportunity.
+# The upper bound still prevents a dead endpoint from stalling the whole
+# cascade indefinitely, while measured RTT can add a bounded grace period.
+# اتصال آبشاری عمداً برای هر handshake واقعی حداقل یک دقیقه فرصت می‌دهد؛
+# سقف زمانی از گیرکردن دائمی روی مقصد مرده جلوگیری می‌کند.
+BASE_HANDSHAKE_SECONDS = 30.0
+UNKNOWN_RTT_TIMEOUT_SECONDS = 30.0
+MIN_ATTEMPT_TIMEOUT_SECONDS = 30.0
+MAX_ATTEMPT_TIMEOUT_SECONDS = 45.0
 RTT_TIMEOUT_MULTIPLIER = 8.0
 DISCONNECT_SETTLE_SECONDS = 0.55
 PROGRESS_TICK_MS = 100
@@ -185,13 +185,22 @@ def build_cascade_queue(
     latencies = latencies or {}
     has_any_rtt = any(value is not None for value in latencies.values())
 
-    queue: list[str] = []
-    for name in files:
+    eligible = []
+    for position, name in enumerate(files):
         if skip_unreachable and has_any_rtt and name in latencies and latencies[name] is None:
             continue
-        queue.append(name)
-        if len(queue) >= limit:
-            break
+        eligible.append((position, name))
+
+    if has_any_rtt:
+        # Auto-connect must choose by measured latency even when the user has
+        # disabled visual sorting or changed a presentation-only filter.
+        def latency_key(item: tuple[int, str]) -> tuple[bool, float, int]:
+            value = latencies.get(item[1])
+            return (value is None, float("inf") if value is None else value, item[0])
+
+        eligible.sort(key=latency_key)
+
+    queue = [name for _position, name in eligible[:limit]]
 
     if not queue:
         return files[:limit]

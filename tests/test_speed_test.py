@@ -4,10 +4,12 @@ eOVPN-Pro Speed & Latency Test Unit Tests
 """
 
 import os
+import tempfile
+import threading
 import unittest
 from unittest.mock import MagicMock, patch
 
-from eovpn.speed_test import parse_ovpn_remote, ping_host, test_single_ovpn
+from eovpn.speed_test import parse_ovpn_remote, ping_host, test_all_configs, test_single_ovpn
 
 
 class TestSpeedTest(unittest.TestCase):
@@ -32,6 +34,12 @@ class TestSpeedTest(unittest.TestCase):
         self.assertEqual(remotes[0], ("127.0.0.1", 443))
         self.assertEqual(remotes[1], ("example.com", 8080))
         self.assertEqual(remotes[2], ("fallback.net", 1194))
+
+    def test_cancelled_batch_returns_without_work(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cancel_event = threading.Event()
+            cancel_event.set()
+            self.assertEqual(test_all_configs(tmp, ["one.ovpn"], cancel_event=cancel_event), {})
 
     @patch("socket.create_connection")
     def test_ping_host_success(self, mock_create_connection):

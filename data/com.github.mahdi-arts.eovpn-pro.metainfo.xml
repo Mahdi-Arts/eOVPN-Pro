@@ -3,7 +3,9 @@
   <id>com.github.mahdi-arts.eovpn-pro</id>
   <metadata_license>FSFAP</metadata_license>
   <project_license>GPL-3.0+</project_license>
-  <developer_name>Mahdi Bagheban</developer_name>
+  <developer id="mahdiarts.ir">
+    <name>Mahdi Bagheban</name>
+  </developer>
   <name>eOVPN Pro</name>
   <summary>OpenVPN Configuration Manager (Pro Version)</summary>
 
@@ -13,18 +15,12 @@
     </p>
   </description>
 
-  <kudos>
-    <kudo>HiDpiIcon</kudo>
-    <kudo>ModernToolkit</kudo>
-    <kudo>Notifications</kudo>
-  </kudos>
-
   <launchable type="desktop-id">com.github.mahdi-arts.eovpn-pro.desktop</launchable>
 
   <screenshots>
     <screenshot type="default">
       <image>https://raw.githubusercontent.com/Mahdi-Arts/eOVPN-Pro/master/static/window_connected_with_flag.png</image>
-      <caption>eOVPN-Pro main window with active VPN connection / پنجره اصلی eOVPN-Pro با اتصال VPN فعال</caption>
+      <caption>eOVPN-Pro connected window / پنجرهٔ متصل eOVPN-Pro</caption>
     </screenshot>
     <screenshot>
       <image>https://raw.githubusercontent.com/Mahdi-Arts/eOVPN-Pro/master/static/window_persian.png</image>

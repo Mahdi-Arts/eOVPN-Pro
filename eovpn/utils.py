@@ -93,6 +93,8 @@ class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
         parsed = urllib.parse.urlparse(newurl)
         if parsed.scheme != "https":
             raise InsecureSourceError(gettext.gettext("Insecure redirect blocked: only HTTPS is permitted."))
+        if is_hard_blocked_source_host(parsed.hostname):
+            raise InsecureSourceError(gettext.gettext("Redirect to a local or private host was blocked."))
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 

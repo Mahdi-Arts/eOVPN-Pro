@@ -99,6 +99,7 @@ class TestTimeoutAndQueue(unittest.TestCase):
     def test_timeout_clamped_to_floor_and_ceiling(self):
         low = compute_attempt_timeout(1.0)
         high = compute_attempt_timeout(5000.0)
+        self.assertGreaterEqual(low, 30.0)
         self.assertGreaterEqual(low, MIN_ATTEMPT_TIMEOUT_SECONDS)
         self.assertLessEqual(high, MAX_ATTEMPT_TIMEOUT_SECONDS)
         self.assertLess(compute_attempt_timeout(40.0), compute_attempt_timeout(800.0))
@@ -106,6 +107,14 @@ class TestTimeoutAndQueue(unittest.TestCase):
     def test_queue_preserves_visual_order(self):
         visible = ["c.ovpn", "a.ovpn", "b.ovpn"]
         self.assertEqual(build_cascade_queue(visible, {}), visible)
+
+    def test_queue_prefers_measured_latency_over_visual_order(self):
+        visible = ["slow.ovpn", "fast.ovpn", "mid.ovpn"]
+        latencies = {"slow.ovpn": 120.0, "fast.ovpn": 20.0, "mid.ovpn": 60.0}
+        self.assertEqual(
+            build_cascade_queue(visible, latencies),
+            ["fast.ovpn", "mid.ovpn", "slow.ovpn"],
+        )
 
     def test_queue_skips_unreachable_when_any_rtt_exists(self):
         visible = ["fast.ovpn", "dead.ovpn", "ok.ovpn"]

@@ -23,6 +23,7 @@
 #define EOVPN_NM_H
 
 char *add_connection (char *config_name, char *username, char *password, char *ca);
+const char *get_last_error (void);
 int   activate_connection (char *uuid);
 int   disconnect (char *uuid);
 int   delete_connection (char *uuid);

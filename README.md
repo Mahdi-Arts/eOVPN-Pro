@@ -215,10 +215,9 @@ python3 -m compileall -q eovpn tests run_program_debug.py cffi_compile.py meson_
 | [PACKAGING.md](PACKAGING.md) | Packaging guide (.deb / .rpm / Arch / AppImage / Flatpak) — راهنمای بسته‌بندی |
 | [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) | Release runbook — راهنمای انتشار نسخه |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Architecture overview — نمای کلی معماری |
-| [docs/REVIEW_SENIOR_2026-08.md](docs/REVIEW_SENIOR_2026-08.md) | Senior engineering audit & action plan — ممیزی مهندسی ارشد و طرح اجرایی |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guide — راهنمای مشارکت |
 | [SECURITY.md](SECURITY.md) | Security policy — خط مشی امنیتی |
-| [docs/archive/](docs/archive/) | Superseded review reports — گزارش‌های بازبینی منسوخ |
+| [docs/archive/](docs/archive/) | Superseded review reports & internal audits — گزارش‌های بازبینی منسوخ و ممیزی‌های داخلی |
 
 ---
 

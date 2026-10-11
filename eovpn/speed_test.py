@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import os
 import socket
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -51,7 +52,11 @@ def ping_host(host: str, port: int, timeout: float = 1.5) -> float | None:
         return None
 
 
-def test_single_ovpn(file_path: str, timeout: float = 1.5) -> float | None:
+def test_single_ovpn(
+    file_path: str,
+    timeout: float = 1.5,
+    cancel_event: threading.Event | None = None,
+) -> float | None:
     """
     Tests latency for a single .ovpn file by querying its remote endpoints.
     Returns the lowest RTT found among all declared endpoints.
@@ -63,6 +68,8 @@ def test_single_ovpn(file_path: str, timeout: float = 1.5) -> float | None:
 
     best_rtt = None
     for host, port in remotes[:MAX_ENDPOINTS_PER_CONFIG]:
+        if cancel_event is not None and cancel_event.is_set():
+            return None
         # Skip malformed endpoint declarations without scanning private
         # networks beyond what the user-provided config explicitly contains.
         if not host or not (1 <= int(port) <= 65535):
@@ -74,7 +81,11 @@ def test_single_ovpn(file_path: str, timeout: float = 1.5) -> float | None:
 
 
 def test_all_configs(
-    config_dir: str, file_list: list[str], timeout: float = 1.5, max_workers: int = 12
+    config_dir: str,
+    file_list: list[str],
+    timeout: float = 1.5,
+    max_workers: int = 12,
+    cancel_event: threading.Event | None = None,
 ) -> dict[str, float | None]:
     """
     Runs latency tests on a list of .ovpn files concurrently using a thread pool.
@@ -88,18 +99,24 @@ def test_all_configs(
     """
     results: dict[str, float | None] = {}
     valid_files = [f for f in file_list if f and f.endswith(".ovpn")]
-    if not valid_files:
+    if not valid_files or (cancel_event is not None and cancel_event.is_set()):
         return results
 
     max_workers = max(1, min(int(max_workers), MAX_WORKERS))
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_file = {}
         for file in valid_files:
+            if cancel_event is not None and cancel_event.is_set():
+                break
             full_path = os.path.join(config_dir, file)
-            future = executor.submit(test_single_ovpn, full_path, timeout)
+            future = executor.submit(test_single_ovpn, full_path, timeout, cancel_event)
             future_to_file[future] = file
 
         for future in as_completed(future_to_file):
+            if cancel_event is not None and cancel_event.is_set():
+                for pending in future_to_file:
+                    pending.cancel()
+                break
             file = future_to_file[future]
             try:
                 rtt = future.result()

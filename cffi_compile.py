@@ -36,9 +36,7 @@ def main() -> None:
     h_file = pathlib.Path(args.header)
 
     with open(h_file) as header_fd:
-        cdef_source = "\n".join(
-            line for line in header_fd if not line.strip().startswith("#")
-        )
+        cdef_source = "\n".join(line for line in header_fd if not line.strip().startswith("#"))
         ffi.cdef(cdef_source)
 
     ffi.set_source(

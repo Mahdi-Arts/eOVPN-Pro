@@ -57,10 +57,15 @@ class OVPN3Dbus(Base):
         دریافت رمز از Keyring یا حافظه موقت پروسس.
         """
         username = self.get_setting(self.SETTING.AUTH_USER)
+        # Never perform a schema lookup with an empty attribute set.  Secret
+        # Service treats that as a broad query and may return another profile's
+        # credential.  A username is required to identify the stored secret.
+        if not username:
+            return None
         try:
             return Secret.password_lookup_sync(
                 self.EOVPN_SECRET_SCHEMA,
-                {"username": username} if username else {},
+                {"username": username},
                 None,
             )
         except Exception as e:
@@ -115,7 +120,7 @@ class OVPN3Dbus(Base):
                 GLib.Variant("(b)", (True,)),
                 None,
                 Gio.DBusSignalFlags.NONE,
-                -1,
+                15000,
                 None,
             )
         except Exception as exc:
@@ -175,7 +180,7 @@ class OVPN3Dbus(Base):
             None,
             GLib.VariantType("(a(uu))"),
             Gio.DBusSignalFlags.NONE,
-            -1,
+            15000,
             None,
         )
 
@@ -197,7 +202,7 @@ class OVPN3Dbus(Base):
                 params,
                 GLib.VariantType("(au)"),
                 Gio.DBusSignalFlags.NONE,
-                -1,
+                15000,
                 None,
             )
 
@@ -215,7 +220,7 @@ class OVPN3Dbus(Base):
                     params,
                     GLib.VariantType("(uuussb)"),
                     Gio.DBusSignalFlags.NONE,
-                    -1,
+                    15000,
                     None,
                 )
                 ask = ask.get_child_value(3).unpack()

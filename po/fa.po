@@ -302,3 +302,120 @@ msgstr "حذف همه"
 #: settings_window.py:new
 msgid "Choose CA / CRT Certificate"
 msgstr "انتخاب گواهی CA / CRT"
+
+msgid "Restore Reset"
+msgstr "بازگردانی تنظیمات"
+
+msgid "Restore the latest local reset backup"
+msgstr "بازگردانی آخرین نسخهٔ پشتیبان محلی تنظیمات"
+
+msgid "Reset eOVPN-Pro settings and configurations?"
+msgstr "تنظیمات و پیکربندی‌های eOVPN-Pro بازنشانی شوند؟"
+
+msgid "This clears saved preferences, credentials, and imported VPN configurations. A local backup of non-secret settings and imported configurations will be kept so the latest reset can be restored."
+msgstr "ترجیحات ذخیره‌شده، اعتبارنامه‌ها و پیکربندی‌های واردشدهٔ VPN پاک می‌شوند. یک نسخهٔ پشتیبان محلی از تنظیمات و پیکربندی‌ها نگه داشته می‌شود تا آخرین بازنشانی قابل بازگردانی باشد."
+
+msgid "Reset Everything"
+msgstr "بازنشانی همه‌چیز"
+
+msgid "Reset was not performed"
+msgstr "بازنشانی انجام نشد"
+
+msgid "A safe local backup could not be created: {}"
+msgstr "نسخهٔ پشتیبان محلی امن ایجاد نشد: {}"
+
+msgid "Reset completed"
+msgstr "بازنشانی انجام شد"
+
+msgid "A local backup was kept at {}. Use Restore Reset to undo this reset."
+msgstr "نسخهٔ پشتیبان محلی در {} نگه داشته شد. برای بازگردانی از «بازگردانی تنظیمات» استفاده کنید."
+
+msgid "Close"
+msgstr "بستن"
+
+msgid "Restore the latest reset?"
+msgstr "آخرین بازنشانی بازگردانی شود؟"
+
+msgid "Current non-secret settings and imported configurations will first be backed up, then the latest reset snapshot will be restored."
+msgstr "ابتدا از تنظیمات فعلی و پیکربندی‌های واردشده نسخهٔ پشتیبان تهیه می‌شود، سپس آخرین snapshot بازنشانی بازگردانی خواهد شد."
+
+msgid "Restore"
+msgstr "بازگردانی"
+
+msgid "Restore was not completed"
+msgstr "بازگردانی کامل نشد"
+
+msgid "The current state was preserved in {}. Details: {}"
+msgstr "وضعیت فعلی در {} حفظ شد. جزئیات: {}"
+
+msgid "Reset restored"
+msgstr "بازنشانی بازگردانی شد"
+
+msgid "The previous state was restored. A safety backup was kept at {}."
+msgstr "وضعیت قبلی بازگردانی شد. نسخهٔ پشتیبان ایمنی در {} نگه داشته شد."
+
+msgid "eOVPN-Pro translation contributors"
+msgstr "مشارکت‌کنندگان ترجمهٔ eOVPN-Pro"
+
+msgid "Stable NetworkManager backend, safer configuration handling, and improved connection diagnostics."
+msgstr "بک‌اند پایدار NetworkManager، مدیریت امن‌تر پیکربندی و عیب‌یابی بهتر اتصال."
+
+msgid "Legal"
+msgstr "حقوقی"
+
+msgid "Privacy"
+msgstr "حریم خصوصی"
+
+msgid "eOVPN-Pro does not add telemetry or upload connection data."
+msgstr "eOVPN-Pro تله‌متری اضافه نمی‌کند و داده‌های اتصال را بارگذاری نمی‌کند."
+
+msgid "Runtime dependencies"
+msgstr "وابستگی‌های زمان اجرا"
+
+msgid "Unsupported language selection."
+msgstr "زبان انتخاب‌شده پشتیبانی نمی‌شود."
+
+msgid "Language saved. Restart eOVPN-Pro manually to apply it."
+msgstr "زبان ذخیره شد. برای اعمال آن eOVPN-Pro را دستی دوباره اجرا کنید."
+
+msgid "Cancelling..."
+msgstr "در حال لغو..."
+
+msgid "Cancel Test"
+msgstr "لغو آزمون"
+
+msgid "Speed test cancelled."
+msgstr "آزمون سرعت لغو شد."
+
+msgid "Live traffic"
+msgstr "ترافیک زنده"
+
+msgid "Live traffic statistics for the active VPN tunnel"
+msgstr "آمار زندهٔ ترافیک تونل فعال VPN"
+
+msgid "Download"
+msgstr "دریافت"
+
+msgid "Upload"
+msgstr "ارسال"
+
+msgid "Total"
+msgstr "مجموع"
+
+msgid "Collapse search and filters"
+msgstr "جمع‌کردن جست‌وجو و فیلترها"
+
+msgid "Expand search and filters"
+msgstr "بازکردن جست‌وجو و فیلترها"
+
+msgid "Choose a trusted configuration source, validate it, and manage optional credentials securely."
+msgstr "منبع پیکربندی قابل‌اعتماد را انتخاب، اعتبارسنجی و اطلاعات ورود اختیاری را به‌صورت امن مدیریت کنید."
+
+msgid "Application behavior"
+msgstr "رفتار برنامه"
+
+msgid "Select the active VPN backend and review live capability checks. Unavailable optional backends are not used as silent fallbacks."
+msgstr "بک‌اند فعال VPN را انتخاب و بررسی زندهٔ قابلیت‌ها را مشاهده کنید. بک‌اندهای در دسترس نبودن به‌صورت بی‌صدا جایگزین نمی‌شوند."
+
+msgid "Backend health and capabilities"
+msgstr "سلامت و قابلیت‌های بک‌اند"

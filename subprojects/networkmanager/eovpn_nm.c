@@ -22,6 +22,7 @@
 #define G_LOG_DOMAIN "eovpn"
 
 #include <stdbool.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <glib.h>
@@ -39,6 +40,54 @@
 #define NM_OPENVPN_KEY_CA "ca"
 #define EOVPN_MANAGED_KEY "managed-by"
 #define EOVPN_MANAGED_VALUE "eovpn-pro"
+#define EOVPN_CONNECTION_ID_PREFIX "eOVPN-Pro: "
+
+/*
+ * The CFFI boundary cannot safely transport a GError object. Keep the last
+ * operation error in thread-local storage so the worker thread can retrieve a
+ * bounded, human-readable message immediately after a false/NULL result.
+ */
+static _Thread_local char *eovpn_last_error = NULL;
+
+static void
+eovpn_clear_last_error (void)
+{
+    g_clear_pointer (&eovpn_last_error, g_free);
+}
+
+static void
+eovpn_set_last_error (const char *format, ...)
+{
+    va_list args;
+
+    eovpn_clear_last_error ();
+    va_start (args, format);
+    eovpn_last_error = g_strdup_vprintf (format, args);
+    va_end (args);
+}
+
+const char *
+get_last_error (void)
+{
+    return eovpn_last_error;
+}
+
+typedef struct
+{
+    GMainLoop *loop;
+    gboolean success;
+    char *uuid;
+    char *error;
+} EovpnAsyncResult;
+
+static void
+eovpn_capture_error (EovpnAsyncResult *state, GError *error, const char *fallback)
+{
+    if (error != NULL)
+        state->error = g_strdup (error->message);
+    else if (fallback != NULL)
+        state->error = g_strdup (fallback);
+}
 
 static gboolean
 eovpn_nm_watchdog (gpointer user_data)
@@ -49,14 +98,76 @@ eovpn_nm_watchdog (gpointer user_data)
     return G_SOURCE_REMOVE;
 }
 
+/* libnm delivers async callbacks on the thread-default GLib context.  The
+ * Python boundary invokes these operations from a worker thread, so using the
+ * process-global default context races with GTK's context.  Each operation
+ * therefore owns a private context for its complete client/loop lifetime. */
+static GMainLoop *
+eovpn_operation_loop_new (GMainContext **context_out)
+{
+    GMainContext *context = g_main_context_new ();
+    GMainLoop *loop;
+
+    g_main_context_push_thread_default (context);
+    loop = g_main_loop_new (context, FALSE);
+    *context_out = context;
+    return loop;
+}
+
+static guint
+eovpn_watchdog_attach (GMainContext *context, GMainLoop *loop)
+{
+    GSource *source = g_timeout_source_new (EOVPN_NM_TIMEOUT_MS);
+    guint source_id;
+
+    g_source_set_callback (source, eovpn_nm_watchdog, loop, NULL);
+    source_id = g_source_attach (source, context);
+    g_source_unref (source);
+    return source_id;
+}
+
+static void
+eovpn_watchdog_remove (GMainContext *context, guint source_id)
+{
+    GSource *source;
+
+    if (source_id == 0)
+        return;
+    source = g_main_context_find_source_by_id (context, source_id);
+    if (source != NULL)
+        g_source_destroy (source);
+}
+
+static void
+eovpn_operation_loop_free (GMainContext *context, GMainLoop *loop)
+{
+    if (loop != NULL)
+        g_main_loop_unref (loop);
+    if (context != NULL)
+    {
+        g_main_context_pop_thread_default (context);
+        g_main_context_unref (context);
+    }
+}
+
 static gboolean
 eovpn_connection_is_managed (NMConnection *conn)
 {
+    NMSettingConnection *connection_settings;
     NMSettingVpn *vpn;
     const char *managed;
+    const char *connection_id;
 
     if (conn == NULL)
         return false;
+
+    connection_settings = nm_connection_get_setting_connection (conn);
+    connection_id = connection_settings != NULL
+        ? nm_setting_connection_get_id (connection_settings)
+        : NULL;
+    if (connection_id != NULL &&
+        g_str_has_prefix (connection_id, EOVPN_CONNECTION_ID_PREFIX))
+        return true;
 
     vpn = nm_connection_get_setting_vpn (conn);
     if (vpn == NULL)
@@ -81,13 +192,20 @@ eovpn_connection_is_managed (NMConnection *conn)
 static char *
 eovpn_get_managed_active_uuid (void)
 {
+    GMainContext *context = NULL;
     NMClient *client;
     const GPtrArray *arr;
     char *uuid = NULL;
 
+    context = g_main_context_new ();
+    g_main_context_push_thread_default (context);
     client = nm_client_new (NULL, NULL);
     if (client == NULL)
+    {
+        g_main_context_pop_thread_default (context);
+        g_main_context_unref (context);
         return NULL;
+    }
 
     arr = nm_client_get_active_connections (client);
     if (arr != NULL)
@@ -95,7 +213,7 @@ eovpn_get_managed_active_uuid (void)
         for (size_t i = 0; i < arr->len; i++)
         {
             NMActiveConnection *active = arr->pdata[i];
-            NMConnection *conn = nm_active_connection_get_connection (active);
+            NMConnection *conn = (NMConnection *) nm_active_connection_get_connection (active);
 
             if (eovpn_connection_is_managed (conn))
             {
@@ -107,30 +225,37 @@ eovpn_get_managed_active_uuid (void)
     }
 
     g_object_unref (client);
+    g_main_context_pop_thread_default (context);
+    g_main_context_unref (context);
     return uuid;
 }
 
 static void
-add_cb (NMClient *client, GAsyncResult *result, GMainLoop *loop)
+add_cb (NMClient *client, GAsyncResult *result, EovpnAsyncResult *state)
 {
     GError *err = NULL;
-    nm_client_add_connection_finish (client, result, &err);
-    if (err != NULL)
-    {
-        g_printerr ("Error adding connection: %s\n", err->message);
-        g_error_free (err);
-    }
+    NMRemoteConnection *remote = nm_client_add_connection_finish (client, result, &err);
+
+    if (err != NULL || remote == NULL)
+        eovpn_capture_error (state, err, "NetworkManager did not return the imported VPN profile.");
     else
     {
-        g_debug ("[NM] Connection Added Successfully!");
+        const char *uuid = nm_connection_get_uuid (NM_CONNECTION (remote));
+        state->uuid = uuid ? g_strdup (uuid) : NULL;
+        state->success = state->uuid != NULL;
+        if (!state->success)
+            eovpn_capture_error (state, NULL, "Imported VPN profile has no UUID.");
+        g_object_unref (remote);
     }
 
-    g_main_loop_quit (loop);
+    g_clear_error (&err);
+    g_main_loop_quit (state->loop);
 }
 
 char *
 add_connection (char *config_name, char *username, char *password, char *ca)
 {
+    GMainContext *context = NULL;
     GMainLoop *loop = NULL;
     GSList *plugins = NULL;
     NMVpnPluginInfo *plugin = NULL;
@@ -141,10 +266,12 @@ add_connection (char *config_name, char *username, char *password, char *ca)
     GError *err = NULL;
     GError *flags_err = NULL;
     guint watchdog_id = 0;
-    char *result_uuid = NULL;
+    EovpnAsyncResult state = {0};
     gboolean secret_flags_ok = true;
 
-    loop = g_main_loop_new (NULL, FALSE);
+    eovpn_clear_last_error ();
+
+    loop = eovpn_operation_loop_new (&context);
     plugins = nm_vpn_plugin_info_list_load ();
 
     for (GSList *iter = plugins; iter != NULL; iter = iter->next)
@@ -160,14 +287,14 @@ add_connection (char *config_name, char *username, char *password, char *ca)
 
     if (plugin == NULL)
     {
-        g_printerr ("NetworkManager OpenVPN plugin not found on system.\n");
+        eovpn_set_last_error ("NetworkManager OpenVPN plugin not found on system.");
         goto cleanup;
     }
 
     editor = nm_vpn_plugin_info_load_editor_plugin (plugin, &err);
     if (err != NULL)
     {
-        g_printerr ("Failed to load VPN editor plugin: %s\n", err->message);
+        eovpn_set_last_error ("Failed to load VPN editor plugin: %s", err->message);
         g_clear_error (&err);
         goto cleanup;
     }
@@ -175,7 +302,7 @@ add_connection (char *config_name, char *username, char *password, char *ca)
     conn = nm_vpn_editor_plugin_import (editor, config_name, &err);
     if (err != NULL)
     {
-        g_printerr ("Failed to import VPN config: %s\n", err->message);
+        eovpn_set_last_error ("Failed to import VPN config: %s", err->message);
         g_clear_error (&err);
         goto cleanup;
     }
@@ -183,8 +310,6 @@ add_connection (char *config_name, char *username, char *password, char *ca)
     vpn_settings = nm_connection_get_setting_vpn (conn);
     if (vpn_settings != NULL)
     {
-        nm_setting_vpn_add_data_item (vpn_settings, EOVPN_MANAGED_KEY, EOVPN_MANAGED_VALUE);
-
         if (username != NULL && strlen (username) > 0)
             nm_setting_vpn_add_data_item (vpn_settings, NM_OPENVPN_KEY_USERNAME, username);
 
@@ -199,9 +324,9 @@ add_connection (char *config_name, char *username, char *password, char *ca)
                                               NM_SETTING_SECRET_FLAG_AGENT_OWNED,
                                               &flags_err))
             {
-                g_printerr ("Refusing to add VPN profile: failed to set agent-owned "
-                            "secret flags: %s\n",
-                            flags_err ? flags_err->message : "unknown");
+                eovpn_set_last_error ("Refusing to add VPN profile: failed to set agent-owned "
+                                      "secret flags: %s",
+                                      flags_err ? flags_err->message : "unknown");
                 g_clear_error (&flags_err);
                 secret_flags_ok = false;
             }
@@ -214,61 +339,95 @@ add_connection (char *config_name, char *username, char *password, char *ca)
     if (!secret_flags_ok)
         goto cleanup;
 
+    /* Do not put an application marker into VPN data: NetworkManager passes
+     * that map to the OpenVPN plugin, which rejects unknown keys. Store the
+     * marker in the generic connection ID instead. */
+    {
+        NMSettingConnection *connection_settings =
+            nm_connection_get_setting_connection (conn);
+        const char *source_name = g_path_get_basename (config_name);
+        char *connection_id = g_strdup_printf (EOVPN_CONNECTION_ID_PREFIX "%s", source_name);
+        if (connection_settings != NULL)
+            g_object_set (G_OBJECT (connection_settings), "id", connection_id, NULL);
+        g_free ((char *) source_name);
+        g_free (connection_id);
+    }
+
     nm_connection_normalize (conn, NULL, NULL, NULL);
 
     client = nm_client_new (NULL, NULL);
-    nm_client_add_connection_async (client, conn, TRUE, NULL, (GAsyncReadyCallback) add_cb, loop);
-    watchdog_id = g_timeout_add (EOVPN_NM_TIMEOUT_MS, eovpn_nm_watchdog, loop);
+    if (client == NULL)
+    {
+        eovpn_set_last_error ("Could not create a NetworkManager client.");
+        goto cleanup;
+    }
+    state.loop = loop;
+    nm_client_add_connection_async (client, conn, TRUE, NULL, (GAsyncReadyCallback) add_cb, &state);
+    watchdog_id = eovpn_watchdog_attach (context, loop);
     g_main_loop_run (loop);
-    g_source_remove (watchdog_id);
+    eovpn_watchdog_remove (context, watchdog_id);
 
-    const char *conn_uuid = nm_connection_get_uuid (conn);
-    result_uuid = conn_uuid ? g_strdup (conn_uuid) : NULL;
+    if (!state.success)
+    {
+        if (state.error != NULL)
+            eovpn_set_last_error ("Failed to add VPN connection: %s", state.error);
+        else
+            eovpn_set_last_error ("Failed to add VPN connection.");
+    }
 
 cleanup:
+    if (state.error != NULL)
+        g_free (state.error);
     g_clear_object (&editor);
     if (plugins != NULL)
         g_slist_free_full (plugins, g_object_unref);
     g_clear_object (&client);
-    if (loop != NULL)
-        g_main_loop_unref (loop);
+    eovpn_operation_loop_free (context, loop);
 
-    return result_uuid;
+    return state.uuid;
 }
 
 static void
-activate_cb (NMClient *client, GAsyncResult *result, GMainLoop *loop)
+activate_cb (NMClient *client, GAsyncResult *result, EovpnAsyncResult *state)
 {
     GError *err = NULL;
-    nm_client_activate_connection_finish (client, result, &err);
-    if (err != NULL)
-    {
-        g_printerr ("Error activating connection: %s\n", err->message);
-        g_error_free (err);
-    }
-    else
-    {
-        g_debug ("[NM] Connection Connected!");
-    }
+    NMActiveConnection *active = nm_client_activate_connection_finish (client, result, &err);
+    state->success = err == NULL && active != NULL;
+    if (!state->success)
+        eovpn_capture_error (state, err, "NetworkManager did not activate the VPN connection.");
+    g_clear_object (&active);
+    g_clear_error (&err);
 
-    g_main_loop_quit (loop);
+    g_main_loop_quit (state->loop);
 }
 
 int
 activate_connection (char *uuid)
 {
+    GMainContext *context;
     GMainLoop *loop;
     NMClient *client;
     const GPtrArray *arr;
     NMConnection *target = NULL;
     guint watchdog_id;
-    gboolean success;
+    EovpnAsyncResult state = {0};
+
+    eovpn_clear_last_error ();
 
     if (uuid == NULL)
+    {
+        eovpn_set_last_error ("Cannot activate a VPN connection without a UUID.");
         return false;
+    }
 
-    loop = g_main_loop_new (NULL, FALSE);
+    loop = eovpn_operation_loop_new (&context);
     client = nm_client_new (NULL, NULL);
+    if (client == NULL)
+    {
+        eovpn_set_last_error ("Could not create a NetworkManager client.");
+        eovpn_operation_loop_free (context, loop);
+        return false;
+    }
     arr = nm_client_get_connections (client);
 
     if (arr != NULL)
@@ -284,53 +443,66 @@ activate_connection (char *uuid)
         }
     }
 
-    success = target != NULL;
+    state.loop = loop;
     if (target != NULL)
     {
         nm_client_activate_connection_async (client, target, NULL, NULL, NULL,
-                                             (GAsyncReadyCallback) activate_cb, loop);
-        watchdog_id = g_timeout_add (EOVPN_NM_TIMEOUT_MS, eovpn_nm_watchdog, loop);
+                                             (GAsyncReadyCallback) activate_cb, &state);
+        watchdog_id = eovpn_watchdog_attach (context, loop);
         g_main_loop_run (loop);
-        g_source_remove (watchdog_id);
+        eovpn_watchdog_remove (context, watchdog_id);
     }
 
+    else
+        eovpn_set_last_error ("VPN connection UUID was not found in NetworkManager.");
+
     g_object_unref (client);
-    g_main_loop_unref (loop);
-    return success;
+    eovpn_operation_loop_free (context, loop);
+    if (!state.success && state.error != NULL)
+        eovpn_set_last_error ("Failed to activate VPN connection: %s", state.error);
+    g_free (state.error);
+    return state.success;
 }
 
 static void
-disconnect_cb (NMClient *client, GAsyncResult *result, GMainLoop *loop)
+disconnect_cb (NMClient *client, GAsyncResult *result, EovpnAsyncResult *state)
 {
     GError *err = NULL;
     nm_client_deactivate_connection_finish (client, result, &err);
-    if (err != NULL)
-    {
-        g_printerr ("Error deactivating connection: %s\n", err->message);
-        g_error_free (err);
-    }
-    else
-    {
-        g_debug ("[NM] Connection Disconnected!");
-    }
-    g_main_loop_quit (loop);
+    state->success = err == NULL;
+    if (!state->success)
+        eovpn_capture_error (state, err, "NetworkManager could not disconnect the VPN connection.");
+    g_clear_error (&err);
+    g_main_loop_quit (state->loop);
 }
 
 int
 disconnect (char *uuid)
 {
+    GMainContext *context;
     GMainLoop *loop;
     NMClient *client;
     const GPtrArray *arr;
     NMActiveConnection *target = NULL;
     guint watchdog_id;
-    gboolean success;
+    EovpnAsyncResult state = {0};
+
+    eovpn_clear_last_error ();
 
     if (uuid == NULL)
+    {
+        eovpn_set_last_error ("Cannot disconnect a VPN connection without a UUID.");
         return false;
+    }
 
-    loop = g_main_loop_new (NULL, FALSE);
+    loop = eovpn_operation_loop_new (&context);
     client = nm_client_new (NULL, NULL);
+    if (client == NULL)
+    {
+        eovpn_set_last_error ("Could not create a NetworkManager client.");
+        eovpn_operation_loop_free (context, loop);
+        return false;
+    }
     arr = nm_client_get_active_connections (client);
 
     if (arr != NULL)
@@ -346,53 +518,65 @@ disconnect (char *uuid)
         }
     }
 
-    success = target != NULL;
+    state.loop = loop;
     if (target != NULL)
     {
         nm_client_deactivate_connection_async (client, target, NULL,
-                                               (GAsyncReadyCallback) disconnect_cb, loop);
-        watchdog_id = g_timeout_add (EOVPN_NM_TIMEOUT_MS, eovpn_nm_watchdog, loop);
+                                               (GAsyncReadyCallback) disconnect_cb, &state);
+        watchdog_id = eovpn_watchdog_attach (context, loop);
         g_main_loop_run (loop);
-        g_source_remove (watchdog_id);
+        eovpn_watchdog_remove (context, watchdog_id);
     }
+    else
+        eovpn_set_last_error ("Active VPN connection UUID was not found.");
 
     g_object_unref (client);
-    g_main_loop_unref (loop);
-    return success;
+    eovpn_operation_loop_free (context, loop);
+    if (!state.success && state.error != NULL)
+        eovpn_set_last_error ("Failed to disconnect VPN connection: %s", state.error);
+    g_free (state.error);
+    return state.success;
 }
 
 static void
-delete_cb (NMRemoteConnection *conn, GAsyncResult *result, GMainLoop *loop)
+delete_cb (NMRemoteConnection *conn, GAsyncResult *result, EovpnAsyncResult *state)
 {
     GError *err = NULL;
     nm_remote_connection_delete_finish (conn, result, &err);
-    if (err != NULL)
-    {
-        g_printerr ("Error deleting connection: %s\n", err->message);
-        g_error_free (err);
-    }
-    else
-    {
-        g_debug ("[NM] Connection Deleted!");
-    }
-    g_main_loop_quit (loop);
+    state->success = err == NULL;
+    if (!state->success)
+        eovpn_capture_error (state, err, "NetworkManager could not delete the VPN connection.");
+    g_clear_error (&err);
+    g_main_loop_quit (state->loop);
 }
 
 int
 delete_connection (char *uuid)
 {
+    GMainContext *context;
     GMainLoop *loop;
     NMClient *client;
     const GPtrArray *arr;
     NMRemoteConnection *target = NULL;
     guint watchdog_id;
-    gboolean success;
+    EovpnAsyncResult state = {0};
+
+    eovpn_clear_last_error ();
 
     if (uuid == NULL)
+    {
+        eovpn_set_last_error ("Cannot delete a VPN connection without a UUID.");
         return false;
+    }
 
-    loop = g_main_loop_new (NULL, FALSE);
+    loop = eovpn_operation_loop_new (&context);
     client = nm_client_new (NULL, NULL);
+    if (client == NULL)
+    {
+        eovpn_set_last_error ("Could not create a NetworkManager client.");
+        eovpn_operation_loop_free (context, loop);
+        return false;
+    }
     arr = nm_client_get_connections (client);
 
     if (arr != NULL)
@@ -410,18 +594,23 @@ delete_connection (char *uuid)
         }
     }
 
-    success = target != NULL;
+    state.loop = loop;
     if (target != NULL)
     {
-        nm_remote_connection_delete_async (target, NULL, (GAsyncReadyCallback) delete_cb, loop);
-        watchdog_id = g_timeout_add (EOVPN_NM_TIMEOUT_MS, eovpn_nm_watchdog, loop);
+        nm_remote_connection_delete_async (target, NULL, (GAsyncReadyCallback) delete_cb, &state);
+        watchdog_id = eovpn_watchdog_attach (context, loop);
         g_main_loop_run (loop);
-        g_source_remove (watchdog_id);
+        eovpn_watchdog_remove (context, watchdog_id);
     }
+    else
+        eovpn_set_last_error ("Managed VPN connection UUID was not found.");
 
     g_object_unref (client);
-    g_main_loop_unref (loop);
-    return success;
+    eovpn_operation_loop_free (context, loop);
+    if (!state.success && state.error != NULL)
+        eovpn_set_last_error ("Failed to delete VPN connection: %s", state.error);
+    g_free (state.error);
+    return state.success;
 }
 
 char *
@@ -526,10 +715,11 @@ get_version (void)
     const char *ver;
     char *result_ver;
 
+    eovpn_clear_last_error ();
     client = nm_client_new (NULL, &err);
     if (err != NULL)
     {
-        g_printerr ("Error getting NM version: %s\n", err->message);
+        eovpn_set_last_error ("Error getting NetworkManager version: %s", err->message);
         g_error_free (err);
         return NULL;
     }

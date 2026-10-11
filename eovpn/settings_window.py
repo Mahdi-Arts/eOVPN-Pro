@@ -14,7 +14,6 @@ of instantiating whole backends on the UI thread.
 ``probe_version()`` به‌جای نمونه‌سازی کامل روی نخ UI خوانده می‌شود.
 """
 
-import contextlib
 import gettext
 import logging
 import os
@@ -25,11 +24,27 @@ import gi
 gi.require_version("Gtk", "4.0")
 from gi.repository import Gio, GLib, Gtk, Secret
 
-from .connection_manager import NetworkManager, OpenVPN3, create_connection_manager
+from .connection_manager import (
+    NetworkManager,
+    available_backend_names,
+    backend_capabilities,
+    create_connection_manager,
+)
 from .eovpn_base import Base, StorageItem
+from .reset_backup import create_reset_backup, latest_reset_backup, load_reset_manifest
 from .ui_compat import FilePicker, show_alert
 
 logger = logging.getLogger(__name__)
+
+
+def probe_secret_service() -> bool | None:
+    """Read whether Secret Service is reachable without reading credentials."""
+    try:
+        service = Secret.Service.get_sync(Secret.ServiceFlags.NONE, None)
+    except Exception as exc:  # pragma: no cover - depends on the desktop session
+        logger.debug("Secret Service probe failed: %s", exc)
+        return False
+    return service is not None
 
 
 class SettingsWindow(Base):
@@ -46,6 +61,7 @@ class SettingsWindow(Base):
         self.builder.add_from_resource(self.EOVPN_GRESOURCE_PREFIX + "/ui/settings.ui")
         self.window = self.builder.get_object("settings_window")
         self.window.set_title(gettext.gettext("{} Settings").format(self.APP_NAME))
+        self.window.add_css_class("settings-window")
 
         parent_win = self.retrieve(StorageItem.MAIN_WINDOW)
         if parent_win and isinstance(parent_win, Gtk.Window):
@@ -61,6 +77,8 @@ class SettingsWindow(Base):
         v_box.set_hexpand(True)
 
         label = Gtk.Label.new(name)
+        label.set_halign(Gtk.Align.START)
+        label.set_xalign(0.0)
         v_box.set_valign(Gtk.Align.CENTER)
         v_box.append(label)
 
@@ -94,12 +112,21 @@ class SettingsWindow(Base):
         self._build_general_tab()
         self._build_backend_tab()
         self._wire_signals()
+        # Let the stack use its natural height so short pages (especially
+        # Setup) do not reserve a large empty area below their content.
+        self.window.set_default_size(620, 400)
+        self.window.set_resizable(False)
+        self.stack.set_vexpand(False)
 
     def _build_header(self):
         self.reset_btn = Gtk.Button.new_with_label(gettext.gettext("Reset"))
         self.reset_btn.add_css_class("destructive-action")
         self.header = self.builder.get_object("settings_header_bar")
         self.header.pack_start(self.reset_btn)
+        self.restore_btn = Gtk.Button.new_with_label(gettext.gettext("Restore Reset"))
+        self.restore_btn.set_tooltip_text(gettext.gettext("Restore the latest local reset backup"))
+        self.restore_btn.set_sensitive(latest_reset_backup(self.EOVPN_OVPN_CONFIG_DIR) is not None)
+        self.header.pack_start(self.restore_btn)
 
         self.spinner = Gtk.Spinner()
         self.tick_mark = Gtk.Image()
@@ -118,17 +145,31 @@ class SettingsWindow(Base):
 
     def _build_setup_tab(self):
         self.main_box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 4)
-        self.main_box.set_valign(Gtk.Align.CENTER)
+        self.main_box.set_valign(Gtk.Align.START)
         self.main_box.add_css_class("m-6")
+        self.main_box.add_css_class("settings-page")
 
         self.pref_box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
         self.backend_box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
+        self.pref_box.add_css_class("settings-page")
+        self.backend_box.add_css_class("settings-page")
 
         self.stack.add_titled(self.main_box, "setup", gettext.gettext("Setup"))
         self.stack.add_titled(self.pref_box, "general", gettext.gettext("General"))
         self.stack.add_titled(self.backend_box, "Backend", gettext.gettext("Backend"))
 
         # Setup Tab: Configuration Source
+        intro = Gtk.Label.new(
+            gettext.gettext(
+                "Choose a trusted configuration source, validate it, and manage "
+                "optional credentials securely."
+            )
+        )
+        intro.set_halign(Gtk.Align.START)
+        intro.set_xalign(0.0)
+        intro.set_wrap(True)
+        intro.add_css_class("settings-intro")
+        self.main_box.append(intro)
         label = Gtk.Label.new(gettext.gettext("Configuration Source"))
         label.set_halign(Gtk.Align.START)
         label.add_css_class("bold")
@@ -272,7 +313,23 @@ class SettingsWindow(Base):
 
     def _build_general_tab(self):
         # General Preferences Tab
+        info = Gtk.Label.new(
+            gettext.gettext(
+                "General preferences apply immediately. Language changes are applied safely after restart."
+            )
+        )
+        info.set_halign(Gtk.Align.START)
+        info.set_xalign(0.0)
+        info.set_wrap(True)
+        info.set_margin_start(12)
+        info.set_margin_end(12)
+        info.set_margin_top(8)
+        info.set_margin_bottom(4)
+        info.add_css_class("dim-label")
+        self.pref_box.append(info)
+
         frame = Gtk.Frame.new()
+        frame.add_css_class("settings-card")
         list_box = Gtk.ListBox.new()
         frame.add_css_class("m-10")
         list_box.add_css_class("rich-list")
@@ -318,10 +375,8 @@ class SettingsWindow(Base):
         frame.set_child(list_box)
         self.pref_box.append(frame)
 
-        # The native backend only ever removes profiles tagged
-        # ``managed-by=eovpn-pro`` (see eovpn_connection_is_managed() in
-        # subprojects/networkmanager/eovpn_nm.c), so the label must not imply a
-        # system-wide wipe.
+        # The native backend removes only profiles identified as created by
+        # eOVPN-Pro; the label must not imply a system-wide wipe.
         # بک‌اند بومی فقط پروفایل‌های دارای برچسب `managed-by=eovpn-pro` را حذف
         # می‌کند (تابع eovpn_connection_is_managed در فایل eovpn_nm.c)، بنابراین
         # برچسب دکمه نباید پاک‌سازی سراسری سیستم را القا کند.
@@ -343,10 +398,14 @@ class SettingsWindow(Base):
 
     def _build_backend_tab(self):
         # Backend Tab
+        self.backend_box.set_valign(Gtk.Align.START)
         backend_frame = Gtk.Frame.new()
+        backend_frame.add_css_class("settings-card")
         backend_list_box = Gtk.ListBox.new()
         backend_frame.add_css_class("m-10")
         backend_list_box.add_css_class("rich-list")
+
+        capabilities = backend_capabilities()
 
         # Row 1: Connection Backend selection
         row1 = Gtk.ListBoxRow.new()
@@ -369,31 +428,89 @@ class SettingsWindow(Base):
         self.combobox = Gtk.ComboBoxText()
         self.combobox.set_valign(Gtk.Align.CENTER)
         manager = self.get_setting(self.SETTING.MANAGER) or "networkmanager"
+        manager_available = manager in available_backend_names()
 
-        # Lightweight version probes: no backend instantiation on the UI
-        # thread, no nested D-Bus main loops.
-        # پروب سبک نسخه: بدون نمونه‌سازی بک‌اند روی نخ UI و بدون حلقه D-Bus تودرتو.
-        try:
-            version = NetworkManager.probe_version()
-            if version:
-                self.combobox.append("networkmanager", gettext.gettext("{} (OpenVPN 2)").format(version))
-        except Exception as exc:
-            logger.debug("NetworkManager module not available: %s", exc)
+        version = capabilities["networkmanager"]["version"]
+        ovpn3_version = capabilities["openvpn3"]["version"]
+        if version:
+            self.combobox.append("networkmanager", gettext.gettext("{} (OpenVPN 2)").format(version))
+        if ovpn3_version:
+            self.combobox.append("openvpn3", gettext.gettext("OpenVPN 3 {}").format(ovpn3_version))
 
-        try:
-            ovpn3_version = OpenVPN3.probe_version()
-            if ovpn3_version:
-                self.combobox.append("openvpn3", gettext.gettext("OpenVPN 3 {}").format(ovpn3_version))
-        except Exception as exc:
-            logger.debug("OpenVPN 3 module not available: %s", exc)
-
-        self.combobox.set_property("active-id", manager)
+        if manager_available:
+            self.combobox.set_property("active-id", manager)
+        else:
+            # Never silently replace a persisted backend with another one.
+            # The user must explicitly choose an available backend.
+            self.combobox.set_active(-1)
 
         h_box1.append(icon1)
         h_box1.append(v_box1)
         h_box1.append(self.combobox)
         row1.set_child(h_box1)
         backend_list_box.append(row1)
+
+        backend_status = Gtk.Label.new()
+        backend_status.set_halign(Gtk.Align.START)
+        backend_status.set_xalign(0.0)
+        backend_status.set_wrap(True)
+        backend_status.set_margin_start(10)
+        backend_status.set_margin_end(10)
+        backend_status.set_margin_top(4)
+        backend_status.set_margin_bottom(8)
+        backend_status.add_css_class("dim-label")
+        status_lines = []
+        if version:
+            status_lines.append(gettext.gettext("NetworkManager: Ready ({})").format(version))
+        else:
+            status_lines.append(gettext.gettext("NetworkManager: Unavailable"))
+        plugin = capabilities["networkmanager"]["openvpn_plugin"]
+        if plugin is True:
+            status_lines.append(gettext.gettext("NetworkManager OpenVPN plugin: Ready"))
+        elif plugin is False:
+            status_lines.append(gettext.gettext("NetworkManager OpenVPN plugin: Missing"))
+        else:
+            status_lines.append(gettext.gettext("NetworkManager OpenVPN plugin: Unknown"))
+        if ovpn3_version:
+            status_lines.append(gettext.gettext("OpenVPN 3: Available ({})").format(ovpn3_version))
+        else:
+            status_lines.append(gettext.gettext("OpenVPN 3: Unavailable (optional binding is not installed)"))
+        available = available_backend_names()
+        status_lines.append(
+            gettext.gettext("NetworkManager native bindings: {}").format(
+                gettext.gettext("Ready") if "networkmanager" in available else gettext.gettext("Unavailable")
+            )
+        )
+        cffi_state = str(capabilities["networkmanager"].get("cffi_contract", "unknown"))
+        cffi_label = {
+            "current": gettext.gettext("Current"),
+            "legacy": gettext.gettext("Legacy; rebuild required"),
+            "unavailable": gettext.gettext("Unavailable"),
+        }.get(cffi_state, gettext.gettext("Unknown"))
+        status_lines.append(gettext.gettext("NetworkManager CFFI: {}").format(cffi_label))
+        status_lines.append(
+            gettext.gettext("DCO: Available with OpenVPN 3")
+            if capabilities["openvpn3"]["dco"]
+            else gettext.gettext("DCO: Unavailable because OpenVPN 3 is unavailable")
+        )
+        language = self.get_setting(self.SETTING.LANGUAGE) or "en"
+        theme = (
+            gettext.gettext("Dark")
+            if self.get_setting(self.SETTING.DARK_THEME)
+            else gettext.gettext("System")
+        )
+        status_lines.append(gettext.gettext("Language: {} · Theme: {}").format(language, theme))
+        secret_service = probe_secret_service()
+        status_lines.append(
+            gettext.gettext("Secret Service: {}").format(
+                gettext.gettext("Available") if secret_service else gettext.gettext("Unavailable")
+            )
+        )
+        backend_status.set_text("\n".join(status_lines))
+        status_row = Gtk.ListBoxRow.new()
+        status_row.set_selectable(False)
+        status_row.set_child(backend_status)
+        backend_list_box.append(status_row)
 
         # Row 2: OpenVPN 3 DCO
         self.dco_row = Gtk.ListBoxRow.new()
@@ -434,6 +551,12 @@ class SettingsWindow(Base):
         dco_state = bool(self.get_setting(self.SETTING.OPENVPN3_DCO))
         self.dco_switch.set_state(dco_state)
         self.dco_switch.set_active(dco_state)
+        dco_available = bool(capabilities["openvpn3"]["dco"])
+        self.dco_switch.set_sensitive(dco_available)
+        if not dco_available:
+            self.dco_switch.set_tooltip_text(
+                gettext.gettext("Install the optional OpenVPN 3 backend to enable DCO.")
+            )
 
         h_box2.append(icon2)
         h_box2.append(v_box2)
@@ -444,7 +567,7 @@ class SettingsWindow(Base):
         backend_frame.set_child(backend_list_box)
         self.backend_box.append(backend_frame)
 
-        self.dco_row.set_visible(manager == "openvpn3")
+        self.dco_row.set_visible(manager_available and manager == "openvpn3")
         self.dco_switch.connect("state-set", self.signals.openvpn3_dco_set)
 
     def _wire_signals(self):
@@ -456,6 +579,16 @@ class SettingsWindow(Base):
             [self.ca_chooser_btn],
             self.switches,
             self.window,
+            self.restore_btn,
+        )
+        self.restore_btn.connect(
+            "clicked",
+            self.signals.on_restore_btn_clicked,
+            [self.config_source_entry, self.username_entry, self.password_entry],
+            [self.ca_chooser_btn],
+            self.switches,
+            self.window,
+            self.restore_btn,
         )
         self.config_source_entry.connect("changed", self.signals.process_config_entry, self.revealer)
         self.zip_picker.connect_picked(
@@ -693,12 +826,44 @@ class SettingsSignals(Base):
     def auto_reconnect_set(self, switch, state):
         self.set_setting(self.SETTING.AUTO_RECONNECT, state)
 
-    def on_reset_btn_clicked(self, button, entries, buttons, switches, window):
+    def on_reset_btn_clicked(self, button, entries, buttons, switches, window, restore_button):
+        show_alert(
+            window,
+            gettext.gettext("Reset eOVPN-Pro settings and configurations?"),
+            gettext.gettext(
+                "This clears saved preferences, credentials, and imported VPN configurations. "
+                "A local backup of non-secret settings and imported configurations will be kept "
+                "so the latest reset can be restored."
+            ),
+            [gettext.gettext("Cancel"), gettext.gettext("Reset Everything")],
+            cancel_index=0,
+            default_index=0,
+            on_response=lambda index: self._apply_reset(
+                index, entries, buttons, switches, window, restore_button
+            ),
+        )
+
+    def _apply_reset(self, index, entries, buttons, switches, window, restore_button):
+        """Apply a confirmed reset only after creating a local rollback snapshot."""
+        if index != 1:
+            logger.debug("Reset dismissed without confirmation.")
+            return
+        settings = {key: self.get_setting(key) for key in self.SETTING.all_settings}
+        try:
+            backup_path = create_reset_backup(self.EOVPN_OVPN_CONFIG_DIR, settings)
+        except Exception as exc:
+            logger.exception("Could not create reset backup")
+            show_alert(
+                window,
+                gettext.gettext("Reset was not performed"),
+                gettext.gettext("A safe local backup could not be created: {}").format(exc),
+                [gettext.gettext("Close")],
+            )
+            return
+        self._clear_persisted_password(settings.get(self.SETTING.AUTH_USER))
         self.reset_all_settings()
         self.set_session_password(None)
-
-        with contextlib.suppress(Exception):
-            shutil.rmtree(self.EOVPN_OVPN_CONFIG_DIR)
+        self.reset_paths()
 
         for e in entries:
             e.set_text("")
@@ -707,10 +872,126 @@ class SettingsSignals(Base):
         for s in switches:
             s.set_state(False)
 
-        GLib.idle_add(self.remove_only, True)
+        GLib.idle_add(self.remove_only, False)
         flag_img = self.retrieve(StorageItem.FLAG)
         if flag_img:
             flag_img.set_visible(False)
+        restore_button.set_sensitive(True)
+        show_alert(
+            window,
+            gettext.gettext("Reset completed"),
+            gettext.gettext("A local backup was kept at {}. Use Restore Reset to undo this reset.").format(
+                backup_path
+            ),
+            [gettext.gettext("Close")],
+        )
+
+    def on_restore_btn_clicked(self, button, entries, buttons, switches, window, restore_button):
+        backup = latest_reset_backup(self.EOVPN_OVPN_CONFIG_DIR)
+        if backup is None:
+            restore_button.set_sensitive(False)
+            return
+        show_alert(
+            window,
+            gettext.gettext("Restore the latest reset?"),
+            gettext.gettext(
+                "Current non-secret settings and imported configurations will first be backed up, "
+                "then the latest reset snapshot will be restored."
+            ),
+            [gettext.gettext("Cancel"), gettext.gettext("Restore")],
+            cancel_index=0,
+            default_index=0,
+            on_response=lambda index: self._apply_restore(
+                index, backup, entries, buttons, switches, window, restore_button
+            ),
+        )
+
+    def _apply_restore(self, index, backup, entries, buttons, switches, window, restore_button):
+        """Restore a validated snapshot after explicit confirmation."""
+        if index != 1:
+            logger.debug("Restore dismissed without confirmation.")
+            return
+        current_settings = {key: self.get_setting(key) for key in self.SETTING.all_settings}
+        try:
+            safety_backup = create_reset_backup(self.EOVPN_OVPN_CONFIG_DIR, current_settings)
+            manifest = load_reset_manifest(str(backup), self.EOVPN_OVPN_CONFIG_DIR)
+            source = backup / "config"
+            if source.exists() and source.is_symlink():
+                raise ValueError("reset snapshot config is a symlink")
+            self._clear_persisted_password(current_settings.get(self.SETTING.AUTH_USER))
+            self.reset_paths()
+            if source.is_dir():
+                shutil.copytree(source, self.EOVPN_OVPN_CONFIG_DIR, symlinks=True, dirs_exist_ok=True)
+            self.reset_all_settings()
+            for key, value in manifest["settings"].items():
+                if key in self.SETTING.all_settings:
+                    self.set_setting(key, value)
+            self.set_session_password(None)
+        except Exception as exc:
+            logger.exception("Could not restore reset backup")
+            show_alert(
+                window,
+                gettext.gettext("Restore was not completed"),
+                gettext.gettext("The current state was preserved in {}. Details: {}").format(
+                    safety_backup, exc
+                ),
+                [gettext.gettext("Close")],
+            )
+            return
+
+        self._refresh_controls_after_restore(entries, buttons, switches)
+        GLib.idle_add(self.remove_only, False)
+        GLib.idle_add(self.load_only)
+        restore_button.set_sensitive(latest_reset_backup(self.EOVPN_OVPN_CONFIG_DIR) is not None)
+        show_alert(
+            window,
+            gettext.gettext("Reset restored"),
+            gettext.gettext("The previous state was restored. A safety backup was kept at {}.").format(
+                safety_backup
+            ),
+            [gettext.gettext("Close")],
+        )
+
+    def _refresh_controls_after_restore(self, entries, buttons, switches):
+        """Rebind restored non-secret settings without restoring a password."""
+        if entries:
+            entries[0].set_text(self.get_setting(self.SETTING.REMOTE) or "")
+        if len(entries) > 1:
+            entries[1].set_text(self.get_setting(self.SETTING.AUTH_USER) or "")
+        if len(entries) > 2:
+            entries[2].set_text("")
+        if buttons:
+            ca_path = self.get_setting(self.SETTING.CA)
+            buttons[0].set_label(os.path.basename(ca_path) if ca_path else "(None)")
+        setting_keys = (
+            self.SETTING.REQ_AUTH,
+            self.SETTING.NOTIFICATIONS,
+            self.SETTING.SHOW_FLAG,
+            self.SETTING.DARK_THEME,
+            self.SETTING.AUTO_RECONNECT,
+        )
+        for switch, key in zip(switches, setting_keys):
+            switch.set_state(bool(self.get_setting(key)))
+        flag_img = self.retrieve(StorageItem.FLAG)
+        if flag_img:
+            flag_img.set_visible(bool(self.get_setting(self.SETTING.SHOW_FLAG)))
+
+    def _clear_persisted_password(self, username):
+        """Remove the matching Secret Service item without logging its value."""
+        if not username:
+            return
+
+        def on_cleared(_source, result):
+            try:
+                Secret.password_clear_finish(result)
+                logger.info("Stored VPN credential cleared for the reset user.")
+            except Exception as exc:
+                logger.warning("Could not clear the stored VPN credential: %s", exc)
+
+        try:
+            Secret.password_clear(self.EOVPN_SECRET_SCHEMA, {"username": username}, None, on_cleared)
+        except Exception as exc:
+            logger.warning("Could not start Secret Service credential cleanup: %s", exc)
 
     def openvpn3_dco_set(self, switch, state):
         self.set_setting(self.SETTING.OPENVPN3_DCO, state)

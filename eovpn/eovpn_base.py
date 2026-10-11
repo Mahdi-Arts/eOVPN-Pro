@@ -21,7 +21,8 @@ import gi
 gi.require_version("Notify", "0.7")
 gi.require_version("Secret", "1")
 gi.require_version("Gtk", "4.0")
-from gi.repository import GdkPixbuf, Gio, GLib, GObject, Gtk, Notify, Secret
+gi.require_version("GdkPixbuf", "2.0")
+from gi.repository import GdkPixbuf, Gio, GLib, GObject, Gtk, Notify, Pango, Secret
 
 from ._meta import load_metadata
 from .auto_connect import format_proto_badge, parse_ovpn_protocols, proto_badge_css
@@ -96,11 +97,10 @@ class ConfigRow(Gtk.ListBoxRow):
         self.protocols: frozenset[str] = frozenset(protocols or ())
         is_favorite = bool(favorites and filename in favorites)
 
-        self.box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
-        self.box.set_margin_start(10)
-        self.box.set_margin_end(8)
-        self.box.set_margin_top(4)
-        self.box.set_margin_bottom(4)
+        self.box = Gtk.Grid.new()
+        self.box.set_column_spacing(8)
+        self.box.set_row_spacing(0)
+        self.box.add_css_class("server-row")
 
         # Favorite (star) toggle / دکمه ستاره‌دار کردن کانفیگ
         self.fav_button = Gtk.ToggleButton()
@@ -119,6 +119,8 @@ class ConfigRow(Gtk.ListBoxRow):
         self.label.set_halign(Gtk.Align.START)
         self.label.set_hexpand(True)
         self.label.set_xalign(0.0)
+        self.label.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
+        self.label.set_tooltip_text(filename)
 
         # Protocol badge (TCP / UDP) / نشان پروتکل
         badge_text = format_proto_badge(self.protocols)
@@ -135,7 +137,11 @@ class ConfigRow(Gtk.ListBoxRow):
         # Latency label / برچسب نمایش پینگ
         self.latency_label = Gtk.Label.new("")
         self.latency_label.set_halign(Gtk.Align.END)
-        self.latency_label.set_margin_end(8)
+        self.latency_label.set_xalign(1.0)
+        self.latency_label.set_width_chars(8)
+        self.latency_label.set_size_request(64, -1)
+        self.latency_label.set_hexpand(False)
+        self.latency_label.add_css_class("latency-label")
 
         # Edit button / دکمه ویرایش فایل کانفیگ
         self.edit_button = Gtk.Button.new_from_icon_name("document-edit-symbolic")
@@ -153,12 +159,69 @@ class ConfigRow(Gtk.ListBoxRow):
         # مورد اعتماد قرار گیرد.
         self.edit_button.connect("clicked", self._on_edit_clicked)
 
-        self.box.append(self.fav_button)
-        self.box.append(self.label)
-        self.box.append(self.proto_badge)
-        self.box.append(self.latency_label)
-        self.box.append(self.edit_button)
+        self.fav_button.set_hexpand(False)
+        self.label.set_hexpand(True)
+        self.proto_badge.set_width_chars(7)
+        self.proto_badge.set_size_request(50, -1)
+        self.proto_badge.set_xalign(0.5)
+        self.latency_label.set_hexpand(False)
+        self.edit_button.set_hexpand(False)
+
+        # Keep the trailing metadata in one non-expanding cluster. This makes
+        # protocol, latency, and edit controls stable when the filename is
+        # long, the latency is empty, or the edit action is hidden.
+        self.metadata_box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 4)
+        self.metadata_box.add_css_class("server-metadata")
+        self.metadata_box.set_halign(Gtk.Align.END)
+        self.metadata_box.set_hexpand(False)
+        self.metadata_box.append(self.proto_badge)
+        self.metadata_box.append(self.latency_label)
+        self.metadata_box.append(self.edit_button)
+
+        self.box.attach(self.fav_button, 0, 0, 1, 1)
+        self.box.attach(self.label, 1, 0, 1, 1)
+        self.box.attach(self.metadata_box, 2, 0, 1, 1)
+        self.box.set_column_homogeneous(False)
+        self.box.set_column_spacing(10)
+        self.box.set_hexpand(True)
         self.set_child(self.box)
+
+    def set_latency(self, latency_ms: float | None, status: str = "measured") -> None:
+        """Render a measurement; the row is not its source of truth."""
+        for css_class in ("latency-good", "latency-mid", "latency-bad", "latency-error"):
+            self.latency_label.remove_css_class(css_class)
+
+        if latency_ms is not None and status == "measured":
+            css_class = (
+                "latency-good" if latency_ms < 100 else "latency-mid" if latency_ms < 250 else "latency-bad"
+            )
+            self.latency_label.add_css_class(css_class)
+            self.latency_label.set_text(f"{latency_ms:.1f} ms")
+        elif status == "pending":
+            self.latency_label.set_text("…")
+        elif status == "stale":
+            self.latency_label.set_text("—")
+        else:
+            self.latency_label.add_css_class("latency-error")
+            self.latency_label.set_text(gettext.gettext("Error"))
+
+    def set_attempt_state(self, state: str | None) -> None:
+        """Visually mark the candidate currently being tried or skipped."""
+        for css_class in ("connection-attempting", "connection-failed"):
+            self.remove_css_class(css_class)
+            self.box.remove_css_class(css_class)
+        if state in {"attempting", "failed"}:
+            self.add_css_class(f"connection-{state}")
+            self.box.add_css_class(f"connection-{state}")
+
+    def set_selected_state(self, selected: bool) -> None:
+        """Mirror ListBox selection on the row's visual content container."""
+        if selected:
+            self.add_css_class("connection-selected-row")
+            self.box.add_css_class("connection-selected")
+        else:
+            self.remove_css_class("connection-selected-row")
+            self.box.remove_css_class("connection-selected")
 
     def _resolve_editable_path(self) -> Path | None:
         """
@@ -328,6 +391,8 @@ class Base:
         self.AUTHOR_MAIL = metadata.get("AUTHOR_MAIL", "info@MahdiArts.ir")
         self.AUTHOR_MAIL_SECONDARY = metadata.get("AUTHOR_MAIL_SECONDARY", "mehdi.bagheban@gmail.com")
         self.AUTHOR_WEBSITE = metadata.get("AUTHOR_WEBSITE", "https://www.MahdiArts.ir")
+        self.PROJECT_URL = metadata.get("PROJECT_URL", "https://github.com/Mahdi-Arts/eOVPN-Pro")
+        self.ISSUE_URL = metadata.get("ISSUE_URL", "https://github.com/Mahdi-Arts/eOVPN-Pro/issues")
 
         self.TRANSLATORS = {}
         self.EOVPN_SECRET_SCHEMA = EOVPN_SECRET_SCHEMA
@@ -553,6 +618,11 @@ class Base:
                 protocols=proto_cache[filename],
             )
 
+            snapshot = self.retrieve("speed_snapshot")
+            measurement = snapshot.get(filename) if snapshot is not None else None
+            if measurement is not None:
+                row.set_latency(measurement.latency_ms, measurement.status)
+
             latency_dict = self.retrieve("latency_labels")
             if isinstance(latency_dict, dict):
                 latency_dict[filename] = row.latency_label
@@ -575,17 +645,28 @@ class Base:
         liststore = Gio.ListStore.new(ConfigItem)
         self.store(StorageItem.LISTSTORE, liststore)
 
-        # If a filter model is registered (search/filter feature), bind through it
-        # در صورت وجود مدل فیلتر (جستجو/فیلتر)، لیست از طریق آن به ListBox متصل می‌شود
+        # Compose the source, sorter and filter models before binding. GTK4
+        # ignores ListBox sort/filter callbacks once a model is bound.
+        # مدل‌های منبع، مرتب‌ساز و فیلتر پیش از اتصال ترکیب می‌شوند؛ GTK4 پس از
+        # اتصال model، callbackهای sort/filter خود ListBox را نادیده می‌گیرد.
+        sort_model = self.retrieve("sort_model")
+        model_for_filter = liststore
+        if sort_model is not None:
+            try:
+                sort_model.set_model(liststore)
+                model_for_filter = sort_model
+            except Exception as e:
+                logger.debug("Failed to attach sort model: %s", e)
+
         filter_model = self.retrieve("filter_model")
         if filter_model is not None:
             try:
-                filter_model.set_model(liststore)
+                filter_model.set_model(model_for_filter)
             except Exception as e:
                 logger.debug("Failed to attach filter model: %s", e)
                 filter_model = None
 
-        bind_model = filter_model if filter_model is not None else liststore
+        bind_model = filter_model if filter_model is not None else model_for_filter
         box.bind_model(bind_model, widget_factory)
 
         self.store(StorageItem.CONFIGS_LIST, configs)

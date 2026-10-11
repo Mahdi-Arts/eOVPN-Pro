@@ -30,6 +30,8 @@ _FALLBACK_METADATA: dict[str, str] = {
     "AUTHOR_MAIL": "info@MahdiArts.ir",
     "AUTHOR_MAIL_SECONDARY": "mehdi.bagheban@gmail.com",
     "AUTHOR_WEBSITE": "https://www.MahdiArts.ir",
+    "PROJECT_URL": "https://github.com/Mahdi-Arts/eOVPN-Pro",
+    "ISSUE_URL": "https://github.com/Mahdi-Arts/eOVPN-Pro/issues",
 }
 
 

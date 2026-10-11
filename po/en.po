@@ -150,3 +150,120 @@ msgstr ""
 #: settings_window.py:new
 msgid "Choose CA / CRT Certificate"
 msgstr ""
+
+msgid "Restore Reset"
+msgstr ""
+
+msgid "Restore the latest local reset backup"
+msgstr ""
+
+msgid "Reset eOVPN-Pro settings and configurations?"
+msgstr ""
+
+msgid "This clears saved preferences, credentials, and imported VPN configurations. A local backup of non-secret settings and imported configurations will be kept so the latest reset can be restored."
+msgstr ""
+
+msgid "Reset Everything"
+msgstr ""
+
+msgid "Reset was not performed"
+msgstr ""
+
+msgid "A safe local backup could not be created: {}"
+msgstr ""
+
+msgid "Reset completed"
+msgstr ""
+
+msgid "A local backup was kept at {}. Use Restore Reset to undo this reset."
+msgstr ""
+
+msgid "Close"
+msgstr ""
+
+msgid "Restore the latest reset?"
+msgstr ""
+
+msgid "Current non-secret settings and imported configurations will first be backed up, then the latest reset snapshot will be restored."
+msgstr ""
+
+msgid "Restore"
+msgstr ""
+
+msgid "Restore was not completed"
+msgstr ""
+
+msgid "The current state was preserved in {}. Details: {}"
+msgstr ""
+
+msgid "Reset restored"
+msgstr ""
+
+msgid "The previous state was restored. A safety backup was kept at {}."
+msgstr ""
+
+msgid "eOVPN-Pro translation contributors"
+msgstr ""
+
+msgid "Stable NetworkManager backend, safer configuration handling, and improved connection diagnostics."
+msgstr ""
+
+msgid "Legal"
+msgstr ""
+
+msgid "Privacy"
+msgstr ""
+
+msgid "eOVPN-Pro does not add telemetry or upload connection data."
+msgstr ""
+
+msgid "Runtime dependencies"
+msgstr ""
+
+msgid "Unsupported language selection."
+msgstr ""
+
+msgid "Language saved. Restart eOVPN-Pro manually to apply it."
+msgstr ""
+
+msgid "Cancelling..."
+msgstr ""
+
+msgid "Cancel Test"
+msgstr ""
+
+msgid "Speed test cancelled."
+msgstr ""
+
+msgid "Live traffic"
+msgstr ""
+
+msgid "Live traffic statistics for the active VPN tunnel"
+msgstr ""
+
+msgid "Download"
+msgstr ""
+
+msgid "Upload"
+msgstr ""
+
+msgid "Total"
+msgstr ""
+
+msgid "Collapse search and filters"
+msgstr ""
+
+msgid "Expand search and filters"
+msgstr ""
+
+msgid "Choose a trusted configuration source, validate it, and manage optional credentials securely."
+msgstr ""
+
+msgid "Application behavior"
+msgstr ""
+
+msgid "Select the active VPN backend and review live capability checks. Unavailable optional backends are not used as silent fallbacks."
+msgstr ""
+
+msgid "Backend health and capabilities"
+msgstr ""

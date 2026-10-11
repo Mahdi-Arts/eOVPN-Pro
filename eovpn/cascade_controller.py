@@ -21,6 +21,8 @@ import gettext
 import logging
 import os
 import time
+from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from .auto_connect import (
@@ -34,12 +36,10 @@ from .auto_connect import (
     format_proto_badge,
 )
 from .cascade import (
-    cascade_banner_meta,
     cascade_progress_fraction,
-    cascade_reason_label,
-    cascade_remaining_seconds,
 )
 from .events import ConnectionEvent, ConnectionEventKind
+from .speed_state import ConnectionAttempt
 from .timers import TimerScheduler, create_default_scheduler
 
 logger = logging.getLogger(__name__)
@@ -79,6 +79,7 @@ class CascadeHost(Protocol):
 
     def CM(self) -> Any: ...
     def get_selected_config(self) -> str | None: ...
+    def get_all_config_filenames(self) -> list[str]: ...
     def select_server_by_name(self, filename: str) -> bool: ...
     def protocols_for(self, filename: str) -> frozenset[str]: ...
     def trigger_speed_test(self) -> None: ...
@@ -92,9 +93,15 @@ class CascadeController:
     هدایت اتصال آبشاری به سریع‌ترین سرور با تایم‌اوت تطبیقی دست‌دهی.
     """
 
-    def __init__(self, host: CascadeHost, scheduler: TimerScheduler | None = None) -> None:
+    def __init__(
+        self,
+        host: CascadeHost,
+        scheduler: TimerScheduler | None = None,
+        clock: Callable[[], float] | None = None,
+    ) -> None:
         self._win = host
         self._scheduler = scheduler if scheduler is not None else create_default_scheduler()
+        self._clock = clock if clock is not None else time.monotonic
 
         # State / وضعیت
         self.active = False
@@ -106,13 +113,20 @@ class CascadeController:
         self.deadline = 0.0
         self.current: str | None = None
         self.failures: list[tuple[str, str]] = []
+        self.attempts: list[ConnectionAttempt] = []
+        self._active_attempt: ConnectionAttempt | None = None
         self.expect_disconnect = False
         self.disconnect_retries = 0
+        self._pending_failure_message: str | None = None
 
         # Scheduler source ids / شناسه‌های زمان‌بند
         self._timeout_id: Any = None
         self._tick_id: Any = None
         self._settle_id: Any = None
+
+    def _now(self) -> float:
+        """Read the injected monotonic clock used by timers and tests."""
+        return self._clock()
 
     # ------------------------------------------------------------------
     # Public entry points / نقاط ورود عمومی
@@ -122,6 +136,30 @@ class CascadeController:
     def busy(self) -> bool:
         """True while a cascade (or its pre-connect speed test) is running."""
         return self.active or self.auto_cascade_after_test
+
+    def attempt_summary(self) -> dict[str, int]:
+        """Return stable counters for UI, diagnostics and offline tests."""
+        summary = {
+            "candidates": len(self.queue),
+            "attempts": len(self.attempts),
+            "timeouts": 0,
+            "handshake_failures": 0,
+            "backend_errors": 0,
+            "cancelled": 0,
+            "success": 0,
+        }
+        for attempt in self.attempts:
+            if attempt.result == "timeout":
+                summary["timeouts"] += 1
+            elif attempt.result in {"auth", "error", "disconnect"}:
+                summary["handshake_failures"] += 1
+            elif attempt.result in {"backend_error", "missing"}:
+                summary["backend_errors"] += 1
+            elif attempt.result == "cancelled":
+                summary["cancelled"] += 1
+            elif attempt.result == "success":
+                summary["success"] += 1
+        return summary
 
     def toggle(self) -> None:
         """Starts the cascade, or cancels it when already busy."""
@@ -142,9 +180,9 @@ class CascadeController:
             return
 
         win = self._win
-        visible = collect_visible_filenames(getattr(win, "list_box", None))
-        if not visible:
-            win.show_toast(_("No servers match the current filters."))
+        candidates = self._candidate_scope()
+        if not candidates:
+            win.show_toast(_("No VPN configurations are available."))
             return
 
         if not win.latencies:
@@ -160,11 +198,21 @@ class CascadeController:
 
         self.start_from_visible_list()
 
+    def _candidate_scope(self) -> list[str]:
+        """Use the full config set, not the current visual filter projection."""
+        getter = getattr(self._win, "get_all_config_filenames", None)
+        if callable(getter):
+            try:
+                return [str(name) for name in getter() if name]
+            except Exception:
+                logger.debug("Could not read complete cascade scope", exc_info=True)
+        return collect_visible_filenames(getattr(self._win, "list_box", None))
+
     def start_from_visible_list(self) -> None:
-        """Builds the attempt queue from the visible list and begins walking it."""
+        """Build the attempt queue from all configs and begin walking it."""
         win = self._win
-        visible = collect_visible_filenames(getattr(win, "list_box", None))
-        queue = build_cascade_queue(visible, win.latencies, skip_unreachable=True)
+        candidates = self._candidate_scope()
+        queue = build_cascade_queue(candidates, win.latencies, skip_unreachable=True)
         if not queue:
             if self.active:
                 self.finish(CascadePhase.EXHAUSTED)
@@ -187,10 +235,10 @@ class CascadeController:
                 win.show_toast(_("Already connected to the first server in the list: {}").format(current))
             return
 
-        if len(visible) > MAX_CASCADE_CANDIDATES:
+        if len(candidates) > MAX_CASCADE_CANDIDATES:
             win.show_toast(
-                _("Auto-connect will try the first {} of {} visible servers.").format(
-                    len(queue), len(visible)
+                _("Auto-connect will try the first {} of {} eligible servers.").format(
+                    len(queue), len(candidates)
                 )
             )
 
@@ -201,6 +249,13 @@ class CascadeController:
         if not self.busy:
             return
         logger.info("Cascade cancelled (user=%s)", user)
+        try:
+            manager = self._win.CM()
+            cancel_operation = getattr(manager, "cancel_current_operation", None)
+            if callable(cancel_operation):
+                cancel_operation()
+        except Exception:
+            logger.debug("Could not cancel the backend worker cooperatively", exc_info=True)
         self.auto_cascade_after_test = False
         self.gen += 1
         self.finish(CascadePhase.CANCELLED)
@@ -214,11 +269,20 @@ class CascadeController:
         رویدادهای D-Bus را هنگام اتصال آبشاری مصرف می‌کند؛ مقدار True یعنی
         هندلر عادی UI باید رویداد را نادیده بگیرد.
         """
+        if not self.active:
+            return False
+
         if event.kind == ConnectionEventKind.CONNECTED:
             self._disarm_timers()
             self.expect_disconnect = False
             self.finish(CascadePhase.SUCCEEDED, restore_connect_ui=False)
             return False
+
+        if event.kind == ConnectionEventKind.PROGRESS:
+            progress = getattr(self._win, "progress_bar", None)
+            if progress is not None:
+                progress.set_fraction(min(0.95, progress.get_fraction() + 0.35))
+            return True
 
         failed = event.kind in (ConnectionEventKind.FAILED, ConnectionEventKind.DISCONNECTED)
         if not failed:
@@ -232,10 +296,33 @@ class CascadeController:
 
         if self.phase == CascadePhase.CONNECTING:
             reason = "auth" if "auth" in error_text else ("error" if event.error else "disconnect")
-            self.advance(reason)
+            if reason == "error" and not self._is_definitive_backend_failure(error_text):
+                # A generic failure signal is not proof that the handshake is
+                # terminal. Keep the candidate alive until its 60-second
+                # budget expires, then classify it as a timeout.
+                self._pending_failure_message = event.error
+                self._update_banner()
+                return True
+            self.advance(reason, error_code=reason, error_message=event.error)
             return True
 
         return True
+
+    @staticmethod
+    def _is_definitive_backend_failure(error_text: str) -> bool:
+        markers = (
+            "auth_failed",
+            "authentication failed",
+            "tls handshake failed",
+            "certificate",
+            "permission denied",
+            "invalid configuration",
+            "configuration file",
+            "unsupported",
+            "no such file",
+            "backend unavailable",
+        )
+        return any(marker in error_text for marker in markers)
 
     # ------------------------------------------------------------------
     # Internal state machine / ماشین حالت داخلی
@@ -256,7 +343,7 @@ class CascadeController:
             win.cascade_meta.set_text("")
             win.cascade_bar.set_fraction(0.0)
             win.cascade_spinner.start()
-            win.cascade_revealer.set_reveal_child(True)
+            win.cascade_revealer.set_reveal_child(False)
         self._set_fastest_button_cancel(True)
 
     def _begin(self, queue: list[str]) -> None:
@@ -265,6 +352,8 @@ class CascadeController:
         self.queue = list(queue)
         self.index = 0
         self.failures = []
+        self.attempts = []
+        self._active_attempt = None
         self.expect_disconnect = False
         self.disconnect_retries = 0
         self.phase = CascadePhase.CONNECTING
@@ -274,13 +363,23 @@ class CascadeController:
 
         self._set_controls_locked(True)
         self._set_fastest_button_cancel(True)
+        if hasattr(win, "connect_btn"):
+            win.connect_btn.set_sensitive(True)
+            win.connect_btn.set_label(_("Connecting… 30s"))
+            win.connect_btn.remove_css_class("suggested-action")
+            win.connect_btn.add_css_class("suggested-action")
+        if hasattr(win, "progress_bar"):
+            win.progress_bar.set_fraction(0.0)
+            win.progress_bar.remove_css_class("progress-full-green")
+            win.progress_bar.remove_css_class("progress-orange")
+            win.progress_bar.add_css_class("progress-yellow")
         if hasattr(win, "cascade_banner"):
             win.cascade_banner.remove_css_class("cascade-success")
             win.cascade_banner.remove_css_class("cascade-fail")
             win.cascade_spinner.start()
-            win.cascade_revealer.set_reveal_child(True)
-
-        win.show_toast(_("Auto-connect started — {} server(s) in the current list.").format(len(self.queue)))
+            # The selected row and native Connect button identify the active
+            # attempt; avoid a second loading card in the connection panel.
+            win.cascade_revealer.set_reveal_child(False)
 
         try:
             cm = win.CM()
@@ -311,11 +410,23 @@ class CascadeController:
         self.phase = CascadePhase.CONNECTING
         rtt = (win.latencies or {}).get(filename)
         timeout = compute_attempt_timeout(rtt)
-        self.deadline = time.monotonic() + timeout
+        self.deadline = self._now() + timeout
+        self._active_attempt = ConnectionAttempt(
+            config_id=filename,
+            started_at=datetime.now(timezone.utc),
+            timeout_seconds=timeout,
+        )
+        self._pending_failure_message = None
+        self.attempts.append(self._active_attempt)
+        self._update_connect_button_timer()
         self.expect_disconnect = False
         win.manual_disconnect = False
 
         win.select_server_by_name(filename)
+        # Keep the same visible selection contract as manual Connect: the
+        # candidate row is selected before the native backend is invoked.
+        if hasattr(win, "get_selected_config") and win.get_selected_config() != filename:
+            logger.warning("Cascade selection did not settle for %s", filename)
         self._update_banner()
         self._arm_timeout_and_ticks()
 
@@ -341,12 +452,16 @@ class CascadeController:
             path = os.path.join(win.EOVPN_CONFIG_DIR, "CONFIGS", filename)
             if not os.path.isfile(path):
                 logger.warning("Cascade: missing config %s", path)
-                self.advance("missing")
+                self.advance(
+                    "missing",
+                    error_code="config_missing",
+                    error_message=f"Configuration file is missing: {filename}",
+                )
                 return False
             manager.connect(path)
         except Exception as exc:
             logger.error("Cascade connect error for %s: %s", filename, exc)
-            self.advance("error")
+            self.advance("error", error_code="backend_error", error_message=str(exc))
         return False
 
     def _update_banner(self, status: str | None = None) -> None:
@@ -356,36 +471,45 @@ class CascadeController:
         total = max(1, len(self.queue))
         idx = min(self.index + 1, total)
         name = self.current or ""
+        if name and hasattr(win, "get_selected_config") and hasattr(win, "select_server_by_name"):
+            # Sorting/filter model refreshes can clear ListBox selection after
+            # the native connect call. Reassert the active candidate while its
+            # attempt is alive so the user always knows what is being tried.
+            with contextlib.suppress(Exception):
+                if win.get_selected_config() != name:
+                    win.select_server_by_name(name)
         rtt = (win.latencies or {}).get(name)
         proto = format_proto_badge(win.protocols_for(name)) if name else ""
-        remaining = cascade_remaining_seconds(self.deadline, time.monotonic())
-
         if status:
             win.cascade_title.set_text(status)
         else:
             extras = [part for part in (proto, f"{rtt} ms" if rtt is not None else "") if part]
             suffix = f"  ·  {' · '.join(extras)}" if extras else ""
             win.cascade_title.set_text(_("Trying {}{}").format(name, suffix))
-        win.cascade_meta.set_text(cascade_banner_meta(idx - 1, total, remaining))
+        # Keep the native status compact: progress is conveyed by the bar,
+        # while the text only identifies the current attempt.
+        win.cascade_meta.set_text(_("Attempt {}/{}").format(idx, total))
 
         attempt_timeout = compute_attempt_timeout(rtt)
-        elapsed = attempt_timeout - max(0.0, self.deadline - time.monotonic())
+        elapsed = attempt_timeout - max(0.0, self.deadline - self._now())
         overall = cascade_progress_fraction(self.index, total, elapsed, attempt_timeout)
         win.cascade_bar.set_fraction(overall)
-        if hasattr(win, "progress_bar") and self.phase == CascadePhase.CONNECTING:
-            # Keep the historical 0.92 ceiling so the bar never looks "done"
-            # while attempts are still running.
-            # حفظ سقف تاریخی 0.92 تا نوار هرگز هنگام تلاش‌های در جریان «کامل» دیده نشود.
-            win.progress_bar.set_fraction(
-                min(
-                    0.92,
-                    cascade_progress_fraction(self.index, total, 0.4 * attempt_timeout, attempt_timeout),
-                )
-            )
+
+    def _update_connect_button_timer(self) -> None:
+        """Show the remaining budget only for the automatic cascade button."""
+        button = getattr(self._win, "connect_btn", None)
+        if button is None or not self.active or self.current is None:
+            return
+        now = self._now()
+        if self.deadline <= now:
+            self._on_timeout(self.gen)
+            return
+        remaining = max(1, int(self.deadline - now))
+        button.set_label(_("Connecting… {}s").format(remaining))
 
     def _arm_timeout_and_ticks(self) -> None:
         self._disarm_timers(keep_settle=False)
-        remaining_ms = max(250, int((self.deadline - time.monotonic()) * 1000))
+        remaining_ms = max(250, int((self.deadline - self._now()) * 1000))
         gen = self.gen
         self._timeout_id = self._scheduler.add_timeout(remaining_ms, lambda: self._on_timeout(gen))
         self._tick_id = self._scheduler.add_timeout(PROGRESS_TICK_MS, lambda: self._on_tick(gen))
@@ -408,7 +532,11 @@ class CascadeController:
             # توقف شمارش معکوس وقتی دیالوگ OTP یا مودال باز است.
             self.deadline += PROGRESS_TICK_MS / 1000.0
             return True
+        if self.deadline <= self._now():
+            self._on_timeout(gen)
+            return False
         self._update_banner()
+        self._update_connect_button_timer()
         return True
 
     def _on_timeout(self, gen: int) -> bool:
@@ -416,18 +544,15 @@ class CascadeController:
         if not self.active or gen != self.gen:
             return False
         if self._user_is_busy():
-            self.deadline = time.monotonic() + 4.0
+            self.deadline = self._now() + 4.0
             self._arm_timeout_and_ticks()
             return False
-        try:
-            cm = self._win.CM()
-            if cm is not None and cm.status():
-                # Handshake landed in the same tick as the timeout.
-                return False
-        except Exception:
-            pass
         logger.info("Cascade handshake timeout on %s", self.current)
-        self.advance("timeout")
+        self.advance(
+            "timeout",
+            error_code="timeout",
+            error_message=self._pending_failure_message or "Handshake timeout expired.",
+        )
         return False
 
     def _user_is_busy(self) -> bool:
@@ -455,22 +580,30 @@ class CascadeController:
 
         self._settle_id = self._scheduler.add_timeout(int(DISCONNECT_SETTLE_SECONDS * 1000), _fire)
 
-    def advance(self, reason: str) -> None:
+    def advance(
+        self,
+        reason: str,
+        *,
+        error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> None:
         """Marks the current attempt as failed and moves to the next server."""
         if not self.active:
             return
         current = self.current
         if current:
+            mark_state = getattr(self._win, "set_connection_attempt_state", None)
+            if callable(mark_state):
+                mark_state(current, "failed")
             self.failures.append((current, reason))
+            self._complete_active_attempt(
+                reason,
+                error_code=error_code or reason,
+                error_message=error_message or reason,
+            )
             logger.info("Cascade skip %s (%s)", current, reason)
 
         self._disarm_timers()
-        self._win.show_toast(
-            _("Could not connect to {} ({}) — next server…").format(
-                current or "?", cascade_reason_label(reason)
-            )
-        )
-
         self.index += 1
         self.phase = CascadePhase.SETTLING
         self.expect_disconnect = True
@@ -500,10 +633,15 @@ class CascadeController:
         win = self._win
         self._set_controls_locked(False)
         self._set_fastest_button_cancel(False)
+        if phase != CascadePhase.SUCCEEDED and hasattr(win, "connect_btn"):
+            win.connect_btn.set_label(_("Connect"))
+            win.connect_btn.remove_css_class("destructive-action")
+            win.connect_btn.add_css_class("suggested-action")
         if hasattr(win, "cascade_spinner"):
             win.cascade_spinner.stop()
 
         if phase == CascadePhase.SUCCEEDED:
+            self._complete_active_attempt("success")
             name = self.current or win.get_selected_config() or ""
             rtt = (win.latencies or {}).get(name)
             if rtt is not None:
@@ -515,12 +653,17 @@ class CascadeController:
                 win.cascade_meta.set_text(_("Attempt {}/{}").format(self.index + 1, max(1, len(self.queue))))
                 win.cascade_banner.add_css_class("cascade-success")
                 win.cascade_bar.set_fraction(1.0)
-                win.cascade_revealer.set_reveal_child(True)
+                win.cascade_revealer.set_reveal_child(False)
             win.show_toast(msg)
             self._scheduler.add_timeout_seconds(3, lambda: self._hide_banner(gen_was))
             return
 
         if phase == CascadePhase.CANCELLED:
+            self._complete_active_attempt(
+                "cancelled",
+                error_code="cancelled",
+                error_message="Auto-connect cancelled by the user.",
+            )
             if hasattr(win, "cascade_revealer"):
                 win.cascade_revealer.set_reveal_child(False)
             win.show_toast(_("Auto-connect cancelled"))
@@ -534,18 +677,39 @@ class CascadeController:
                     pass
             return
 
-        n_fail = len(self.failures)
+        self._complete_active_attempt(
+            "backend_error",
+            error_code="no_usable_candidate",
+            error_message="No usable backend or candidate remained.",
+        )
+        summary = self.attempt_summary()
+        n_fail = summary["timeouts"] + summary["handshake_failures"] + summary["backend_errors"]
         if hasattr(win, "cascade_title"):
             win.cascade_title.set_text(_("Could not connect to any server in the list"))
-            win.cascade_meta.set_text(_("{} attempt(s) failed").format(n_fail))
+            win.cascade_meta.set_text(
+                _("{} failed · {}/{} tried").format(n_fail, summary["attempts"], summary["candidates"])
+            )
             win.cascade_banner.add_css_class("cascade-fail")
             win.cascade_bar.set_fraction(1.0)
-            win.cascade_revealer.set_reveal_child(True)
-        win.show_toast(
-            _("Auto-connect failed — no server in the current list accepted the handshake."),
-            timeout=4,
-        )
+            win.cascade_revealer.set_reveal_child(False)
         self._scheduler.add_timeout_seconds(5, lambda: self._hide_banner(gen_was))
+
+    def _complete_active_attempt(
+        self,
+        result: str,
+        *,
+        error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        """Close the current attempt exactly once for accurate reporting."""
+        attempt = self._active_attempt
+        if attempt is None or attempt.finished_at is not None:
+            return
+        attempt.finished_at = datetime.now(timezone.utc)
+        attempt.elapsed_seconds = max(0.0, self._now() - (self.deadline - attempt.timeout_seconds))
+        attempt.result = result
+        attempt.error_code = error_code
+        attempt.error_message = error_message
 
     def _hide_banner(self, gen: int) -> bool:
         if not self.active and hasattr(self._win, "cascade_revealer"):
@@ -566,10 +730,10 @@ class CascadeController:
         else:
             win.fastest_btn.set_label(_("Connect Fastest"))
             win.fastest_btn.remove_css_class("destructive-action")
-            win.fastest_btn.add_css_class("suggested-action")
+            win.fastest_btn.remove_css_class("suggested-action")
             win.fastest_btn.set_tooltip_text(
                 _(
-                    "Connect to the first server in the current sorted and filtered list. "
+                    "Try all eligible servers in measured-latency order. "
                     "If the handshake times out or fails, automatically try the next one."
                 )
             )

@@ -30,6 +30,9 @@ lost — but they must **not** be treated as a description of the current code.
 | `REVIEW_2026-08.md` | commit `3b2330c` | Superseded / منسوخ |
 | `ANALYSIS_2026-08.md` | commit `710d13d` | Superseded / منسوخ |
 | `QA_REPORT_2026-08.md` | delivery report / گزارش تحویل | Superseded / منسوخ |
+| `REVIEW_SENIOR_2026-08.md` | commit `86fc8f5` (round 1) | Superseded / منسوخ |
+| `REVIEW_SENIOR_2026-08-R2.md` | commit `263272d` (round 2) | Superseded / منسوخ |
+| `REVIEW_SENIOR_2026-08-R3.md` | commit `394f8d3` (round 3) | Superseded / منسوخ |
 
 ---
 
@@ -78,7 +81,7 @@ These are the specific statements that a reader must ignore.
 |---|---|
 | Project overview & install / معرفی و نصب | [`../../README.md`](../../README.md) |
 | Architecture / معماری | [`../ARCHITECTURE.md`](../ARCHITECTURE.md) |
-| Latest audit / آخرین بازبینی | [`../REVIEW_SENIOR_2026-08.md`](../REVIEW_SENIOR_2026-08.md) |
+| Latest audit / آخرین بازبینی | [`../REBUILD-PLAN-V2.md`](../REBUILD-PLAN-V2.md) — deep-scan findings & v2 rebuild plan / یافته‌های اسکن عمیق و طرح بازسازی نسخه ۲ |
 | Packaging / بسته‌بندی | [`../../PACKAGING.md`](../../PACKAGING.md) |
 | Security policy / سیاست امنیتی | [`../../SECURITY.md`](../../SECURITY.md) |
 | Release process / فرایند انتشار | [`../RELEASE_CHECKLIST.md`](../RELEASE_CHECKLIST.md) |

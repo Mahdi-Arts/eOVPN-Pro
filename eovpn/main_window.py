@@ -24,6 +24,11 @@ import sys
 import threading
 import time
 
+import gi
+
+gi.require_version("Adw", "1")
+gi.require_version("Gdk", "4.0")
+gi.require_version("Gtk", "4.0")
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango
 
 from .auto_connect import (
@@ -34,12 +39,13 @@ from .auto_connect import (
     parse_ovpn_protocols,
 )
 from .cascade_controller import CascadeController
-from .connection_manager import create_connection_manager
+from .connection_manager import backend_diagnostics, create_connection_manager
 from .eovpn_base import Base, ConfigRow, StorageItem
 from .events import ConnectionEventKind, normalize_connection_event
 from .ip_lookup.lookup import Lookup
 from .network_monitor import NetworkMonitor
 from .settings_window import SettingsWindow
+from .speed_state import SpeedTestSnapshot
 from .timers import create_default_scheduler
 from .ui_compat import show_alert, show_critical_error
 from .utils import (
@@ -48,6 +54,17 @@ from .utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+SUPPORTED_LANGUAGES = frozenset({"en", "fa"})
+
+
+def normalize_language_value(value) -> str | None:
+    """Return a supported language code from a GLib action value."""
+    try:
+        candidate = value.get_string() if hasattr(value, "get_string") else str(value).strip("'")
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return candidate if candidate in SUPPORTED_LANGUAGES else None
 
 
 class MainWindow(Base):
@@ -89,10 +106,15 @@ class MainWindow(Base):
 
         self.selected_row: ConfigRow | None = None
         self.manual_disconnect = False
+        self.connection_attempt_active = False
         self.selected_config = None
         self.connected_cursor = None
         self.signals = MainWindowSignals()
         self.latencies: dict[str, float | None] = {}
+        self.speed_snapshot = SpeedTestSnapshot()
+        self.store("speed_snapshot", self.speed_snapshot)
+        self._speed_test_cancel = threading.Event()
+        self._speed_test_running = False
         self.sort_by_speed_active = False
 
         # Search / Filter state / وضعیت جستجو و فیلتر لیست
@@ -128,7 +150,18 @@ class MainWindow(Base):
             if selected_name != preferred:
                 self.set_setting(self.SETTING.MANAGER, selected_name)
         except Exception as exc:
-            logger.error("No usable VPN backend found: %s", exc)
+            logger.exception("No usable VPN backend found")
+            if isinstance(exc, ImportError):
+                detail = gettext.gettext(
+                    "The native VPN bindings are unavailable. Rebuild eOVPN-Pro "
+                    "with NetworkManager OpenVPN support enabled."
+                )
+            else:
+                detail = gettext.gettext(
+                    "The VPN backend could not be initialized. Check the Backend "
+                    "section in Settings for diagnostics."
+                )
+            diagnostics = backend_diagnostics()
             self.generic_critical_error_dialog(
                 [
                     gettext.gettext("No usable VPN backend is available."),
@@ -136,7 +169,11 @@ class MainWindow(Base):
                         "Install network-manager-openvpn (and OpenVPN 3 if needed), "
                         "then rebuild/reinstall eOVPN-Pro."
                     ),
-                    str(exc),
+                    detail,
+                    gettext.gettext("Diagnostics: {} / {}.").format(
+                        diagnostics.get("networkmanager", "unknown"),
+                        diagnostics.get("openvpn3", "unknown"),
+                    ),
                 ]
             )
 
@@ -214,6 +251,10 @@ class MainWindow(Base):
             return selected_row.filename
         return None
 
+    def get_all_config_filenames(self) -> list[str]:
+        """Return every configuration, independent of the current UI filters."""
+        return list(self.retrieve(StorageItem.CONFIGS_LIST) or [])
+
     def row_changed(self, listbox: Gtk.ListBox, row: Gtk.ListBoxRow | None):
         """
         Handles list row selection changes and validates authentication requirements.
@@ -222,6 +263,9 @@ class MainWindow(Base):
         if self.selected_row and hasattr(self.selected_row, "set_edit_visible"):
             with contextlib.suppress(Exception):
                 self.selected_row.set_edit_visible(False)
+        for candidate in self._iter_list_rows():
+            if hasattr(candidate, "set_selected_state"):
+                candidate.set_selected_state(candidate is row)
 
         self.selected_row = row
         if row and hasattr(row, "set_edit_visible"):
@@ -237,6 +281,14 @@ class MainWindow(Base):
 
         self.connect_btn.set_sensitive(True)
         self.connect_btn.set_tooltip_text("")
+
+    def _iter_list_rows(self):
+        """Yield the currently bound ListBox rows, not stale factory cache entries."""
+        child = self.list_box.get_first_child()
+        while child is not None:
+            if hasattr(child, "filename"):
+                yield child
+            child = child.get_next_sibling()
 
     def generic_critical_error_dialog(self, error_message: list[str]):
         """
@@ -272,6 +324,8 @@ class MainWindow(Base):
         self.box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
         self.inner_left = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
         self.inner_right = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
+        self.inner_left.add_css_class("panel-left")
+        self.inner_right.add_css_class("panel-right")
         self.paned = Gtk.Paned.new(Gtk.Orientation.HORIZONTAL)
 
         self._update_layout()
@@ -308,8 +362,11 @@ class MainWindow(Base):
 
         # Search & Filter infrastructure / زیرساخت جستجو و فیلتر هوشمند
         self.list_filter = Gtk.CustomFilter.new(self.list_filter_match, None, None)
+        self.list_sorter = Gtk.CustomSorter.new(self.config_item_sort_func, None)
+        self.sort_model = Gtk.SortListModel.new(None, self.list_sorter)
         self.filter_model = Gtk.FilterListModel.new(None, self.list_filter)
         self.store("filter_model", self.filter_model)
+        self.store("sort_model", self.sort_model)
         self.store("list_filter", self.list_filter)
         self.store("favorite_toggled_cb", self.on_favorite_toggled)
         self.store("on_list_changed", self.update_filter_count)
@@ -319,8 +376,10 @@ class MainWindow(Base):
         v_box.set_valign(Gtk.Align.CENTER)
         self.empty_label = Gtk.Label.new(gettext.gettext("No Configs Added!"))
         self.empty_label.add_css_class("bold")
+        self.empty_label.add_css_class("empty-state-title")
         self.empty_btn = Gtk.Button.new_with_label(gettext.gettext("Open Settings"))
         self.empty_btn.add_css_class("suggested-action")
+        self.empty_btn.add_css_class("empty-state-action")
         self.empty_btn.set_valign(Gtk.Align.START)
         self.empty_btn.set_halign(Gtk.Align.CENTER)
         self.empty_btn.connect("clicked", lambda x: SettingsWindow().show())
@@ -332,36 +391,47 @@ class MainWindow(Base):
         viewport.set_child(self.list_box)
         self.load_only()
 
-        # Set up sorting function / مرتب‌سازی هوشمند
-        self.list_box.set_sort_func(self.list_box_sort_func)
-
     def _build_pro_toolbar(self):
         # Pro Features Toolbar / نوار ابزار قابلیت‌های حرفه‌ای
         self.pro_box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 6)
+        self.pro_box.add_css_class("action-toolbar")
         self.pro_box.set_margin_start(10)
         self.pro_box.set_margin_end(10)
         self.pro_box.set_margin_top(6)
         self.pro_box.set_margin_bottom(6)
         self.pro_box.add_css_class("linked")
 
+        self.filter_toggle_btn = Gtk.ToggleButton.new()
+        self.filter_toggle_btn.set_active(True)
+        self.filter_toggle_btn.set_icon_name("pan-up-symbolic")
+        self.filter_toggle_btn.set_tooltip_text(gettext.gettext("Collapse search and filters"))
+        self.filter_toggle_btn.add_css_class("flat")
+        self.filter_toggle_btn.add_css_class("filter-toggle-button")
+        self.filter_toggle_btn.connect("toggled", self._toggle_filter_panel)
+
         self.speed_test_btn = Gtk.Button.new_with_label(gettext.gettext("Speed Test"))
+        self.speed_test_btn.set_hexpand(True)
         self.speed_test_btn.set_tooltip_text(gettext.gettext("Test latency of all VPN servers"))
         self.speed_test_btn.connect("clicked", lambda b: self.trigger_speed_test())
 
         self.sort_btn = Gtk.ToggleButton.new_with_label(gettext.gettext("Sort"))
+        self.sort_btn.set_hexpand(True)
         self.sort_btn.set_tooltip_text(gettext.gettext("Sort servers by lowest latency"))
         self.sort_btn.connect("toggled", self.on_sort_toggled)
 
         self.fastest_btn = Gtk.Button.new_with_label(gettext.gettext("Connect Fastest"))
+        self.fastest_btn.set_hexpand(True)
         self.fastest_btn.set_tooltip_text(
             gettext.gettext(
-                "Connect to the first server in the current sorted and filtered list. "
+                "Try all eligible servers in measured-latency order. "
                 "If the handshake times out or fails, automatically try the next one."
             )
         )
-        self.fastest_btn.add_css_class("suggested-action")
         self.fastest_btn.connect("clicked", self.on_fastest_clicked)
 
+        # Keep the filter toggle in the primary action row. When collapsed,
+        # the filter section itself is hidden so the list receives the space.
+        self.pro_box.append(self.filter_toggle_btn)
         self.pro_box.append(self.speed_test_btn)
         self.pro_box.append(self.sort_btn)
         self.pro_box.append(self.fastest_btn)
@@ -370,10 +440,14 @@ class MainWindow(Base):
         # ---------------------------------------------------------
         # Search & Filter Toolbar / نوار ابزار جستجو و فیلتر سرورها
         # ---------------------------------------------------------
+        self.filter_section = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
+        self.filter_section.add_css_class("filter-section")
+
         self.filter_bar = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 6)
+        self.filter_bar.add_css_class("filter-toolbar")
         self.filter_bar.set_margin_start(10)
         self.filter_bar.set_margin_end(10)
-        self.filter_bar.set_margin_bottom(6)
+        self.filter_bar.set_margin_bottom(2)
 
         self.search_entry = Gtk.SearchEntry.new()
         self.search_entry.set_hexpand(True)
@@ -414,10 +488,40 @@ class MainWindow(Base):
         self.filter_count.add_css_class("dim-label")
         self.filter_count.set_tooltip_text(gettext.gettext("Visible servers / Total servers"))
 
-        self.filter_bar.append(self.search_entry)
-        self.filter_bar.append(self.filter_dropdown)
-        self.filter_bar.append(self.proto_dropdown)
-        self.filter_bar.append(self.filter_count)
+        self.filter_controls = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 6)
+        self.filter_controls.set_hexpand(True)
+        self.filter_controls.append(self.search_entry)
+        self.filter_controls.append(self.filter_dropdown)
+        self.filter_controls.append(self.proto_dropdown)
+        self.filter_controls.append(self.filter_count)
+
+        self.filter_controls_revealer = Gtk.Revealer.new()
+        self.filter_controls_revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_DOWN)
+        self.filter_controls_revealer.set_transition_duration(180)
+        self.filter_controls_revealer.set_reveal_child(True)
+        self.filter_controls_revealer.set_hexpand(True)
+        self.filter_controls_revealer.set_child(self.filter_controls)
+
+        self.filter_bar.append(self.filter_controls_revealer)
+        self.filter_section.append(self.filter_bar)
+
+    def _toggle_filter_panel(self, button: Gtk.ToggleButton) -> None:
+        expanded = button.get_active()
+        # Hide the whole section when closed. Hiding only the revealer leaves
+        # the toolbar allocation behind on some GTK4 versions.
+        if expanded:
+            self.filter_section.set_visible(True)
+            self.filter_controls_revealer.set_visible(True)
+        self.filter_controls_revealer.set_reveal_child(expanded)
+        if not expanded:
+            self.filter_controls_revealer.set_visible(False)
+            self.filter_section.set_visible(False)
+        button.set_icon_name("pan-up-symbolic" if expanded else "pan-down-symbolic")
+        button.set_tooltip_text(
+            gettext.gettext("Collapse search and filters")
+            if expanded
+            else gettext.gettext("Expand search and filters")
+        )
 
     def _build_cascade_banner(self):
         # Cascade status banner / بنر وضعیت اتصال آبشاری
@@ -444,6 +548,10 @@ class MainWindow(Base):
         self.cascade_meta = Gtk.Label.new("")
         self.cascade_meta.add_css_class("dim-label")
         self.cascade_meta.add_css_class("cascade-meta")
+        self.cascade_meta.set_hexpand(False)
+        self.cascade_meta.set_halign(Gtk.Align.END)
+        self.cascade_meta.set_ellipsize(Pango.EllipsizeMode.END)
+        self.cascade_meta.set_max_width_chars(24)
         self.cascade_cancel_btn = Gtk.Button.new_with_label(gettext.gettext("Cancel"))
         self.cascade_cancel_btn.add_css_class("destructive-action")
         self.cascade_cancel_btn.set_valign(Gtk.Align.CENTER)
@@ -451,7 +559,8 @@ class MainWindow(Base):
         cascade_row.append(self.cascade_spinner)
         cascade_row.append(self.cascade_title)
         cascade_row.append(self.cascade_meta)
-        cascade_row.append(self.cascade_cancel_btn)
+        # Cancellation is owned by the primary toolbar button. A second
+        # destructive button in the status banner made the flow ambiguous.
 
         self.cascade_bar = Gtk.ProgressBar.new()
         self.cascade_bar.add_css_class("cascade-progress")
@@ -460,10 +569,11 @@ class MainWindow(Base):
         self.cascade_banner.append(cascade_row)
         self.cascade_banner.append(self.cascade_bar)
         self.cascade_revealer.set_child(self.cascade_banner)
+        self.cascade_revealer.set_hexpand(True)
+        self.cascade_revealer.add_css_class("connection-status-revealer")
 
         self.inner_left.append(self.pro_box)
-        self.inner_left.append(self.filter_bar)
-        self.inner_left.append(self.cascade_revealer)
+        self.inner_left.append(self.filter_section)
         self.inner_left.append(self.scrolled_window)
 
     def _build_status_panel(self):
@@ -500,16 +610,27 @@ class MainWindow(Base):
         self.inner_right.append(h_box)
 
         # Traffic & Speed Card Panel / کادر مدرن مانیتورینگ ترافیک زنده
-        self.traffic_card = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 0)
+        self.traffic_card = Gtk.Grid.new()
+        self.traffic_card.set_column_spacing(8)
+        self.traffic_card.set_row_spacing(2)
         self.traffic_card.add_css_class("card")
         self.traffic_card.add_css_class("traffic-card")
         self.traffic_card.set_halign(Gtk.Align.CENTER)
-        self.traffic_card.set_size_request(300, 72)
+        self.traffic_card.set_hexpand(True)
+        self.traffic_card.set_size_request(260, 84)
         self.traffic_card.set_margin_top(12)
         self.traffic_card.set_margin_bottom(12)
         self.traffic_card.set_tooltip_text(
             gettext.gettext("Live traffic statistics for the active VPN tunnel")
         )
+
+        self.traffic_heading = Gtk.Label.new(gettext.gettext("Live traffic"))
+        self.traffic_heading.add_css_class("heading")
+        self.traffic_heading.add_css_class("section-label")
+        self.traffic_heading.add_css_class("dim-label")
+        self.traffic_heading.set_halign(Gtk.Align.CENTER)
+        self.traffic_heading.set_margin_top(8)
+        self.inner_right.append(self.traffic_heading)
 
         def build_stat_cell(icon_name: str, css_variant: str, caption_text: str):
             cell = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
@@ -555,17 +676,27 @@ class MainWindow(Base):
         )
         self.total_traffic_label.set_text("0 B")
 
-        self.traffic_card.append(dl_cell)
-        self.traffic_card.append(Gtk.Separator.new(Gtk.Orientation.VERTICAL))
-        self.traffic_card.append(ul_cell)
-        self.traffic_card.append(Gtk.Separator.new(Gtk.Orientation.VERTICAL))
-        self.traffic_card.append(total_cell)
+        download_separator = Gtk.Separator.new(Gtk.Orientation.VERTICAL)
+        upload_separator = Gtk.Separator.new(Gtk.Orientation.VERTICAL)
+        for separator in (download_separator, upload_separator):
+            separator.set_vexpand(True)
+            separator.set_valign(Gtk.Align.CENTER)
+
+        self.traffic_card.attach(dl_cell, 0, 0, 1, 1)
+        self.traffic_card.attach(download_separator, 1, 0, 1, 1)
+        self.traffic_card.attach(ul_cell, 2, 0, 1, 1)
+        self.traffic_card.attach(upload_separator, 3, 0, 1, 1)
+        self.traffic_card.attach(total_cell, 4, 0, 1, 1)
 
         self.inner_right.append(self.traffic_card)
+        # Keep cascade progress in the native connection panel. This avoids a
+        # second, detached status surface above the server list.
+        self.inner_right.append(self.cascade_revealer)
 
         self.psh = None
 
         self.connect_box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 6)
+        self.connect_box.add_css_class("connect-toolbar")
         self.connect_box.set_valign(Gtk.Align.END)
         self.connect_box.add_css_class("m-10")
         self.connect_btn = Gtk.Button.new_with_label(gettext.gettext("Connect"))
@@ -602,11 +733,16 @@ class MainWindow(Base):
 
     def _build_actions_and_menu(self):
         def open_about_dialog(widget, data):
-            website = self.AUTHOR_WEBSITE
+            website = self.PROJECT_URL
+            issue_url = self.ISSUE_URL
             if not website.startswith("http"):
                 website = "https://" + website
-            system_info = "Flatpak: \t {}\nCommit: \t {}".format(
-                "true" if os.getenv("FLATPAK_ID") is not None else "false", self.APP_COMMIT
+            if not issue_url.startswith("http"):
+                issue_url = "https://" + issue_url
+            system_info = "Application ID: \t {}\nFlatpak: \t {}\nCommit: \t {}".format(
+                self.APP_ID,
+                "true" if os.getenv("FLATPAK_ID") is not None else "false",
+                self.APP_COMMIT,
             )
 
             if hasattr(Adw, "AboutWindow"):
@@ -620,6 +756,35 @@ class MainWindow(Base):
                 about.set_license_type(Gtk.License.GPL_3_0)
                 about.set_copyright(self.AUTHOR)
                 about.set_debug_info(system_info)
+                if hasattr(about, "set_translator_credits"):
+                    about.set_translator_credits(gettext.gettext("eOVPN-Pro translation contributors"))
+                if hasattr(about, "set_release_notes"):
+                    release_notes = GLib.markup_escape_text(
+                        gettext.gettext(
+                            "Stable NetworkManager backend, safer configuration handling, "
+                            "and improved connection diagnostics."
+                        )
+                    )
+                    about.set_release_notes(f"<p>{release_notes}</p>")
+                    if hasattr(about, "set_release_notes_version"):
+                        about.set_release_notes_version(self.APP_VERSION)
+                if hasattr(about, "add_legal_section"):
+                    about.add_legal_section(gettext.gettext("Legal"), self.AUTHOR, Gtk.License.GPL_3_0, None)
+                    about.add_legal_section(
+                        gettext.gettext("Privacy"),
+                        None,
+                        Gtk.License.CUSTOM,
+                        gettext.gettext("eOVPN-Pro does not add telemetry or upload connection data."),
+                    )
+                if hasattr(about, "set_support_url"):
+                    about.set_support_url(website)
+                if hasattr(about, "set_issue_url"):
+                    about.set_issue_url(issue_url)
+                if hasattr(about, "add_credit_section"):
+                    about.add_credit_section(
+                        gettext.gettext("Runtime dependencies"),
+                        ["GTK 4", "Libadwaita", "NetworkManager", "PyGObject", "CFFI"],
+                    )
                 about.set_transient_for(self.window)
                 about.set_modal(True)
                 about.present()
@@ -661,13 +826,32 @@ class MainWindow(Base):
         self.app.add_action(action)
 
         def on_language_update(action, value):
-            new_lang = str(value).replace("'", "")
+            new_lang = normalize_language_value(value)
+            if new_lang is None:
+                logger.warning("Ignoring malformed language action value: %r", value)
+                self.show_toast(gettext.gettext("Unsupported language selection."))
+                return
             logger.info("Changing language to: %s", new_lang)
-            action.set_state(value)
+            action.set_state(GLib.Variant("s", new_lang))
             self.set_setting(self.SETTING.LANGUAGE, new_lang)
             # Restart the process so gettext picks up the new language
             # راه‌اندازی مجدد برنامه تا زبان جدید توسط gettext اعمال شود
-            os.execv(sys.executable, [sys.executable] + sys.argv)
+            argv = list(sys.argv)
+            launcher = argv[0] if argv else ""
+            try:
+                if launcher and os.path.isfile(launcher) and os.access(launcher, os.X_OK):
+                    os.execv(launcher, argv)
+                elif launcher and os.path.isfile(launcher):
+                    os.execv(sys.executable, [sys.executable, *argv])
+                else:
+                    raise OSError("application launcher is not a restartable file")
+            except OSError as exc:
+                logger.error(
+                    "Language changed to %s, but restart failed: %s",
+                    new_lang,
+                    exc,
+                )
+                self.show_toast(gettext.gettext("Language saved. Restart eOVPN-Pro manually to apply it."))
 
         action_lang = Gio.SimpleAction.new_stateful(
             "language",
@@ -788,13 +972,11 @@ class MainWindow(Base):
 
         self.copy_ip_btn.connect("clicked", copy_ip)
 
-    def list_box_sort_func(self, row1: Gtk.ListBoxRow, row2: Gtk.ListBoxRow, *args) -> int:
+    def _compare_config_names(self, file1: str, file2: str) -> int:
         """
         Sorts the configuration list alphabetically or by measured latency.
         مرتب‌سازی هوشمند لیست کانفیگ‌ها بر اساس حروف الفبا یا کمترین پینگ.
         """
-        file1 = getattr(row1, "filename", "")
-        file2 = getattr(row2, "filename", "")
         if not file1 or not file2:
             return 0
 
@@ -818,6 +1000,23 @@ class MainWindow(Base):
         else:
             return 1 if file1 > file2 else -1
 
+    def config_item_sort_func(self, item1, item2, *args) -> Gtk.Ordering:
+        """Compare Gio model items for Gtk.SortListModel."""
+        file1 = str(getattr(item1, "name", item1))
+        file2 = str(getattr(item2, "name", item2))
+        result = self._compare_config_names(file1, file2)
+        if result < 0:
+            return Gtk.Ordering.SMALLER
+        if result > 0:
+            return Gtk.Ordering.LARGER
+        return Gtk.Ordering.EQUAL
+
+    def list_box_sort_func(self, row1: Gtk.ListBoxRow, row2: Gtk.ListBoxRow, *args) -> int:
+        """Backward-compatible row comparator for callers outside GTK models."""
+        return self._compare_config_names(
+            str(getattr(row1, "filename", "")), str(getattr(row2, "filename", ""))
+        )
+
     # ------------------------------------------------------------------
     # Search, Filter & Favorites / جستجو، فیلتر و کانفیگ‌های مورد علاقه
     # ------------------------------------------------------------------
@@ -828,7 +1027,7 @@ class MainWindow(Base):
         text, the selected filter mode and the favorites set.
         تابع فیلتر لیست که جستجوی زنده، حالت فیلتر و مجموعه موردعلاقه‌ها را ترکیب می‌کند.
         """
-        filename = str(item)
+        filename = str(getattr(item, "name", item))
         return matches_server_filter(
             filename,
             search=self.search_text,
@@ -886,10 +1085,17 @@ class MainWindow(Base):
     def _refresh_filter(self):
         """Notifies the filter model and updates the visible counter."""
         self._favorites_cache = self.get_favorites()
+        self._apply_speed_snapshot_to_rows()
         f = getattr(self, "list_filter", None)
         if f is not None:
             f.changed(Gtk.FilterChange.DIFFERENT)
         self.update_filter_count()
+
+    def _refresh_sorter(self) -> None:
+        """Invalidate the GTK model sorter after latency or policy changes."""
+        sorter = getattr(self, "list_sorter", None)
+        if sorter is not None:
+            sorter.changed(Gtk.SorterChange.DIFFERENT)
 
     def update_filter_count(self):
         """Shows 'visible / total' counters and adapts the empty-state message."""
@@ -924,17 +1130,31 @@ class MainWindow(Base):
         Initiates concurrent latency test for all available .ovpn endpoints.
         آغاز تست پینگ موازی برای کلیه سرورهای موجود در کانفیگ‌ها.
         """
-        if not getattr(self, "speed_test_btn", None) or not self.speed_test_btn.get_sensitive():
+        if not getattr(self, "speed_test_btn", None):
             return
-        self.speed_test_btn.set_sensitive(False)
-        self.speed_test_btn.set_label(gettext.gettext("Testing..."))
+        if self._speed_test_running:
+            self._speed_test_cancel.set()
+            self.speed_test_btn.set_sensitive(False)
+            self.speed_test_btn.set_label(gettext.gettext("Cancelling..."))
+            return
+
+        if not self.speed_test_btn.get_sensitive():
+            return
+        self._speed_test_cancel.clear()
+        self._speed_test_running = True
+        self.speed_test_btn.set_sensitive(True)
+        self.speed_test_btn.set_label(gettext.gettext("Cancel Test"))
         self.spinner.start()
 
         def worker():
             from .speed_test import test_all_configs
 
             configs_list = self.retrieve(StorageItem.CONFIGS_LIST)
-            latencies = test_all_configs(self.EOVPN_OVPN_CONFIG_DIR, configs_list)
+            latencies = test_all_configs(
+                self.EOVPN_OVPN_CONFIG_DIR,
+                configs_list,
+                cancel_event=self._speed_test_cancel,
+            )
             GLib.idle_add(self.on_speed_test_complete, latencies)
 
         th = threading.Thread(target=worker)
@@ -946,28 +1166,24 @@ class MainWindow(Base):
         Updates latency labels in UI and applies sorting once speed test finishes.
         به‌روزرسانی برچسب‌های پینگ در رابط کاربری و اعمال مرتب‌سازی خودکار پس از اتمام تست.
         """
-        self.latencies = latencies
-        latency_labels = self.retrieve("latency_labels")
+        cancelled = self._speed_test_cancel.is_set()
+        self._speed_test_running = False
+        if not cancelled:
+            self.speed_snapshot.replace(latencies)
+            self.latencies = self.speed_snapshot.latency_map()
+            self._apply_speed_snapshot_to_rows()
+        else:
+            self.show_toast(gettext.gettext("Speed test cancelled."))
+            if self.cascade.auto_cascade_after_test:
+                self.cascade.cancel(user=True)
 
-        for file, rtt in latencies.items():
-            if file in latency_labels:
-                label_widget = latency_labels[file]
-                if rtt is not None:
-                    if rtt < 100:
-                        label_widget.set_markup(f"<span foreground='#2ec27e' weight='bold'>{rtt} ms</span>")
-                    elif rtt < 250:
-                        label_widget.set_markup(f"<span foreground='#e5a50a' weight='bold'>{rtt} ms</span>")
-                    else:
-                        label_widget.set_markup(f"<span foreground='#e01b24' weight='bold'>{rtt} ms</span>")
-                else:
-                    label_widget.set_markup("<span foreground='#e01b24' alpha='60%'>Error</span>")
-
-        if self.sort_by_speed_active:
-            self.list_box.invalidate_sort()
+        if not cancelled and self.sort_by_speed_active:
+            self._refresh_sorter()
 
         # Re-evaluate Online/Offline filters with fresh latency data
         # بازارزیابی فیلترهای آنلاین/آفلاین با داده‌های تازه پینگ
-        self._refresh_filter()
+        if not cancelled:
+            self._refresh_filter()
 
         self.speed_test_btn.set_sensitive(True)
         self.speed_test_btn.set_label(gettext.gettext("Speed Test"))
@@ -982,6 +1198,14 @@ class MainWindow(Base):
             self.auto_select_after_test = False
             self.select_fastest(None)
 
+    def _apply_speed_snapshot_to_rows(self) -> None:
+        """Rebind all existing rows after a test or model refresh."""
+        rows = self.retrieve(StorageItem.LISTBOX_ROWS) or []
+        for row in rows:
+            measurement = self.speed_snapshot.get(getattr(row, "filename", ""))
+            if measurement is not None and hasattr(row, "set_latency"):
+                row.set_latency(measurement.latency_ms, measurement.status)
+
     def on_sort_toggled(self, button: Gtk.ToggleButton):
         """
         Toggles dynamic speed sorting on/off.
@@ -994,7 +1218,7 @@ class MainWindow(Base):
                 self.trigger_speed_test()
         else:
             button.remove_css_class("suggested-action")
-        self.list_box.invalidate_sort()
+        self._refresh_sorter()
 
     def select_fastest(self, button: Gtk.Button | None):
         """
@@ -1011,19 +1235,42 @@ class MainWindow(Base):
 
     def select_server_by_name(self, filename: str) -> bool:
         """Selects a list row by filename and scrolls it into view."""
-        rows = self.retrieve(StorageItem.LISTBOX_ROWS) or []
-        row = next((r for r in rows if getattr(r, "filename", None) == filename), None)
+        row = next((r for r in self._iter_list_rows() if r.filename == filename), None)
         if row is None:
             return False
         try:
             self.list_box.select_row(row)
-            alloc = row.get_allocation()
-            adj = self.scrolled_window.get_vadjustment()
-            if adj and alloc:
-                adj.set_value(max(0, alloc.y - 24))
+            self.selected_row = row
+            if hasattr(row, "set_selected_state"):
+                row.set_selected_state(True)
+            if hasattr(row, "set_attempt_state"):
+                row.set_attempt_state("attempting")
+
+            # The filtered/sorted model may not have laid out the row yet.
+            # Scroll after GTK has committed the new selection, otherwise a
+            # newly selected candidate can jump to the end of the list.
+            def reveal_selected() -> bool:
+                adj = self.scrolled_window.get_vadjustment()
+                if adj:
+                    # Auto-connect always starts from the visible top. This
+                    # also prevents a previous sort/test scroll position from
+                    # hiding the candidate being attempted.
+                    adj.set_value(adj.get_lower())
+                self.list_box.select_row(row)
+                if hasattr(row, "set_selected_state"):
+                    row.set_selected_state(True)
+                return False
+
+            GLib.idle_add(reveal_selected)
         except Exception as exc:
             logger.debug("Could not scroll to %s: %s", filename, exc)
         return True
+
+    def set_connection_attempt_state(self, filename: str, state: str | None) -> None:
+        """Apply a transient cascade status to the matching visible row."""
+        row = next((item for item in self._iter_list_rows() if item.filename == filename), None)
+        if row is not None and hasattr(row, "set_attempt_state"):
+            row.set_attempt_state(state)
 
     # Backward-compatible alias (previously private).
     # نام مستعار سازگار با گذشته (قبلاً خصوصی بود).
@@ -1158,8 +1405,13 @@ class MainWindow(Base):
 
         if event.kind == ConnectionEventKind.FAILED:
             logger.error("Connection error: %s", event.error)
-            self.send_error_notification(event.error or "")
+            # Failed candidates are expected during manual and fastest-server
+            # probing. Keep technical details in the log and let the native
+            # status/button state communicate the user-facing result without
+            # interruptive desktop error notifications.
             self.progress_bar.set_fraction(0)
+            self.connection_attempt_active = False
+            self._handle_disconnected()
             return
 
         if event.kind == ConnectionEventKind.PROGRESS:
@@ -1189,6 +1441,7 @@ class MainWindow(Base):
     def _handle_connected(self) -> None:
         """UI transition for a successful connection / انتقال UI برای اتصال موفق."""
         self.start_network_monitor()
+        self.connection_attempt_active = False
         self.was_connected = True
         self.update_ip_flag_async()
         self.connect_btn.set_label(gettext.gettext("Disconnect"))
@@ -1232,11 +1485,13 @@ class MainWindow(Base):
             and not self.cascade.active
         )
         self.was_connected = False
+        self.connection_attempt_active = False
         self.manual_disconnect = False
 
         self.update_ip_flag_async()
         self.connect_btn.set_label(gettext.gettext("Connect"))
         self.connect_btn.remove_css_class("destructive-action")
+        self.connect_btn.remove_css_class("suggested-action")
         self.progress_bar.remove_css_class("progress-full-green")
         self.progress_bar.add_css_class("progress-yellow")
         self.progress_bar.set_fraction(0)
@@ -1281,6 +1536,18 @@ class MainWindowSignals(Base):
         if manager is None:
             logger.error("Cannot connect: no VPN backend is available.")
             return
+        mw = self.retrieve("main_window_instance")
+        if mw is not None and (getattr(mw, "cascade", None) and mw.cascade.active):
+            mw.cascade.cancel(user=True)
+            return
+        if mw is not None and getattr(mw, "connection_attempt_active", False):
+            mw.manual_disconnect = True
+            cancel_operation = getattr(manager, "cancel_current_operation", None)
+            if callable(cancel_operation):
+                cancel_operation()
+            mw.connection_attempt_active = False
+            mw._handle_disconnected()
+            return
         manager.start_watch()
         if manager.status():
             self.disconnect(None, manager)
@@ -1293,6 +1560,14 @@ class MainWindowSignals(Base):
             pass
         config = config_callable() if callable(config_callable) else config_callable
         if config:
+            if mw is not None:
+                mw.connection_attempt_active = True
+                mw.connect_btn.set_label(gettext.gettext("Connecting…"))
+                mw.connect_btn.remove_css_class("destructive-action")
+                mw.connect_btn.add_css_class("suggested-action")
+                mw.progress_bar.set_fraction(0.0)
+                mw.progress_bar.remove_css_class("progress-full-green")
+                mw.progress_bar.add_css_class("progress-yellow")
             manager.connect(os.path.join(self.EOVPN_CONFIG_DIR, "CONFIGS", config))
 
     def connect_via_ks(self, action, _args, config_callable):

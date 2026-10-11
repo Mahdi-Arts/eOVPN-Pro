@@ -6,8 +6,8 @@
 # which is affected by CVE-2023-23931 (fixed in 1.15.1).
 # کف cffi عمداً >= 1.16.0 است: کف‌های قدیمی‌تر ممکن است به نسخه 1.15.0 حل شوند
 # که مشمول CVE-2023-23931 است (رفع‌شده در 1.15.1).
-cffi>=1.16.0
-PyGObject>=3.42.0
+cffi==1.16.0
+PyGObject==3.48.2
 
 # Development & testing dependencies / وابستگی‌های توسعه و تست
 # Install with: pip install -r requirements-dev.txt

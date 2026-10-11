@@ -120,22 +120,226 @@ margin: 6px;
     background-color: @card_bg_color;
     border: 1px solid @card_border_color;
     border-radius: 14px;
-    padding: 8px 4px;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+    padding: 14px 16px;
+    min-width: 260px;
+    min-height: 82px;
+    box-shadow: 0 3px 12px rgba(0, 0, 0, 0.12);
+}
+
+.traffic-card > box {
+    min-width: 76px;
 }
 
 .traffic-card separator {
+    min-height: 34px;
+    background-color: alpha(@card_fg_color, 0.16);
+}
+
+.server-row {
+    min-height: 46px;
+    padding: 7px 14px;
+    border-radius: 10px;
+    margin: 2px 6px;
+}
+
+.server-row:hover {
+    background-color: alpha(@accent_bg_color, 0.08);
+}
+
+.server-row:selected {
+    background-color: alpha(@accent_bg_color, 0.18);
+}
+
+.server-row.connection-attempting {
+    background-color: alpha(@success_color, 0.14);
+    border-left: 3px solid @success_color;
+}
+
+.connection-attempting > .server-row {
+    background-color: alpha(@success_color, 0.24);
+    border-left: 4px solid @success_color;
+}
+
+.server-row.connection-selected {
+    background-color: alpha(@accent_bg_color, 0.24);
+    border-left: 3px solid @accent_bg_color;
+}
+
+.connection-selected-row > .server-row {
+    background-color: alpha(@accent_bg_color, 0.24);
+    border-left: 3px solid @accent_bg_color;
+}
+
+.server-row.connection-failed {
+    background-color: alpha(@error_color, 0.12);
+    border-left: 3px solid @error_color;
+}
+
+.connection-failed > .server-row {
+    background-color: alpha(@error_color, 0.20);
+    border-left: 4px solid @error_color;
+}
+
+.panel-left,
+.panel-right {
+    background-color: alpha(@window_bg_color, 0.98);
+}
+
+.panel-left {
+    border-right: 1px solid alpha(@borders, 0.7);
+}
+
+.panel-right {
+    padding: 10px 14px 14px;
+}
+
+.action-toolbar {
+    padding: 4px 4px 2px;
+}
+
+.action-toolbar > button,
+.action-toolbar > togglebutton {
+    min-height: 38px;
+    min-width: 0;
+    padding-left: 14px;
+    padding-right: 14px;
+}
+
+.action-toolbar > .filter-toggle-button {
+    min-width: 34px;
+    min-height: 34px;
+    padding: 4px;
+}
+
+.filter-toolbar {
+    padding: 2px 4px 4px;
+}
+
+.filter-toolbar > button {
+    min-width: 30px;
     min-height: 30px;
-    margin-top: 8px;
-    margin-bottom: 8px;
-    background-color: alpha(@card_fg_color, 0.12);
+    padding: 2px 6px;
+}
+
+.filter-toolbar searchentry,
+.filter-toolbar dropdown {
+    min-height: 36px;
+}
+
+.filter-toolbar searchentry,
+.filter-toolbar dropdown {
+    min-height: 38px;
+}
+
+.filter-toolbar > label {
+    min-width: 54px;
+    padding-left: 4px;
+    padding-right: 4px;
+    font-variant: tabular-nums;
+}
+
+.section-label {
+    letter-spacing: 0.03em;
+    font-size: 0.82rem;
+}
+
+.empty-state-title {
+    font-size: 1.05rem;
+    margin-bottom: 4px;
+}
+
+.empty-state-action {
+    min-height: 38px;
+    margin-top: 4px;
+}
+
+.connect-toolbar {
+    padding-top: 8px;
+}
+
+.connect-toolbar button {
+    min-height: 44px;
+    border-radius: 12px;
+    font-weight: 600;
+}
+
+.settings-window {
+    background-color: @window_bg_color;
+}
+
+.settings-page {
+    padding: 8px 12px 14px;
+}
+
+.settings-intro {
+    margin: 4px 8px 12px;
+    color: alpha(@theme_fg_color, 0.72);
+    font-size: 0.88rem;
+}
+
+.settings-title {
+    margin: 4px 8px 8px;
+    font-size: 1.08rem;
+    font-weight: 700;
+}
+
+.settings-card {
+    border-radius: 14px;
+    border: 1px solid alpha(@borders, 0.72);
+    background-color: alpha(@card_bg_color, 0.72);
+    box-shadow: 0 3px 12px rgba(0, 0, 0, 0.09);
+}
+
+.settings-card row {
+    min-height: 48px;
+    padding: 2px 4px;
+}
+
+.settings-card row:hover {
+    background-color: alpha(@accent_bg_color, 0.08);
+}
+
+.server-row > label {
+    min-width: 0;
+}
+
+.server-metadata {
+    min-width: 118px;
+    margin-left: 2px;
+    margin-right: 2px;
+}
+
+.latency-label {
+    min-width: 64px;
+    font-variant: tabular-nums;
+    font-feature-settings: "tnum";
+    font-weight: 700;
+}
+
+.latency-good {
+    color: @success_color;
+}
+
+.latency-mid {
+    color: @warning_color;
+}
+
+.latency-bad,
+.latency-error {
+    color: @error_color;
+}
+
+.latency-error {
+    opacity: 0.72;
 }
 
 .traffic-value {
     font-family: monospace, Courier, monospace;
     font-size: 0.95rem;
     font-weight: bold;
-    letter-spacing: -0.2px;
+    letter-spacing: 0;
+    min-width: 76px;
+    font-variant-numeric: tabular-nums;
 }
 
 .traffic-caption {
@@ -185,7 +389,7 @@ margin: 6px;
     letter-spacing: 0.4px;
     border-radius: 999px;
     padding: 1px 7px;
-    min-width: 34px;
+    min-width: 58px;
 }
 
 .proto-tcp {
@@ -204,6 +408,11 @@ margin: 6px;
 }
 
 /* Cascading auto-connect banner / بنر اتصال آبشاری */
+.connection-status-revealer {
+    margin-top: 4px;
+    margin-bottom: 4px;
+}
+
 .cascade-banner {
     background-color: alpha(@accent_bg_color, 0.12);
     border: 1px solid alpha(@accent_bg_color, 0.22);

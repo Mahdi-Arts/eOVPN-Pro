@@ -9,6 +9,14 @@ sys.path.insert(1, '@PYTHON_DIR@')
 pkgdatadir = '@PKG_DATADIR@'
 localedir = '@LOCALE_DIR@'
 
+# A Meson build may place this script beside an ``eovpn.py`` file. Remove that
+# build directory from the import path before importing the real package, or
+# a direct source/build-tree restart can shadow ``eovpn`` with this script.
+if os.path.basename(__file__) == "eovpn.py":
+    _launcher_dir = os.path.dirname(os.path.abspath(__file__))
+    while _launcher_dir in sys.path:
+        sys.path.remove(_launcher_dir)
+
 from gi.repository import Gio
 
 import logging

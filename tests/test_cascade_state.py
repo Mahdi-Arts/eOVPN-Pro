@@ -86,6 +86,9 @@ class FakeWidget:
     def set_fraction(self, value: float) -> None:
         self.fractions.append(value)
 
+    def get_fraction(self) -> float:
+        return self.fractions[-1] if self.fractions else 0.0
+
     def set_reveal_child(self, value: bool) -> None:
         self.reveals.append(value)
 
@@ -126,6 +129,7 @@ class FakeManager:
         self.connected_paths: list[str] = []
         self.disconnects = 0
         self.watches = 0
+        self.cancelled = 0
 
     def status(self) -> bool:
         return self._connected
@@ -141,6 +145,9 @@ class FakeManager:
         self.disconnects += 1
         self._connected = False
 
+    def cancel_current_operation(self) -> None:
+        self.cancelled += 1
+
 
 class FakeHost:
     """Host window stub satisfying the CascadeHost protocol."""
@@ -154,6 +161,7 @@ class FakeHost:
         self.manual_disconnect = False
         self.sort_by_speed_active = False
         self.list_box = FakeListBox(["a.ovpn", "b.ovpn"])
+        self.all_configs = ["a.ovpn", "b.ovpn"]
         self.sort_btn = FakeWidget()
         self.speed_test_btn = FakeWidget()
         self.fastest_btn = FakeWidget()
@@ -178,6 +186,9 @@ class FakeHost:
     def get_selected_config(self) -> str | None:
         return self._selected
 
+    def get_all_config_filenames(self) -> list[str]:
+        return list(self.all_configs)
+
     def select_server_by_name(self, filename: str) -> bool:
         self._selected = filename
         return True
@@ -201,7 +212,8 @@ class TestCascadeController(unittest.TestCase):
     def setUp(self):
         self.host = FakeHost()
         self.scheduler = FakeScheduler()
-        self.controller = CascadeController(self.host, scheduler=self.scheduler)
+        self.clock = [0.0]
+        self.controller = CascadeController(self.host, scheduler=self.scheduler, clock=lambda: self.clock[0])
         configs_dir = os.path.join(self.host.EOVPN_CONFIG_DIR, "CONFIGS")
         os.makedirs(configs_dir, exist_ok=True)
         for name in ("a.ovpn", "b.ovpn"):
@@ -224,6 +236,27 @@ class TestCascadeController(unittest.TestCase):
         self.assertEqual(self.controller.current, "a.ovpn")
         self.assertEqual(len(self.host.manager.connected_paths), 1)
         self.assertTrue(self.host.manager.connected_paths[0].endswith(os.path.join("CONFIGS", "a.ovpn")))
+        self.assertEqual(len(self.controller.attempts), 1)
+        self.assertGreaterEqual(self.controller.attempts[0].timeout_seconds, 30.0)
+
+    def test_active_candidate_selection_is_reasserted(self):
+        self.controller.start()
+        self.host._selected = None
+        self.controller._update_banner()
+        self.assertEqual(self.host._selected, "a.ovpn")
+
+    def test_auto_connect_progress_uses_native_progress_events(self):
+        self.controller.start()
+        self.assertEqual(self.host.progress_bar.fractions[-1], 0.0)
+        self.controller.on_connection_event(ConnectionEvent(ConnectionEventKind.PROGRESS))
+        self.assertEqual(self.host.progress_bar.fractions[-1], 0.35)
+
+    def test_queue_scope_is_not_limited_by_visual_filter(self):
+        self.host.list_box = FakeListBox(["a.ovpn"])
+        self.host.all_configs = ["a.ovpn", "b.ovpn"]
+        self.host.latencies = {"a.ovpn": 90.0, "b.ovpn": 10.0}
+        self.controller.start()
+        self.assertEqual(self.controller.current, "b.ovpn")
 
     def test_advance_moves_to_next_server(self):
         self.controller.start()
@@ -242,6 +275,15 @@ class TestCascadeController(unittest.TestCase):
         self.assertFalse(consumed)
         self.assertFalse(self.controller.active)
         self.assertEqual(self.controller.phase, CascadePhase.SUCCEEDED)
+        self.assertEqual(self.controller.attempts[0].result, "success")
+
+    def test_inactive_controller_does_not_consume_normal_backend_events(self):
+        self.assertFalse(self.controller.on_connection_event(ConnectionEvent(ConnectionEventKind.CONNECTED)))
+        self.assertFalse(
+            self.controller.on_connection_event(
+                ConnectionEvent(ConnectionEventKind.FAILED, error="normal UI failure")
+            )
+        )
 
     def test_failed_event_in_connecting_advances(self):
         self.controller.start()
@@ -250,11 +292,31 @@ class TestCascadeController(unittest.TestCase):
         )
         self.assertTrue(consumed)
         self.assertEqual(self.controller.failures[-1], ("a.ovpn", "error"))
+        attempt = self.controller.attempts[0]
+        self.assertEqual(attempt.error_code, "error")
+        self.assertEqual(attempt.error_message, "TLS handshake failed")
+
+    def test_generic_failure_waits_for_handshake_budget(self):
+        self.controller.start()
+        consumed = self.controller.on_connection_event(
+            ConnectionEvent(ConnectionEventKind.FAILED, error="Connection failed")
+        )
+        self.assertTrue(consumed)
+        self.assertTrue(self.controller.active)
+        self.assertEqual(self.controller.phase, CascadePhase.CONNECTING)
+        self.assertEqual(self.controller.index, 0)
+
+        self.clock[0] = 60.0
+        self.controller.advance("timeout", error_code="timeout", error_message="Connection failed")
+        self.assertEqual(self.controller.attempts[0].error_code, "timeout")
+        self.assertGreaterEqual(self.controller.attempts[0].elapsed_seconds, 60.0)
 
     def test_auth_failure_reason_detected(self):
         self.controller.start()
         self.controller.on_connection_event(ConnectionEvent(ConnectionEventKind.FAILED, error="AUTH_FAILED"))
         self.assertEqual(self.controller.failures[-1], ("a.ovpn", "auth"))
+        self.assertEqual(self.controller.attempts[0].error_code, "auth")
+        self.assertEqual(self.controller.attempts[0].error_message, "AUTH_FAILED")
 
     def test_timeout_callback_advances(self):
         self.controller.start()
@@ -266,6 +328,17 @@ class TestCascadeController(unittest.TestCase):
         _interval, callback = self.scheduler.timeouts[self.controller._timeout_id]
         callback()
         self.assertEqual(self.controller.failures[-1], ("a.ovpn", "timeout"))
+        self.assertEqual(self.controller.attempts[0].error_code, "timeout")
+
+    def test_fake_clock_records_full_timeout_budget(self):
+        self.controller.start()
+        self.clock[0] = 60.0
+        self.controller.advance("timeout")
+        self.assertGreaterEqual(self.controller.attempts[0].elapsed_seconds, 60.0)
+        summary = self.controller.attempt_summary()
+        self.assertEqual(summary["timeouts"], 1)
+        self.assertEqual(summary["attempts"], 1)
+        self.assertEqual(summary["candidates"], 2)
 
     def test_cancel_stops_active_cascade(self):
         self.controller.start()
@@ -273,6 +346,9 @@ class TestCascadeController(unittest.TestCase):
         self.assertFalse(self.controller.active)
         self.assertEqual(self.controller.phase, CascadePhase.CANCELLED)
         self.assertFalse(self.controller.auto_cascade_after_test)
+        self.assertEqual(self.controller.attempts[0].error_code, "cancelled")
+        self.assertIsNotNone(self.controller.attempts[0].finished_at)
+        self.assertEqual(self.host.manager.cancelled, 1)
 
     def test_busy_property(self):
         self.assertFalse(self.controller.busy)
@@ -284,7 +360,8 @@ class TestCascadeController(unittest.TestCase):
 
     def test_controls_locked_during_cascade(self):
         self.controller.start()
-        self.assertFalse(self.host.connect_btn.sensitive[-1])  # locked while running
+        self.assertTrue(self.host.connect_btn.sensitive[-1])  # native button remains the cancel surface
+        self.assertTrue(self.host.connect_btn.labels[-1].startswith("Connecting… "))
         self.controller.cancel()
         self.assertTrue(self.host.connect_btn.sensitive[-1])  # unlocked afterwards
 
